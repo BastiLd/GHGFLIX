@@ -1,0 +1,229 @@
+@import "tailwindcss";
+
+/* ===== GHGFlix theme tokens (ZickZack red / black) ===== */
+@theme {
+  --color-ghg-bg: #08080a;
+  --color-ghg-bg2: #101014;
+  --color-ghg-surface: #16161c;
+  --color-ghg-surface2: #20202a;
+  --color-ghg-elevated: #2a2a36;
+  --color-ghg-red: #e50914;
+  --color-ghg-red-bright: #ff2a39;
+  --color-ghg-red-dark: #9b0610;
+  --color-ghg-text: #f5f5f7;
+  --color-ghg-muted: #9a9aa8;
+  --color-ghg-line: #26262f;
+
+  --font-display: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --shadow-ghg-glow: 0 0 0 1px rgba(229, 9, 20, 0.4), 0 8px 30px -8px rgba(229, 9, 20, 0.5);
+}
+
+/* The OS window is transparent so the embedded mpv video can show through on the
+   player page. Everywhere else we paint an opaque background so the desktop never
+   shows through (e.g. on app start, before React has rendered a page). The player
+   adds `.mpv-mode` to <html> to go transparent only while a video is on screen. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--color-ghg-bg);
+}
+
+html.mpv-mode,
+html.mpv-mode body,
+html.mpv-mode #root {
+  background: transparent;
+}
+
+body {
+  font-family: var(--font-display);
+  color: var(--color-ghg-text);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===== Scrollbars ===== */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a44 transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #3a3a44;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ghg-red-dark);
+  background-clip: content-box;
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ===== GHGFlix brand bits ===== */
+
+/* Angular ZickZack tag/label */
+@utility zz-clip {
+  clip-path: polygon(8% 0, 100% 0, 92% 100%, 0% 100%);
+}
+
+/* Animated red zigzag divider */
+@utility zz-divider {
+  height: 6px;
+  width: 100%;
+  background:
+    linear-gradient(135deg, var(--color-ghg-red) 25%, transparent 25%) -10px 0,
+    linear-gradient(225deg, var(--color-ghg-red) 25%, transparent 25%) -10px 0;
+  background-size: 20px 20px;
+  opacity: 0.9;
+}
+
+@utility text-glow {
+  text-shadow: 0 0 18px rgba(229, 9, 20, 0.55);
+}
+
+/* Fade-in helper */
+@keyframes ghg-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@utility fade-in {
+  animation: ghg-fade-in 0.35s ease both;
+}
+
+@keyframes ghg-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@utility spin-slow {
+  animation: ghg-spin 0.9s linear infinite;
+}
+
+/* Gentle breathing pulse for the loading splash */
+@keyframes ghg-breathe {
+  0%, 100% {
+    opacity: 0.55;
+    transform: scale(0.985);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.015);
+  }
+}
+@utility breathe {
+  animation: ghg-breathe 2.2s ease-in-out infinite;
+}
+
+/* Drag region for the custom area near the top bar */
+@utility drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+@utility no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* ===== Preference-driven UI switches (classes set on <html> by App) ===== */
+
+/* Card size — MediaCard uses .media-card / .media-card-wide */
+.media-card { width: 10rem; }
+.media-card-wide { width: 18rem; }
+.cards-sm .media-card { width: 8.25rem; }
+.cards-sm .media-card-wide { width: 15rem; }
+.cards-lg .media-card { width: 12rem; }
+.cards-lg .media-card-wide { width: 21rem; }
+
+/* Animations off: kill fades, hover transitions and page transitions */
+.no-anim *, .no-anim *::before, .no-anim *::after {
+  animation-duration: 0.001s !important;
+  transition-duration: 0.001s !important;
+}
+
+/* Hover zoom off */
+.no-zoom .media-card:hover { transform: none !important; }
+
+/* Keyboard focus rings (accessibility) */
+:focus-visible {
+  outline: 2px solid var(--color-ghg-red);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Toast slide-in from the right */
+@keyframes ghg-toast-in {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@utility toast-in {
+  animation: ghg-toast-in 0.25s ease both;
+}
+
+/* Modal pop */
+@keyframes ghg-pop {
+  from { opacity: 0; transform: scale(0.96) translateY(6px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@utility pop-in {
+  animation: ghg-pop 0.22s ease both;
+}
+
+/* Skeleton shimmer for loading placeholders */
+@keyframes ghg-shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+@utility skeleton {
+  background: linear-gradient(90deg, var(--color-ghg-surface) 25%, var(--color-ghg-surface2) 37%, var(--color-ghg-surface) 63%);
+  background-size: 800px 100%;
+  animation: ghg-shimmer 1.3s ease-in-out infinite;
+}
+
+/* Mascot idle bob + busy wiggle */
+@keyframes ghg-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+@utility mascot-idle {
+  animation: ghg-bob 2.6s ease-in-out infinite;
+}
+@keyframes ghg-wiggle {
+  0%, 100% { transform: rotate(-6deg); }
+  50% { transform: rotate(6deg); }
+}
+@utility mascot-busy {
+  animation: ghg-wiggle 0.5s ease-in-out infinite;
+}
+
+/* NEU badge subtle pulse */
+@keyframes ghg-badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.75; }
+}
+@utility badge-pulse {
+  animation: ghg-badge-pulse 2.4s ease-in-out infinite;
+}
