@@ -5,9 +5,10 @@ import { useEffect } from "react";
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ContextMenu } from "./components/ContextMenu";
 import { Layout } from "./components/Layout";
+import { MiniPlayer } from "./components/MiniPlayer";
 import { openCtx } from "./lib/contextmenu";
 import { scanLibraries } from "./lib/api";
-import { useUiPrefs } from "./lib/uiPrefs";
+import { loadAccent, useUiPrefs } from "./lib/uiPrefs";
 import { useGlobalHorizontalWheel } from "./lib/useHorizontalWheel";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
@@ -73,14 +74,20 @@ export default function App() {
     };
   }, [qc]);
 
-  // preference-driven root classes: card size, animations, hover zoom
+  // preference-driven root classes: card size, animations, hover zoom, UI scale
   useEffect(() => {
     const root = document.documentElement;
     root.classList.toggle("cards-sm", prefs.cardSize === "sm");
     root.classList.toggle("cards-lg", prefs.cardSize === "lg");
     root.classList.toggle("no-anim", !prefs.animations);
     root.classList.toggle("no-zoom", !prefs.hoverZoom);
-  }, [prefs.cardSize, prefs.animations, prefs.hoverZoom]);
+    root.style.fontSize = prefs.fontScale && prefs.fontScale !== 100 ? `${Math.min(130, Math.max(80, prefs.fontScale))}%` : "";
+  }, [prefs.cardSize, prefs.animations, prefs.hoverZoom, prefs.fontScale]);
+
+  // custom accent color persists across restarts
+  useEffect(() => {
+    loadAccent();
+  }, []);
 
   const defaultMenu = (e: React.MouseEvent) =>
     openCtx(e, [
@@ -114,6 +121,7 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/profiles" element={<Profiles />} />
       </Routes>
+      <MiniPlayer />
       <ContextMenu />
     </div>
   );

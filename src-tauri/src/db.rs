@@ -175,6 +175,19 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_shows_tmdb       ON shows(tmdb_id);
         "#,
     )?;
+    // progress carries the FILE PATH too, so the watched state survives a full
+    // library rebuild even when TMDb is unavailable/unmatched (path re-links it)
+    let _ = conn.execute("ALTER TABLE progress ADD COLUMN path TEXT", []);
+    let _ = conn.execute(
+        "UPDATE progress SET path=(SELECT m.path FROM movies m WHERE m.id=progress.ref_id)
+         WHERE media_type='movie' AND path IS NULL",
+        [],
+    );
+    let _ = conn.execute(
+        "UPDATE progress SET path=(SELECT e.path FROM episodes e WHERE e.id=progress.ref_id)
+         WHERE media_type='episode' AND path IS NULL",
+        [],
+    );
     // favorites carry TMDb coordinates so they can be re-linked after a library rebuild
     let _ = conn.execute("ALTER TABLE favorites ADD COLUMN tmdb_id INTEGER", []);
     let _ = conn.execute(
@@ -652,40 +665,62 @@ pub fn find_show_by_tmdb(conn: &Connection, tmdb_id: i64) -> Result<Option<i64>>
 /// "Bibliothek neu aufbauen") back to the freshly indexed rows via their TMDb
 /// coordinates. Unmappable rows are kept dormant — the item may come back later.
 pub fn remap_stale_refs(conn: &Connection) -> Result<()> {
-    // --- progress: movies ---
-    let stale: Vec<(String, i64, i64, i64)> = {
+    // --- progress: movies (path first — works even without TMDb; tmdb fallback) ---
+    let stale: Vec<(String, i64, Option<i64>, Option<String>, i64)> = {
         let mut stmt = conn.prepare(
-            "SELECT profile_id, ref_id, tmdb_id, updated_at FROM progress
-             WHERE media_type='movie' AND tmdb_id IS NOT NULL
-               AND ref_id NOT IN (SELECT id FROM movies)",
+            "SELECT profile_id, ref_id, tmdb_id, path, updated_at FROM progress
+             WHERE media_type='movie' AND ref_id NOT IN (SELECT id FROM movies)",
         )?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows
     };
-    for (profile, old_ref, tmdb, updated) in stale {
-        if let Some(new_ref) = find_movie_by_tmdb(conn, tmdb)? {
+    for (profile, old_ref, tmdb, path, updated) in stale {
+        let by_path: Option<i64> = match path.as_deref() {
+            Some(p) => conn.query_row("SELECT id FROM movies WHERE path=?1", [p], |r| r.get(0)).optional()?,
+            None => None,
+        };
+        let target = match by_path {
+            Some(id) => Some(id),
+            None => match tmdb {
+                Some(t) => find_movie_by_tmdb(conn, t)?,
+                None => None,
+            },
+        };
+        if let Some(new_ref) = target {
             remap_progress_row(conn, &profile, "movie", old_ref, new_ref, updated)?;
         }
     }
 
-    // --- progress: episodes ---
-    let stale: Vec<(String, i64, i64, i64, i64, i64)> = {
+    // --- progress: episodes (path via episode_files first, then tmdb+S+E) ---
+    let stale: Vec<(String, i64, Option<i64>, Option<i64>, Option<i64>, Option<String>, i64)> = {
         let mut stmt = conn.prepare(
-            "SELECT profile_id, ref_id, tmdb_id, season, episode, updated_at FROM progress
-             WHERE media_type='episode' AND tmdb_id IS NOT NULL AND season IS NOT NULL AND episode IS NOT NULL
-               AND ref_id NOT IN (SELECT id FROM episodes)",
+            "SELECT profile_id, ref_id, tmdb_id, season, episode, path, updated_at FROM progress
+             WHERE media_type='episode' AND ref_id NOT IN (SELECT id FROM episodes)",
         )?;
         let rows = stmt
             .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows
     };
-    for (profile, old_ref, tmdb, season, episode, updated) in stale {
-        if let Some(new_ref) = find_episode_by_show_tmdb(conn, tmdb, season, episode)? {
+    for (profile, old_ref, tmdb, season, episode, path, updated) in stale {
+        let by_path: Option<i64> = match path.as_deref() {
+            Some(p) => conn
+                .query_row("SELECT episode_id FROM episode_files WHERE path=?1", [p], |r| r.get(0))
+                .optional()?,
+            None => None,
+        };
+        let target = match by_path {
+            Some(id) => Some(id),
+            None => match (tmdb, season, episode) {
+                (Some(t), Some(s), Some(e)) => find_episode_by_show_tmdb(conn, t, s, e)?,
+                _ => None,
+            },
+        };
+        if let Some(new_ref) = target {
             remap_progress_row(conn, &profile, "episode", old_ref, new_ref, updated)?;
         }
     }
@@ -1309,16 +1344,24 @@ pub fn season_art(conn: &Connection, show_id: i64) -> Result<Vec<(i64, String)>>
 
 #[allow(clippy::too_many_arguments)]
 pub fn upsert_progress(conn: &Connection, p: &Progress) -> Result<()> {
+    // enrich with the file path so the row can be re-linked after a rebuild
+    // even without TMDb (path is the most stable identifier we have)
+    let path: Option<String> = if p.media_type == "movie" {
+        conn.query_row("SELECT path FROM movies WHERE id=?1", [p.ref_id], |r| r.get(0)).optional()?
+    } else {
+        conn.query_row("SELECT path FROM episodes WHERE id=?1", [p.ref_id], |r| r.get(0)).optional()?
+    };
     conn.execute(
-        "INSERT INTO progress(profile_id, media_type, ref_id, tmdb_id, season, episode, position_sec, duration_sec, watched, updated_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        "INSERT INTO progress(profile_id, media_type, ref_id, tmdb_id, season, episode, position_sec, duration_sec, watched, updated_at, path)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(profile_id, media_type, ref_id) DO UPDATE SET
             tmdb_id=excluded.tmdb_id, season=excluded.season, episode=excluded.episode,
             position_sec=excluded.position_sec, duration_sec=excluded.duration_sec,
-            watched=excluded.watched, updated_at=excluded.updated_at",
+            watched=excluded.watched, updated_at=excluded.updated_at,
+            path=COALESCE(excluded.path, progress.path)",
         params![
             p.profile_id, p.media_type, p.ref_id, p.tmdb_id, p.season, p.episode,
-            p.position_sec, p.duration_sec, p.watched as i64, p.updated_at
+            p.position_sec, p.duration_sec, p.watched as i64, p.updated_at, path
         ],
     )?;
     Ok(())
@@ -1406,6 +1449,72 @@ pub fn movie_tmdb(conn: &Connection, movie_id: i64) -> Result<Option<i64>> {
         .optional()?
         .flatten();
     Ok(id)
+}
+
+/// Fully-watched items, newest first (for the "Zuletzt gesehen" row).
+pub fn recently_watched(conn: &Connection, profile_id: &str, limit: i64) -> Result<Vec<ContinueItem>> {
+    let mut items: Vec<ContinueItem> = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT p.ref_id, m.title, m.poster_path, m.backdrop_path, p.duration_sec, p.updated_at
+         FROM progress p JOIN movies m ON m.id = p.ref_id
+         WHERE p.profile_id = ?1 AND p.media_type = 'movie' AND p.watched = 1",
+    )?;
+    let rows = stmt.query_map([profile_id], |r| {
+        Ok(ContinueItem {
+            media_type: "movie".into(),
+            ref_id: r.get(0)?,
+            title: r.get(1)?,
+            subtitle: None,
+            poster_path: r.get(2)?,
+            backdrop_path: r.get(3)?,
+            position_sec: r.get(4)?,
+            duration_sec: r.get(4)?,
+            progress: 1.0,
+            updated_at: r.get(5)?,
+            show_id: None,
+            season: None,
+            episode: None,
+        })
+    })?;
+    for row in rows {
+        items.push(row?);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT p.ref_id, s.title, s.poster_path, s.backdrop_path, p.duration_sec, p.updated_at,
+                e.season, e.episode, e.show_id, e.title
+         FROM progress p JOIN episodes e ON e.id = p.ref_id JOIN shows s ON s.id = e.show_id
+         WHERE p.profile_id = ?1 AND p.media_type = 'episode' AND p.watched = 1",
+    )?;
+    let rows = stmt.query_map([profile_id], |r| {
+        let season: i64 = r.get(6)?;
+        let episode: i64 = r.get(7)?;
+        let ep_title: Option<String> = r.get(9)?;
+        let sub = match ep_title {
+            Some(t) => format!("S{season:02} E{episode:02} · {t}"),
+            None => format!("S{season:02} E{episode:02}"),
+        };
+        Ok(ContinueItem {
+            media_type: "episode".into(),
+            ref_id: r.get(0)?,
+            title: r.get(1)?,
+            subtitle: Some(sub),
+            poster_path: r.get(2)?,
+            backdrop_path: r.get(3)?,
+            position_sec: r.get(4)?,
+            duration_sec: r.get(4)?,
+            progress: 1.0,
+            updated_at: r.get(5)?,
+            show_id: Some(r.get(8)?),
+            season: Some(season),
+            episode: Some(episode),
+        })
+    })?;
+    for row in rows {
+        items.push(row?);
+    }
+    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    items.truncate(limit.max(0) as usize);
+    Ok(items)
 }
 
 /// Items the user has started but not finished, newest first.

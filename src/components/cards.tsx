@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listFavorites, listProgress, revealInExplorer, setShowWatched, setWatched, toggleFavorite } from "../lib/api";
+import { enqueueSeasonRest, playback } from "../lib/playback";
 import { quality, ratingText } from "../lib/format";
 import { backdropUrl, posterUrl } from "../lib/img";
 import { useStore } from "../lib/store";
@@ -67,6 +68,20 @@ export function MovieCardItem({
           { label: "Abspielen", onClick: () => navigate(`/play/movie/${movie.id}`) },
           { label: "Details", onClick: () => navigate(`/movie/${movie.id}`) },
           {
+            label: "▶ Als Nächstes abspielen",
+            onClick: () => {
+              playback().enqueue({ kind: "movie", mediaType: "movie", label: movie.title, ids: [movie.id] }, true);
+              toast("Wird als Nächstes abgespielt", "success");
+            },
+          },
+          {
+            label: "+ Zur Warteschlange",
+            onClick: () => {
+              playback().enqueue({ kind: "movie", mediaType: "movie", label: movie.title, ids: [movie.id] });
+              toast("Zur Warteschlange hinzugefügt", "success");
+            },
+          },
+          {
             label: watched ? "Als ungesehen markieren" : "Als gesehen markieren",
             onClick: () =>
               void setWatched(profileId, "movie", movie.id, !watched).then(() => {
@@ -124,6 +139,13 @@ export function ShowCardItem({ show, onIdentify }: { show: Show; onIdentify: (t:
         onOpen={() => navigate(`/show/${show.id}`)}
         actions={[
           { label: "Details", onClick: () => navigate(`/show/${show.id}`) },
+          {
+            label: "+ Ungesehene in Warteschlange",
+            onClick: () =>
+              void enqueueSeasonRest(profileId, show.id, show.title, null, null).then((n) =>
+                toast(n > 0 ? `${n} Folgen in die Warteschlange gelegt` : "Keine ungesehenen Folgen", n > 0 ? "success" : "info"),
+              ),
+          },
           {
             label: "Ganze Serie als gesehen",
             onClick: () => void setShowWatched(profileId, show.id, true).then(() => toast("Serie als gesehen markiert", "success")),

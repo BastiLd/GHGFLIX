@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Tv } from "lucide-react";
 import { useMemo, useState } from "react";
 import { listShows } from "../lib/api";
-import { parseGenres } from "../lib/format";
+import { certAllowed, parseGenres } from "../lib/format";
+import { useUiPrefs } from "../lib/uiPrefs";
 import { ShowCardItem } from "../components/cards";
 import { IdentifyDialog, type IdentifyTarget } from "../components/IdentifyDialog";
 import { EmptyState, SkeletonGrid } from "../components/ui";
@@ -47,13 +48,17 @@ export default function Shows() {
     return [...set].sort();
   }, [data]);
 
+  const kidsMaxCert = useUiPrefs((s) => s.kidsMaxCert);
+  const [statusFilter, setStatusFilter] = useState("");
   const shows = useMemo(() => {
-    let list = data ?? [];
+    let list = (data ?? []).filter((s) => certAllowed(s.cert, kidsMaxCert));
     const f = filter.trim().toLowerCase();
     if (f) list = list.filter((s) => s.title.toLowerCase().includes(f));
     if (genre) list = list.filter((s) => parseGenres(s.genres).includes(genre));
+    if (statusFilter === "ended") list = list.filter((s) => s.status === "Ended" || s.status === "Canceled");
+    if (statusFilter === "running") list = list.filter((s) => s.status && s.status !== "Ended" && s.status !== "Canceled");
     return sortShows(list, sort);
-  }, [data, sort, filter, genre]);
+  }, [data, sort, filter, genre, kidsMaxCert, statusFilter]);
 
   if (isLoading)
     return (
@@ -91,6 +96,15 @@ export default function Shows() {
             ))}
           </select>
         )}
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="bg-ghg-surface2 border border-ghg-line rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-ghg-red"
+        >
+          <option value="">Jeder Status</option>
+          <option value="running">Laufend</option>
+          <option value="ended">Beendet</option>
+        </select>
         <select
           value={sort}
           onChange={(e) => {

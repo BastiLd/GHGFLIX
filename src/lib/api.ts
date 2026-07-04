@@ -56,6 +56,16 @@ export const identifyShow = (showId: number, tmdbId: number, remember = true) =>
   invoke<number>("identify_show", { showId, tmdbId, remember });
 export const setEpisodeNumbers = (episodeId: number, season: number, episode: number) =>
   invoke<void>("set_episode_numbers", { episodeId, season, episode });
+/** "This file is SxxEyy — and everything after it in order": returns assigned count. */
+export const assignEpisodesSequential = (episodeId: number, season: number, episode: number) =>
+  invoke<number>("assign_episodes_sequential", { episodeId, season, episode });
+export interface TmdbEpisodeInfo {
+  episode: number;
+  title?: string | null;
+  airDate?: string | null;
+}
+export const tmdbSeasonList = (tmdbId: number, season: number) =>
+  invoke<TmdbEpisodeInfo[]>("tmdb_season_list", { tmdbId, season });
 
 // ===== progress =====
 export const setProgress = (
@@ -73,6 +83,15 @@ export const getProgress = (profileId: string, mediaType: "movie" | "episode", r
 export const listProgress = (profileId: string) => invoke<Progress[]>("list_progress", { profileId });
 export const continueWatching = (profileId: string) =>
   invoke<ContinueItem[]>("continue_watching", { profileId });
+export const recentlyWatched = (profileId: string, limit = 20) =>
+  invoke<ContinueItem[]>("recently_watched", { profileId, limit });
+
+export interface FileInfoResult {
+  sizeBytes: number;
+  modifiedSecs?: number | null;
+  exists: boolean;
+}
+export const fileInfo = (path: string) => invoke<FileInfoResult>("file_info", { path });
 
 export interface RemoteProgressRow {
   mediaType: "movie" | "episode";

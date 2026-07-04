@@ -24,6 +24,7 @@ export interface UiPrefs {
   rowMovies: boolean;
   rowGenres: boolean;
   rowTopRated: boolean;
+  rowHistory: boolean; // "Zuletzt gesehen"
   genreRowCount: number;
   startPage: "home" | "movies" | "shows" | "list";
   // ── scrolling ──
@@ -44,9 +45,27 @@ export interface UiPrefs {
   audioLangPref: "en-de" | "de-en" | "file";
   rememberTrackLang: boolean;
   pipSize: "sm" | "md" | "lg";
+  // ── mini player & queue ──
+  miniPlayer: boolean; // back button → YouTube-style mini player
+  miniSize: "sm" | "md" | "lg";
+  // ── player extras ──
+  screenshotEnabled: boolean;
+  showClock: boolean; // current time in the player top bar
+  showEndsAt: boolean; // "endet um 21:47"
+  watchedThreshold: number; // % at which something counts as watched
+  chapterMarkers: boolean; // ticks on the seek bar
+  introMarker: boolean; // highlighted intro segment on the seek bar
+  // ── library / display extras ──
+  epLocalStills: boolean; // extract a frame for episodes without TMDb image
+  kidsMaxCert: "off" | "0" | "6" | "12" | "16"; // hide above this FSK
+  fontScale: number; // UI zoom %, 80–130
+  sidebarCompact: boolean;
+  greeting: boolean; // "Guten Abend, Basti" on Home
+  updateCheck: boolean; // check GitHub for newer releases
+  autoBackup: boolean; // weekly watched-data backup into app-data
   // ── misc ──
   toastSec: number;
-  mascot: "off" | "blitz" | "katze" | "robo" | "geist";
+  mascot: "off" | "blitz" | "katze" | "robo" | "geist" | "drache" | "pinguin";
   mascotTips: boolean;
 }
 
@@ -68,6 +87,7 @@ export const DEFAULT_PREFS: UiPrefs = {
   rowMovies: true,
   rowGenres: true,
   rowTopRated: true,
+  rowHistory: true,
   genreRowCount: 8,
   startPage: "home",
   scrollSpeed: 1.8,
@@ -86,6 +106,21 @@ export const DEFAULT_PREFS: UiPrefs = {
   audioLangPref: "en-de",
   rememberTrackLang: true,
   pipSize: "md",
+  miniPlayer: true,
+  miniSize: "md",
+  screenshotEnabled: true,
+  showClock: false,
+  showEndsAt: true,
+  watchedThreshold: 95,
+  chapterMarkers: true,
+  introMarker: true,
+  epLocalStills: true,
+  kidsMaxCert: "off",
+  fontScale: 100,
+  sidebarCompact: false,
+  greeting: true,
+  updateCheck: true,
+  autoBackup: true,
   toastSec: 4,
   mascot: "off",
   mascotTips: true,
@@ -139,3 +174,39 @@ export const useUiPrefs = create<UiPrefsStore>((set, get) => ({
 
 /** Non-hook accessor for imperative code (player init, scroll handler …). */
 export const uiPrefs = () => useUiPrefs.getState();
+
+// ===== custom accent color (overrides the theme's red) =====
+
+const ACCENT_LS = "ghgflix.customAccent";
+
+function shade(hex: string, amt: number): string {
+  const n = parseInt(hex.replace("#", ""), 16);
+  if (Number.isNaN(n)) return hex;
+  const c = (v: number) => Math.min(255, Math.max(0, Math.round(v)));
+  const r = c(((n >> 16) & 255) + amt);
+  const g = c(((n >> 8) & 255) + amt);
+  const b = c((n & 255) + amt);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+}
+
+/** Apply (or clear with null) a custom accent color across the whole UI. */
+export function applyAccent(hex: string | null) {
+  const root = document.documentElement;
+  if (!hex) {
+    localStorage.removeItem(ACCENT_LS);
+    root.style.removeProperty("--color-ghg-red");
+    root.style.removeProperty("--color-ghg-red-bright");
+    root.style.removeProperty("--color-ghg-red-dark");
+    return;
+  }
+  localStorage.setItem(ACCENT_LS, hex);
+  root.style.setProperty("--color-ghg-red", hex);
+  root.style.setProperty("--color-ghg-red-bright", shade(hex, 34));
+  root.style.setProperty("--color-ghg-red-dark", shade(hex, -50));
+}
+
+export function loadAccent(): string | null {
+  const hex = localStorage.getItem(ACCENT_LS);
+  if (hex) applyAccent(hex);
+  return hex;
+}

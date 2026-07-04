@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import { AlertTriangle, CheckCircle2, Info, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { usePlayback } from "../lib/playback";
 import { useStore } from "../lib/store";
 
 export function Spinner({ className }: { className?: string }) {
@@ -17,8 +18,10 @@ export function Spinner({ className }: { className?: string }) {
 export function Toasts() {
   const toasts = useStore((s) => s.toasts);
   const dismiss = useStore((s) => s.dismiss);
+  const miniActive = usePlayback((s) => s.mini != null);
   return (
-    <div className="fixed bottom-6 right-6 z-[200] flex flex-col gap-2">
+    // shift up-left while the mini-player occupies the bottom-right corner
+    <div className={`fixed right-6 z-[200] flex flex-col gap-2 ${miniActive ? "bottom-72" : "bottom-6"}`}>
       {toasts.map((t) => (
         <div
           key={t.id}

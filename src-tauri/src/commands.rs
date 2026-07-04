@@ -1,5 +1,6 @@
 use crate::models::*;
 use crate::tmdb::Tmdb;
+use rusqlite::params;
 use crate::{db, scanner, watcher, AppState};
 use serde::Deserialize;
 use std::path::Path;
@@ -497,14 +498,211 @@ pub async fn identify_show(
     Ok(surviving)
 }
 
+/// Set an episode's season/episode AND pull the real TMDb metadata (title,
+/// description, image) for it right away — so a manual assignment shows the
+/// episode's actual name instead of just "S01 E05".
 #[tauri::command]
-pub fn set_episode_numbers(app: AppHandle, state: State<AppState>, episode_id: i64, season: i64, episode: i64) -> R<()> {
-    {
+pub async fn set_episode_numbers(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    episode_id: i64,
+    season: i64,
+    episode: i64,
+) -> R<()> {
+    let show: Option<(i64, Option<i64>)> = {
         let conn = state.conn.lock().unwrap();
         db::set_episode_numbers(&conn, episode_id, season, episode).map_err(err)?;
+        conn.query_row(
+            "SELECT e.show_id, s.tmdb_id FROM episodes e JOIN shows s ON s.id=e.show_id WHERE e.id=?1",
+            [episode_id],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?)),
+        )
+        .ok()
+    };
+    if let Some((show_id, Some(tmdb_id))) = show {
+        let (key, lang) = read_key_lang(&state);
+        if !key.trim().is_empty() {
+            let tmdb = Tmdb::new(state.http.clone(), key, lang);
+            if let Ok(eps) = tmdb.season_episodes(tmdb_id, season).await {
+                let conn = state.conn.lock().unwrap();
+                for e in eps {
+                    let _ = db::update_episode_meta(
+                        &conn, show_id, season, e.episode, e.title.as_deref(), e.overview.as_deref(),
+                        e.still_path.as_deref(), e.air_date.as_deref(), e.runtime,
+                    );
+                }
+            }
+        }
     }
     let _ = app.emit("library://updated", ());
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TmdbEpisodeInfo {
+    pub episode: i64,
+    pub title: Option<String>,
+    pub air_date: Option<String>,
+}
+
+/// Episode list of a TMDb season — for picking the REAL episode by name when
+/// identifying a file manually.
+#[tauri::command]
+pub async fn tmdb_season_list(state: State<'_, AppState>, tmdb_id: i64, season: i64) -> R<Vec<TmdbEpisodeInfo>> {
+    let (key, lang) = read_key_lang(&state);
+    if key.trim().is_empty() {
+        return Err("Kein TMDb-Key gesetzt".into());
+    }
+    let tmdb = Tmdb::new(state.http.clone(), key, lang);
+    let eps = tmdb.season_episodes(tmdb_id, season).await.map_err(err)?;
+    Ok(eps
+        .into_iter()
+        .map(|e| TmdbEpisodeInfo { episode: e.episode, title: e.title, air_date: e.air_date })
+        .collect())
+}
+
+/// "Diese Datei ist S{season}E{episode} — und alles danach fortlaufend":
+/// re-numbers the anchor file and every following file (natural path order)
+/// sequentially, rolling into the next season based on TMDb episode counts,
+/// then refreshes metadata so every episode gets its real title + image.
+/// Returns how many episodes were assigned.
+#[tauri::command]
+pub async fn assign_episodes_sequential(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    episode_id: i64,
+    season: i64,
+    episode: i64,
+) -> R<i64> {
+    // collect the affected rows (anchor + all later files, sorted by path)
+    let (show_id, tmdb_id, affected): (i64, Option<i64>, Vec<i64>) = {
+        let conn = state.conn.lock().unwrap();
+        let (show_id, tmdb_id): (i64, Option<i64>) = conn
+            .query_row(
+                "SELECT e.show_id, s.tmdb_id FROM episodes e JOIN shows s ON s.id=e.show_id WHERE e.id=?1",
+                [episode_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(err)?;
+        let mut rows: Vec<(i64, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT id, path FROM episodes WHERE show_id=?1")
+                .map_err(err)?;
+            let r = stmt
+                .query_map([show_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+                .map_err(err)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(err)?;
+            r
+        };
+        rows.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+        let anchor = rows.iter().position(|(id, _)| *id == episode_id).ok_or("Folge nicht gefunden")?;
+        (show_id, tmdb_id, rows[anchor..].iter().map(|(id, _)| *id).collect())
+    };
+
+    // season lengths from TMDb (for rolling over into the next season)
+    let (key, lang) = read_key_lang(&state);
+    let tmdb = if key.trim().is_empty() { None } else { Some(Tmdb::new(state.http.clone(), key, lang)) };
+    let mut season_len: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    if let (Some(t), Some(tid)) = (&tmdb, tmdb_id) {
+        let mut s = season;
+        // fetch up to 20 seasons ahead — plenty, and keeps API usage bounded
+        for _ in 0..20 {
+            match t.season_episodes(tid, s).await {
+                Ok(eps) if !eps.is_empty() => {
+                    season_len.insert(s, eps.len() as i64);
+                    s += 1;
+                }
+                _ => break,
+            }
+        }
+    }
+
+    // compute the target numbering
+    let mut targets: Vec<(i64, i64, i64)> = Vec::with_capacity(affected.len()); // (id, season, episode)
+    let (mut cs, mut ce) = (season, episode);
+    for id in &affected {
+        targets.push((*id, cs, ce));
+        ce += 1;
+        if let Some(len) = season_len.get(&cs) {
+            if ce > *len && season_len.contains_key(&(cs + 1)) {
+                cs += 1;
+                ce = 1;
+            }
+        }
+    }
+
+    // apply in two phases to dodge the UNIQUE(show,season,episode) constraint
+    let seasons_touched: Vec<i64> = {
+        let conn = state.conn.lock().unwrap();
+        // phase 1: park affected rows on unique temp numbers
+        for (id, _, _) in &targets {
+            conn.execute("UPDATE episodes SET episode = -id WHERE id=?1", [id]).map_err(err)?;
+        }
+        // phase 2: final numbers; a non-affected row already holding a target
+        // number gets parked too (it was mis-numbered — visible for review)
+        for (id, s, e) in &targets {
+            let _ = conn.execute(
+                "UPDATE episodes SET episode = -id WHERE show_id=?1 AND season=?2 AND episode=?3 AND id<>?4",
+                params![show_id, s, e, id],
+            );
+            conn.execute("UPDATE episodes SET season=?2, episode=?3 WHERE id=?1", params![id, s, e])
+                .map_err(err)?;
+        }
+        let mut set: Vec<i64> = targets.iter().map(|(_, s, _)| *s).collect();
+        set.dedup();
+        set
+    };
+
+    // pull real titles/images for every touched season
+    if let (Some(t), Some(tid)) = (&tmdb, tmdb_id) {
+        for s in seasons_touched {
+            if let Ok(eps) = t.season_episodes(tid, s).await {
+                let conn = state.conn.lock().unwrap();
+                for e in eps {
+                    let _ = db::update_episode_meta(
+                        &conn, show_id, s, e.episode, e.title.as_deref(), e.overview.as_deref(),
+                        e.still_path.as_deref(), e.air_date.as_deref(), e.runtime,
+                    );
+                }
+            }
+        }
+    }
+    let _ = app.emit("library://updated", ());
+    Ok(targets.len() as i64)
+}
+
+/// Basic file facts for the "Dateiinfo" dialog.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileInfo {
+    pub size_bytes: u64,
+    pub modified_secs: Option<i64>,
+    pub exists: bool,
+}
+
+#[tauri::command]
+pub fn file_info(path: String) -> FileInfo {
+    match std::fs::metadata(&path) {
+        Ok(m) => FileInfo {
+            size_bytes: m.len(),
+            modified_secs: m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64),
+            exists: true,
+        },
+        Err(_) => FileInfo { size_bytes: 0, modified_secs: None, exists: false },
+    }
+}
+
+/// Fully-watched items, newest first.
+#[tauri::command]
+pub fn recently_watched(state: State<AppState>, profile_id: String, limit: Option<i64>) -> R<Vec<ContinueItem>> {
+    let conn = state.conn.lock().unwrap();
+    db::recently_watched(&conn, &profile_id, limit.unwrap_or(20)).map_err(err)
 }
 
 // ===== progress =====
@@ -872,10 +1070,8 @@ struct ExportFavorite {
     added_at: i64,
 }
 
-/// Export watch progress + favorites (TMDb-keyed, portable) as JSON.
-#[tauri::command]
-pub fn export_data(state: State<AppState>, path: String) -> R<i64> {
-    let conn = state.conn.lock().unwrap();
+/// Shared export logic (manual export + weekly auto-backup).
+pub fn write_export(conn: &rusqlite::Connection, path: &str) -> Result<i64, String> {
     let mut progress: Vec<Progress> = Vec::new();
     {
         let mut stmt = conn
@@ -922,8 +1118,15 @@ pub fn export_data(state: State<AppState>, path: String) -> R<i64> {
     }
     let n = (progress.len() + favorites.len()) as i64;
     let json = serde_json::to_string_pretty(&ExportBundle { progress, favorites }).map_err(err)?;
-    std::fs::write(&path, json).map_err(err)?;
+    std::fs::write(path, json).map_err(err)?;
     Ok(n)
+}
+
+/// Export watch progress + favorites (TMDb-keyed, portable) as JSON.
+#[tauri::command]
+pub fn export_data(state: State<AppState>, path: String) -> R<i64> {
+    let conn = state.conn.lock().unwrap();
+    write_export(&conn, &path)
 }
 
 /// Import a JSON export: progress merges last-write-wins via TMDb coordinates,

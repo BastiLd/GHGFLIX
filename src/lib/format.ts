@@ -101,6 +101,23 @@ export function quality(item?: {
   return qualityFromDims(item.width, item.height) ?? qualityLabel(item.path);
 }
 
+/** Kids mode: is an item allowed under the configured maximum age rating?
+ *  Items WITHOUT a known rating are hidden when the filter is active (safe side). */
+export function certAllowed(cert: string | null | undefined, max: "off" | "0" | "6" | "12" | "16"): boolean {
+  if (max === "off") return true;
+  const limit = parseInt(max, 10);
+  const num = cert ? parseInt(cert.match(/\d+/)?.[0] ?? "", 10) : NaN;
+  if (Number.isNaN(num)) return false;
+  return num <= limit;
+}
+
+/** human file size */
+export function formatBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${Math.round(bytes / 1024)} KB`;
+}
+
 export function ratingText(rating?: number | null): string | null {
   if (rating == null || rating <= 0) return null;
   return rating.toFixed(1);

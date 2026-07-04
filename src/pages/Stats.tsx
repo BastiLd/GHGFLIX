@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { BarChart3, Clock, Film, HardDrive, PlayCircle, Star, Tv } from "lucide-react";
 import { useMemo } from "react";
 import { getStats, listMovies, listShows } from "../lib/api";
-import { dedupeMovies, parseGenres } from "../lib/format";
+import { dedupeMovies, parseGenres, quality } from "../lib/format";
 import { useStore } from "../lib/store";
 import { Spinner } from "../components/ui";
 
@@ -36,7 +36,16 @@ export default function Stats() {
     const topGenres = [...genreCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
     const maxGenre = topGenres[0]?.[1] ?? 1;
     const bestRated = [...mm, ...ss].filter((x) => (x.rating ?? 0) > 0).sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))[0];
-    return { movies: mm.length, shows: ss.length, episodes, uhd, topGenres, maxGenre, bestRated };
+    // quality distribution across the library
+    const qualCount = new Map<string, number>();
+    [...mm, ...ss].forEach((x) => {
+      const q = quality(x) ?? "Unbekannt";
+      qualCount.set(q, (qualCount.get(q) ?? 0) + 1);
+    });
+    const order = ["8K", "4K", "1440p", "1080p", "720p", "480p", "SD", "Unbekannt"];
+    const qualDist = order.filter((q) => qualCount.has(q)).map((q) => [q, qualCount.get(q)!] as [string, number]);
+    const maxQual = Math.max(1, ...qualDist.map(([, n]) => n));
+    return { movies: mm.length, shows: ss.length, episodes, uhd, topGenres, maxGenre, bestRated, qualDist, maxQual };
   }, [movies.data, shows.data]);
 
   if (isLoading || movies.isLoading || shows.isLoading)
@@ -92,6 +101,23 @@ export default function Stats() {
           </div>
         ))}
       </div>
+
+      {lib.qualDist.length > 0 && (
+        <>
+          <h2 className="text-lg font-bold mb-3">Qualitäts-Verteilung</h2>
+          <div className="max-w-2xl space-y-2 mb-8">
+            {lib.qualDist.map(([q, n]) => (
+              <div key={q} className="flex items-center gap-3">
+                <span className="w-32 text-sm text-ghg-muted truncate">{q}</span>
+                <div className="flex-1 h-2.5 rounded-full bg-ghg-surface2 overflow-hidden">
+                  <div className="h-full bg-ghg-red rounded-full" style={{ width: `${(n / lib.maxQual) * 100}%` }} />
+                </div>
+                <span className="w-8 text-sm text-ghg-muted text-right tabular-nums">{n}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       {lib.topGenres.length > 0 && (
         <>

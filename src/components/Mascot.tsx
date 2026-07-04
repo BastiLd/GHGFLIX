@@ -16,6 +16,8 @@ const FACES: Record<string, { idle: string; busy: string; happy: string; name: s
   katze: { idle: "🐱", busy: "🙀", happy: "😸", name: "Kino-Katze" },
   robo: { idle: "🤖", busy: "⚙️", happy: "🎉", name: "Robo" },
   geist: { idle: "👻", busy: "😱", happy: "🥳", name: "Flixi" },
+  drache: { idle: "🐲", busy: "🔥", happy: "🎊", name: "Drako" },
+  pinguin: { idle: "🐧", busy: "❄️", happy: "🎬", name: "Pingu" },
 };
 
 const TIPS = [

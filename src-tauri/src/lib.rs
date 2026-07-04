@@ -41,6 +41,27 @@ pub fn run() {
             // Auto-fill working mpv.exe / ffmpeg.exe paths (avoids the console
             // mpv.com terminal window and makes intro detection work out of the box).
             paths::ensure_player_paths(&conn);
+            // Re-link any watched-state rows that lost their target (e.g. the app
+            // was closed mid-rebuild) — cheap, and makes the state visible instantly.
+            let _ = db::remap_stale_refs(&conn);
+            // Weekly automatic backup of watched data + favorites into app-data.
+            let backup_on = db::get_setting(&conn, "pref_autoBackup")
+                .ok()
+                .flatten()
+                .map(|v| v != "off")
+                .unwrap_or(true);
+            if backup_on {
+                let backup = dir.join("ghgflix-backup.json");
+                let stale = std::fs::metadata(&backup)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .map(|d| d.as_secs() > 7 * 86400)
+                    .unwrap_or(true);
+                if stale {
+                    let _ = commands::write_export(&conn, &backup.to_string_lossy());
+                }
+            }
             // timeouts so a flaky connection can never hang a scan forever
             let http = reqwest::Client::builder()
                 .user_agent("GHGFlix/0.7")
@@ -128,6 +149,10 @@ pub fn run() {
             commands::db_optimize,
             commands::export_data,
             commands::import_data,
+            commands::tmdb_season_list,
+            commands::assign_episodes_sequential,
+            commands::file_info,
+            commands::recently_watched,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

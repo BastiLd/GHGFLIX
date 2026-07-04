@@ -12,6 +12,8 @@ export function Scrubber({
   getThumb,
   interval = 5,
   previewWidth = 176,
+  markers,
+  intro,
 }: {
   position: number;
   duration: number;
@@ -20,6 +22,10 @@ export function Scrubber({
   getThumb: (t: number) => Promise<string | null>;
   interval?: number;
   previewWidth?: number;
+  /** chapter positions (seconds) rendered as small ticks */
+  markers?: number[];
+  /** intro window rendered as a highlighted segment */
+  intro?: { start: number; end: number } | null;
 }) {
   const BUCKET = Math.max(1, interval);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -177,6 +183,17 @@ export function Scrubber({
         }}
       >
         <div className="relative w-full h-1.5 rounded-full bg-white/25 overflow-visible">
+          {/* intro window highlight */}
+          {intro && duration > 0 && intro.end > intro.start && (
+            <div
+              className="absolute top-0 h-full bg-yellow-400/40"
+              title="Intro"
+              style={{
+                left: `${Math.min(100, (intro.start / duration) * 100)}%`,
+                width: `${Math.min(100, ((intro.end - intro.start) / duration) * 100)}%`,
+              }}
+            />
+          )}
           {/* buffered fill */}
           {bufPct > 0 && (
             <div className="absolute left-0 top-0 h-full rounded-full bg-white/40" style={{ width: `${bufPct}%` }} />
@@ -187,6 +204,17 @@ export function Scrubber({
           )}
           {/* played fill */}
           <div className="absolute left-0 top-0 h-full rounded-full bg-ghg-red" style={{ width: `${pct}%` }} />
+          {/* chapter ticks */}
+          {markers && duration > 0 &&
+            markers
+              .filter((m) => m > 1 && m < duration - 1)
+              .map((m, i) => (
+                <div
+                  key={i}
+                  className="absolute top-1/2 -translate-y-1/2 w-0.5 h-2.5 bg-white/70 rounded"
+                  style={{ left: `${(m / duration) * 100}%` }}
+                />
+              ))}
           {/* knob */}
           <div
             className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-ghg-red shadow ring-2 ring-white/70 opacity-0 group-hover:opacity-100 transition"

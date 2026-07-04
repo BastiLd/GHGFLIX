@@ -1,103 +1,71 @@
-# GHGFlix 🎬
+# GHGFlix 🎬⚡
 
-Eine lokale Netflix-/Plex-/Jellyfin-artige Media-App. Wähle deine Film- und
-Serienordner, GHGFlix erkennt automatisch per **TMDb** Filme, Serien, Staffeln
-und Folgen, zeigt sie schön gruppiert an und spielt mit **mpv** praktisch jedes
-Format ab. Login + Profile + Fortschritt werden optional über **Supabase**
-PC-übergreifend synchronisiert.
+Deine **lokale Netflix-Alternative** für Windows — im roten ZickZack-Look. GHGFlix scannt deine Film-
+und Serienordner, holt Poster, Beschreibungen, Altersfreigaben und Episodendaten von TMDb und spielt
+alles butterweich über den eingebauten mpv-Player ab.
 
-Design: GHGFlix Rot/Schwarz im ZickZack-Stil.
+![Tauri 2](https://img.shields.io/badge/Tauri-2-blue) ![React 19](https://img.shields.io/badge/React-19-61dafb) ![Rust](https://img.shields.io/badge/Rust-stable-orange)
 
----
+## ✨ Highlights
 
-## Tech-Stack
+- **Bibliothek wie bei Netflix**: Reihen, großes Titelbild, Weiterschauen, Meine Liste, Genre-Reihen, „Neu hinzugefügt", „Top bewertet", „Zuletzt gesehen"
+- **Mini-Player wie YouTube**: Zurück-Knopf im Player → Video läuft klein unten rechts weiter, während du stöberst
+- **Warteschlange**: Filme, einzelne Folgen oder ganze (Rest-)Staffeln als *ein* Eintrag vormerken
+- **mpv-Wiedergabe**: Hardware-Dekodierung, Kapitel, Untertitel, Audiospuren, Geschwindigkeit, Screenshots, Bild-im-Bild
+- **Intro überspringen**: per Kapitel, Audio-Erkennung, oder einfach selbst markieren (Rechtsklick im Player)
+- **Schlau beim Erkennen**: TMDb-Auto-Zuordnung (nur Buchstaben, Release-Müll stört nicht), dauerhafte manuelle Zuordnungen, fortlaufende Folgen-Zuordnung („diese Datei ist S01E01, der Rest folgt automatisch")
+- **Nichts geht verloren**: Gesehen-Stand & Favoriten überleben sogar „Bibliothek neu aufbauen" (Verknüpfung über Dateipfad *und* TMDb), wöchentliches Auto-Backup, Export/Import als JSON
+- **Alles einstellbar**: ~60 Einstellungen — Kartengröße, Animationen, Startseiten-Reihen, Scroll-Verhalten, Kindersicherung (FSK), Akzentfarbe, Maskottchen u.v.m.
+- **Optional**: Supabase-Sync des Fortschritts zwischen mehreren PCs
 
-- **Tauri 2** (Rust) + **React 18 / TypeScript / Vite**
-- **mpv** (eingebettet via `tauri-plugin-mpv`) – spielt MKV/HEVC/DTS … alles
-- **SQLite** (lokale Bibliothek & Fortschritt) · **TMDb** (Metadaten)
-- **Supabase** (optional: Auth, Profile, Sync) · **Tailwind CSS**
+## 🚀 Installation (Nutzer)
 
----
+1. **GHGFlix installieren**: den neuesten Installer aus den [Releases](https://github.com/BastiLd/GHGFLIX/releases) laden
+   (`GHGFlix_x.y.z_x64-setup.exe`) und ausführen — oder die portable `ghgflix.exe` direkt starten.
+2. **mpv installieren** (Wiedergabe): `winget install mpv` — GHGFlix findet es automatisch.
+3. **ffmpeg installieren** (Vorschau, Qualitäts-Erkennung, Intro-Erkennung): `winget install ffmpeg`.
+4. GHGFlix starten → **Einstellungen → Bibliothek** → Ordner/Laufwerk automatisch erkennen lassen.
+5. **Einstellungen → TMDb** → kostenlosen API-Key von [themoviedb.org](https://www.themoviedb.org/settings/api) eintragen (für Poster & Infos).
+6. Scan abwarten — fertig. 🎉
 
-## Voraussetzungen (einmalig)
+> Werkzeug-Probleme? **Einstellungen → Werkzeuge** zeigt den Live-Status von mpv/ffmpeg/ffprobe und
+> repariert verschobene Pfade mit einem Klick.
 
-```powershell
-winget install Rustlang.Rustup
-winget install OpenJS.NodeJS.LTS
-winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-winget install shinchiro.mpv    # Video-Player (muss im PATH sein)
-```
+## 🛠️ Selbst bauen (Entwickler)
 
-> Nach der mpv-Installation liegt die EXE meist unter `C:\Program Files\MPV Player\`.
-> Dieser Ordner muss im **PATH** sein (sonst startet die Wiedergabe nicht). Alternativ
-> kannst du den mpv-Pfad in den GHGFlix-Einstellungen direkt eintragen.
-
-## Starten (Entwicklung)
+Voraussetzungen: [Node.js LTS](https://nodejs.org), [Rust (MSVC)](https://rustup.rs), VS 2022 C++ Build Tools, mpv, ffmpeg.
 
 ```bash
+git clone https://github.com/BastiLd/GHGFLIX.git
+cd GHGFLIX
 npm install
+
+# Entwicklung (Hot-Reload)
 npm run tauri dev
-```
 
-## Bauen (Release-EXE)
-
-```bash
+# Release-Build → src-tauri/target/release/ghgflix.exe + Installer unter …/bundle/
 npm run tauri build
 ```
 
----
+Tests: `cd src-tauri && cargo test` · Typprüfung: `npx tsc --noEmit`
 
-## Erste Schritte in der App
+## 🧱 Technik
 
-1. **Einstellungen → Bibliotheken**: Film- und/oder Serienordner hinzufügen.
-2. **Einstellungen → TMDb**: kostenlosen API-Key von
-   [themoviedb.org](https://www.themoviedb.org/settings/api) (v3 auth) eintragen.
-3. **Jetzt scannen** klicken → GHGFlix liest die Ordner ein und lädt Metadaten.
-4. Falsch erkannt? Auf einer Kachel/Folge das **3-Punkte-Menü → Identifizieren**
-   öffnen, Titel suchen bzw. Staffel/Folge korrigieren.
+| Schicht | Stack |
+|---|---|
+| Desktop-Shell | Tauri 2 (Rust) |
+| UI | React 19 + TypeScript + Tailwind v4 + zustand + TanStack Query |
+| Wiedergabe | mpv via `tauri-plugin-mpv` (rendert hinter dem transparenten WebView) |
+| Daten | SQLite (rusqlite, gebündelt) im App-Data-Ordner |
+| Metadaten | TMDb (API-Key des Nutzers, Sprache wählbar) |
+| Sync (optional) | Supabase (`supabase/schema.sql` einspielen) |
 
-### Ordnerstruktur (Empfehlung wie Plex/Jellyfin)
+## ⌨️ Wichtige Tastenkürzel (Player)
 
-```
-Serien/
-  Breaking Bad (2008)/
-    Season 01/
-      Breaking Bad S01E01.mkv
-      Breaking Bad S01E02.mkv
-Filme/
-  Inception (2010).mkv
-```
+Leertaste Pause · ←/→ bzw. J/L spulen · 0–9 Prozentsprung · M stumm · C Untertitel · F Vollbild ·
+P Bild-im-Bild · S Screenshot · N nächste Folge · [ ] Geschwindigkeit · . , Einzelbild · A Bildformat ·
+Bild↑/↓ Kapitel — vollständige Liste unter **Einstellungen → Tastenkürzel**.
 
-Erkannt werden u. a. `S01E02`, `1x02`, `Staffel 1/Folge 2`, `Season 01`-Ordner
-sowie `Titel (Jahr)` bei Filmen.
+## 📄 Lizenz
 
----
-
-## Sync & Profile (optional, kostenlos)
-
-1. Lege ein kostenloses Projekt auf [supabase.com](https://supabase.com) an.
-2. Führe `supabase/schema.sql` im **SQL-Editor** deines Projekts aus.
-3. Trage **Project URL** + **anon key** (Settings → API) in GHGFlix unter
-   *Einstellungen → Konto & Sync* ein.
-4. **Anmelden**, ein **Profil** wählen → Fortschritt wird hochgeladen und auf
-   jedem PC, auf dem du dich anmeldest, fortgesetzt.
-
-> Synchronisiert werden nur **Konto, Profile und Fortschritt** – nicht die
-> Videodateien. Die Filme/Serien müssen auf jedem PC lokal vorliegen; die
-> Zuordnung erfolgt über die TMDb-ID + Staffel/Folge.
-
----
-
-## Projektstruktur
-
-```
-src/               React-Frontend (pages/, components/, lib/)
-src-tauri/src/     Rust-Backend
-  scanner.rs       Ordner scannen
-  parser.rs        Dateinamen → Serie/Staffel/Folge/Film
-  tmdb.rs          TMDb-Client
-  db.rs            SQLite
-  watcher.rs       Auto-Watcher (neue Dateien)
-  commands.rs      an das Frontend exponierte Befehle
-supabase/schema.sql  Datenbank-Schema für Sync
-```
+MIT — siehe [LICENSE](LICENSE).

@@ -4,7 +4,10 @@ import clsx from "clsx";
 import { Film, Heart, House, RefreshCw, Search, Settings as SettingsIcon, Tv, User } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { getSetting, scanLibraries } from "../lib/api";
+import { useQuery } from "@tanstack/react-query";
+import { getSetting, listMovies, listShows, scanLibraries } from "../lib/api";
+import { dedupeMovies } from "../lib/format";
+import { miniClipPath, usePlayback } from "../lib/playback";
 import { useStore } from "../lib/store";
 import { useUiPrefs } from "../lib/uiPrefs";
 import type { ScanProgress } from "../lib/types";
@@ -42,6 +45,25 @@ export function Layout() {
   const [version, setVersion] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const pageTransition = useUiPrefs((s) => s.pageTransition && s.animations);
+  const mini = usePlayback((s) => s.mini);
+  const miniSize = useUiPrefs((s) => s.miniSize);
+  const compact = useUiPrefs((s) => s.sidebarCompact);
+  const [, resizeTick] = useState(0);
+  const moviesQ = useQuery({ queryKey: ["movies"], queryFn: listMovies });
+  const showsQ = useQuery({ queryKey: ["shows"], queryFn: listShows });
+  const counts: Record<string, number | undefined> = {
+    "/movies": moviesQ.data ? dedupeMovies(moviesQ.data).length : undefined,
+    "/shows": showsQ.data?.length,
+  };
+
+  // while the mini-player is active, cut a transparent hole into the opaque
+  // Layout background so the shrunken mpv video shows through
+  useEffect(() => {
+    if (!mini) return;
+    const onResize = () => resizeTick((n) => n + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [mini]);
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
@@ -112,22 +134,27 @@ export function Layout() {
   };
 
   return (
-    <div className="flex h-screen bg-ghg-bg text-ghg-text overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-60 shrink-0 bg-ghg-bg2 border-r border-ghg-line flex flex-col">
-        <div className="px-5 py-6">
-          <Wordmark />
+    <div
+      className="flex h-screen bg-ghg-bg text-ghg-text overflow-hidden"
+      style={mini ? { clipPath: miniClipPath(miniSize) } : undefined}
+    >
+      {/* Sidebar (full or icon-only compact mode) */}
+      <aside className={clsx("shrink-0 bg-ghg-bg2 border-r border-ghg-line flex flex-col", compact ? "w-16" : "w-60")}>
+        <div className={compact ? "px-3 py-6 flex justify-center" : "px-5 py-6"}>
+          {compact ? <ZigZag className="h-2 w-8" /> : <Wordmark />}
         </div>
 
-        <nav className="flex-1 px-3 space-y-1">
+        <nav className={clsx("flex-1 space-y-1", compact ? "px-2" : "px-3")}>
           {NAV.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.end}
+              title={item.label}
               className={({ isActive }) =>
                 clsx(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-lg font-medium transition",
+                  "flex items-center gap-3 rounded-lg font-medium transition",
+                  compact ? "justify-center px-0 py-2.5" : "px-3 py-2.5",
                   isActive
                     ? "bg-ghg-red/15 text-ghg-red border border-ghg-red/30"
                     : "text-ghg-muted hover:text-ghg-text hover:bg-ghg-surface2 border border-transparent",
@@ -135,28 +162,45 @@ export function Layout() {
               }
             >
               <item.icon className="w-5 h-5" />
-              {item.label}
+              {!compact && (
+                <>
+                  <span className="flex-1">{item.label}</span>
+                  {counts[item.to] != null && (
+                    <span className="text-[10px] tabular-nums text-ghg-muted bg-ghg-surface2 rounded-full px-1.5 py-0.5">
+                      {counts[item.to]}
+                    </span>
+                  )}
+                </>
+              )}
             </NavLink>
           ))}
         </nav>
 
         <button
           onClick={() => navigate("/profiles")}
-          className="m-3 flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-ghg-surface2 transition text-left"
+          title="Profil wechseln"
+          className={clsx(
+            "m-3 flex items-center gap-3 rounded-lg hover:bg-ghg-surface2 transition text-left",
+            compact ? "justify-center px-0 py-2" : "px-3 py-2.5",
+          )}
         >
           <div className="w-9 h-9 rounded-lg bg-ghg-red flex items-center justify-center shrink-0">
             <User className="w-5 h-5" />
           </div>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold truncate">{profileName}</p>
-            <p className="text-xs text-ghg-muted">Profil wechseln</p>
-          </div>
+          {!compact && (
+            <div className="min-w-0">
+              <p className="text-sm font-semibold truncate">{profileName}</p>
+              <p className="text-xs text-ghg-muted">Profil wechseln</p>
+            </div>
+          )}
         </button>
 
-        <div className="px-5 pb-4 pt-1">
-          <ZigZag className="h-1.5 w-16 opacity-60 mb-1.5" />
-          <p className="text-[10px] text-ghg-muted/70 tracking-wide">GHGFlix{version ? ` · v${version}` : ""} · ZickZack Edition</p>
-        </div>
+        {!compact && (
+          <div className="px-5 pb-4 pt-1">
+            <ZigZag className="h-1.5 w-16 opacity-60 mb-1.5" />
+            <p className="text-[10px] text-ghg-muted/70 tracking-wide">GHGFlix{version ? ` · v${version}` : ""} · ZickZack Edition</p>
+          </div>
+        )}
       </aside>
 
       {/* Main */}

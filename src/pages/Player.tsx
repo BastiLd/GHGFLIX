@@ -30,6 +30,7 @@ import { formatTime, quality as computeQuality, seasonEpisodeLabel } from "../li
 import { comboFromEvent } from "../lib/keys";
 import { ENGLISH, GERMAN, langName } from "../lib/lang";
 import { useStore } from "../lib/store";
+import { applyMiniMargins, playback, usePlayback } from "../lib/playback";
 import { uiPrefs } from "../lib/uiPrefs";
 import type { Episode, MediaVersion } from "../lib/types";
 import { Wordmark } from "../components/Brand";
@@ -159,6 +160,11 @@ export default function Player() {
   const [endScreen, setEndScreen] = useState(false);
   const introMarkRef = useRef<number | null>(null); // pending "Intro: Start hier"
   const prefsRef = useRef(uiPrefs());
+  // live mirrors for callbacks that must not go stale (mini-player handoff)
+  const videoReadyRef = useRef(false);
+  const errorRef = useRef(false);
+  const titleRef = useRef("");
+  const subtitleRef = useRef<string | null>(null);
   const [versions, setVersions] = useState<MediaVersion[]>([]);
   const [versionPath, setVersionPath] = useState<string | null>(null);
   const [thumbInterval, setThumbInterval] = useState(5);
@@ -186,6 +192,7 @@ export default function Player() {
   const introSkippedRef = useRef(false);
   const autoQualityRef = useRef<string>("highest");
 
+  const queueItems = usePlayback((s) => s.queue);
   const idx = useMemo(() => episodes.findIndex((e) => e.id === mediaId), [episodes, mediaId]);
   const nextEp = idx >= 0 ? episodes[idx + 1] : undefined;
   const prevEp = idx > 0 ? episodes[idx - 1] : undefined;
@@ -194,8 +201,20 @@ export default function Player() {
   // the webview). Every other page stays opaque, so the desktop never bleeds in.
   useEffect(() => {
     document.documentElement.classList.add("mpv-mode");
+    document.documentElement.classList.remove("mpv-mini");
     return () => document.documentElement.classList.remove("mpv-mode");
   }, []);
+
+  useEffect(() => {
+    videoReadyRef.current = videoReady;
+  }, [videoReady]);
+  useEffect(() => {
+    errorRef.current = error != null;
+  }, [error]);
+  useEffect(() => {
+    titleRef.current = title;
+    subtitleRef.current = subtitle;
+  }, [title, subtitle]);
 
   const saveProgress = useCallback(
     (watched = false) => {
@@ -203,7 +222,9 @@ export default function Player() {
       const dur = durRef.current;
       const pos = posRef.current;
       if (dur <= 0) return;
-      const done = watched || pos >= dur * 0.95;
+      // "watched" threshold is user-configurable (Einstellungen → Wiedergabe)
+      const thr = Math.min(0.99, Math.max(0.5, (prefsRef.current.watchedThreshold || 95) / 100));
+      const done = watched || pos >= dur * thr;
       setProgress(profileId, t, i, pos, dur, done).catch(() => {});
     },
     [profileId],
@@ -312,6 +333,19 @@ export default function Player() {
       await restoreWindow();
       pipRef.current = false;
     }
+    // Back → YouTube-style mini player (default; configurable). The video keeps
+    // playing in the corner while the user browses the library.
+    const { type: t, id: i } = itemRef.current;
+    if (prefsRef.current.miniPlayer && videoReadyRef.current && !errorRef.current && pathRef.current) {
+      playback().setHandoff(true);
+      playback().setMini({
+        mediaType: t,
+        mediaId: i,
+        title: titleRef.current,
+        subtitle: subtitleRef.current,
+        path: pathRef.current,
+      });
+    }
     // Replace the /play entry so a later "back" on the detail page goes to the
     // overview the user actually came from — never back into the player.
     navigate(backTargetRef.current, { replace: true });
@@ -320,6 +354,14 @@ export default function Player() {
   const handleEnd = useCallback(() => {
     saveProgress(true);
     const p = prefsRef.current;
+    // explicit queue entries win over the implicit "next episode"
+    if (playback().peekNext()) {
+      const n = playback().popNext();
+      if (n) {
+        navigate(`/play/${n.mediaType}/${n.id}`);
+        return;
+      }
+    }
     if (mediaType === "episode" && nextEp && p.autoplayNext) {
       navigate(`/play/episode/${nextEp.id}`);
     } else if (p.endAutoBack) {
@@ -397,6 +439,32 @@ export default function Player() {
     },
     [toast],
   );
+  // A key → cycle the aspect-ratio override (fixes stretched/letterboxed files)
+  const aspectRef = useRef(0);
+  const cycleAspect = useCallback(() => {
+    const modes: [string, string][] = [
+      ["-1", "Automatisch"],
+      ["16:9", "16:9"],
+      ["4:3", "4:3"],
+      ["2.35:1", "Cinemascope"],
+    ];
+    aspectRef.current = (aspectRef.current + 1) % modes.length;
+    const [v, label] = modes[aspectRef.current];
+    setProperty("video-aspect-override", v as never).catch(() => {});
+    toast(`Bildformat: ${label}`, "info");
+  }, [toast]);
+
+  // loop the current file (context menu)
+  const [loopFile, setLoopFile] = useState(false);
+  const toggleLoop = useCallback(() => {
+    setLoopFile((cur) => {
+      const next = !cur;
+      setProperty("loop-file", (next ? "inf" : "no") as never).catch(() => {});
+      toast(next ? "Wiederholung an" : "Wiederholung aus", "info");
+      return next;
+    });
+  }, [toast]);
+
   // S key / menu → save the current frame as PNG into the Pictures folder
   const takeScreenshot = useCallback(async () => {
     try {
@@ -461,11 +529,17 @@ export default function Player() {
         const ts = (await getSetting("thumb_size")) || "md";
         setThumbWidth(ts === "sm" ? 140 : ts === "lg" ? 260 : 176);
         const mpvPath = (await getSetting("mpv_path"))?.trim();
-        await init({
-          path: mpvPath || undefined,
-          args: await buildMpvArgs(),
-          observedProperties: OBSERVED,
-        });
+        if (playback().mpvInited) {
+          // mpv is already running (mini-player handoff) — reuse it seamlessly
+          applyMiniMargins(false, prefsRef.current.miniSize);
+        } else {
+          await init({
+            path: mpvPath || undefined,
+            args: await buildMpvArgs(),
+            observedProperties: OBSERVED,
+          });
+          playback().setInited(true);
+        }
         if (cancelled) return;
         unobserve = await observeProperties(OBSERVED, ({ name, data }) => {
           if (name === "pause") setPaused(Boolean(data));
@@ -539,8 +613,14 @@ export default function Player() {
       cancelled = true;
       saveProgress();
       if (unobserve) unobserve();
-      destroy().catch(() => {});
-      if (pipRef.current) restoreWindow();
+      if (playback().handoff) {
+        // video keeps running in the mini player — do NOT destroy mpv
+        playback().setHandoff(false);
+      } else {
+        destroy().catch(() => {});
+        playback().setInited(false);
+        if (pipRef.current) restoreWindow();
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -611,6 +691,25 @@ export default function Player() {
           setVersionPath(chosen.path);
           setQuality(computeQuality(chosen));
         }
+        // Expanding from the mini player? The SAME file is already playing —
+        // skip loadfile + resume so the video continues without a hiccup.
+        const expand = playback().expandTo;
+        const fromMini = expand && expand.mediaType === mediaType && expand.mediaId === mediaId;
+        if (fromMini) {
+          playback().setExpandTo(null);
+          if (expand.path) {
+            path = expand.path;
+            setVersionPath(expand.path);
+          }
+          pathRef.current = path;
+          resumeRef.current = null;
+          setVideoReady(true);
+          if (!tracksLoadedRef.current) {
+            tracksLoadedRef.current = true;
+            void loadTracks();
+          }
+          return;
+        }
         pathRef.current = path;
         const prog = await getProgress(profileId, mediaType, mediaId);
         resumeRef.current = prog && !prog.watched && prog.positionSec > 30 ? prog.positionSec : null;
@@ -668,8 +767,15 @@ export default function Player() {
         stepSpeed(-1);
       } else if (e.key === "]") {
         stepSpeed(1);
+      } else if (e.key === ".") {
+        // frame-by-frame stepping (pauses playback)
+        command("frame-step", []).catch(() => {});
+      } else if (e.key === ",") {
+        command("frame-back-step", []).catch(() => {});
+      } else if (e.key.toLowerCase() === "a" && !e.ctrlKey) {
+        cycleAspect();
       } else if (e.key.toLowerCase() === "s" && !e.ctrlKey) {
-        takeScreenshot();
+        if (prefsRef.current.screenshotEnabled) takeScreenshot();
       } else if (e.key.toLowerCase() === "n" && mediaType === "episode") {
         if (nextEp) navigate(`/play/episode/${nextEp.id}`);
       } else if (e.key === "PageUp") {
@@ -697,7 +803,7 @@ export default function Player() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [wake, fullscreen, togglePause, toggleFullscreen, togglePip, goBack, toggleMarker, stepSpeed, takeScreenshot, mediaType, nextEp, navigate]);
+  }, [wake, fullscreen, togglePause, toggleFullscreen, togglePip, goBack, toggleMarker, stepSpeed, takeScreenshot, cycleAspect, mediaType, nextEp, navigate]);
 
   useEffect(() => {
     const onMouse = (e: MouseEvent) => {
@@ -877,7 +983,11 @@ export default function Player() {
       }
     }
     items.push({ separator: true, label: "", onClick: () => {} });
-    items.push({ label: "Screenshot speichern", onClick: () => void takeScreenshot() });
+    items.push({ label: loopFile ? "Wiederholung aus" : "Datei wiederholen", onClick: toggleLoop });
+    items.push({ label: "Bildformat wechseln (A)", onClick: cycleAspect });
+    if (prefsRef.current.screenshotEnabled) {
+      items.push({ label: "Screenshot speichern", onClick: () => void takeScreenshot() });
+    }
     items.push({
       label: "In Ordner anzeigen",
       onClick: () => {
@@ -1049,6 +1159,28 @@ export default function Player() {
             </button>
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            {queueItems.length > 0 && (
+              <div className="mb-3">
+                <div className="flex items-center justify-between px-1 mb-1">
+                  <p className="text-[11px] uppercase tracking-wide text-ghg-muted">Warteschlange</p>
+                  <button onClick={() => playback().clearQueue()} className="text-[11px] text-ghg-muted hover:text-ghg-red">
+                    Leeren
+                  </button>
+                </div>
+                {queueItems.map((q, qi) => (
+                  <div key={q.key} className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs hover:bg-ghg-surface2">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-semibold">{q.label}</span>
+                      {q.sub && <span className="block truncate text-ghg-muted">{q.sub}</span>}
+                    </span>
+                    <button onClick={() => playback().moveInQueue(q.key, -1)} disabled={qi === 0} className="px-1 text-ghg-muted hover:text-ghg-text disabled:opacity-30">↑</button>
+                    <button onClick={() => playback().moveInQueue(q.key, 1)} disabled={qi === queueItems.length - 1} className="px-1 text-ghg-muted hover:text-ghg-text disabled:opacity-30">↓</button>
+                    <button onClick={() => playback().removeFromQueue(q.key)} className="px-1 text-ghg-muted hover:text-ghg-red">✕</button>
+                  </div>
+                ))}
+                <div className="border-b border-ghg-line my-2" />
+              </div>
+            )}
             {episodes.map((ep) => (
               <button
                 key={ep.id}
@@ -1080,6 +1212,18 @@ export default function Player() {
             </p>
             {subtitle && <p className="text-sm text-white/70">{subtitle}</p>}
           </div>
+          <div className="ml-auto text-right text-sm text-white/70 tabular-nums">
+            {prefsRef.current.showClock && <p>{new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })} Uhr</p>}
+            {prefsRef.current.showEndsAt && duration > 0 && (
+              <p className="text-xs">
+                endet um{" "}
+                {new Date(Date.now() + Math.max(0, (duration - position) / (speed || 1)) * 1000).toLocaleTimeString("de-DE", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1109,6 +1253,8 @@ export default function Player() {
               getThumb={getThumb}
               interval={thumbInterval}
               previewWidth={thumbWidth}
+              markers={prefsRef.current.chapterMarkers ? chapters.map((c) => c.time) : undefined}
+              intro={prefsRef.current.introMarker ? introWindowRef.current : null}
             />
           )}
           <button
@@ -1286,9 +1432,11 @@ export default function Player() {
               <ListVideo className="w-5 h-5" />
             </button>
           )}
-          <button onClick={() => void takeScreenshot()} className="p-2 rounded-lg hover:bg-white/10 transition" title="Screenshot (S)">
-            <Camera className="w-5 h-5" />
-          </button>
+          {prefsRef.current.screenshotEnabled && (
+            <button onClick={() => void takeScreenshot()} className="p-2 rounded-lg hover:bg-white/10 transition" title="Screenshot (S)">
+              <Camera className="w-5 h-5" />
+            </button>
+          )}
           <button onClick={togglePip} className={`p-2 rounded-lg hover:bg-white/10 transition ${pip ? "text-ghg-red" : ""}`} title="Bild-im-Bild">
             <PictureInPicture2 className="w-5 h-5" />
           </button>

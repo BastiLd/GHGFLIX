@@ -3,7 +3,7 @@ import { Play, Search } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { listMovies, listShows, searchEpisodes } from "../lib/api";
-import { dedupeMovies, seasonEpisodeLabel } from "../lib/format";
+import { dedupeMovies, parseGenres, seasonEpisodeLabel } from "../lib/format";
 import { stillUrl } from "../lib/img";
 import { MovieCardItem, ShowCardItem } from "../components/cards";
 import { IdentifyDialog, type IdentifyTarget } from "../components/IdentifyDialog";
@@ -31,14 +31,17 @@ export default function SearchPage() {
       </div>
     );
 
-  // ranked: title starts with the query first, then contains
-  const rank = (title: string) => (title.toLowerCase().startsWith(q) ? 0 : 1);
+  // ranked: title starts with the query first, then title contains, then genre matches
+  const rank = (title: string, genres?: string | null) =>
+    title.toLowerCase().startsWith(q) ? 0 : title.toLowerCase().includes(q) ? 1 : genreHit(genres) ? 2 : 3;
+  const genreHit = (genres?: string | null) =>
+    q.length >= 3 && parseGenres(genres).some((g) => g.toLowerCase().includes(q));
   const mm = dedupeMovies(movies.data ?? [])
-    .filter((m) => m.title.toLowerCase().includes(q))
-    .sort((a, b) => rank(a.title) - rank(b.title) || a.title.localeCompare(b.title));
+    .filter((m) => m.title.toLowerCase().includes(q) || genreHit(m.genres))
+    .sort((a, b) => rank(a.title, a.genres) - rank(b.title, b.genres) || a.title.localeCompare(b.title));
   const ss = (shows.data ?? [])
-    .filter((s) => s.title.toLowerCase().includes(q))
-    .sort((a, b) => rank(a.title) - rank(b.title) || a.title.localeCompare(b.title));
+    .filter((s) => s.title.toLowerCase().includes(q) || genreHit(s.genres))
+    .sort((a, b) => rank(a.title, a.genres) - rank(b.title, b.genres) || a.title.localeCompare(b.title));
   const ee = eps.data ?? [];
   const empty = mm.length === 0 && ss.length === 0 && ee.length === 0;
 

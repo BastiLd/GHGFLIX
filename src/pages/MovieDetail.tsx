@@ -2,14 +2,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, ImageIcon, Pencil, Play, Plus, Star } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { getMovie, getProgress, listFavorites, movieVersions, revealInExplorer, setWatched, toggleFavorite } from "../lib/api";
-import { formatRuntime, parseGenres, quality, qualityFromDims, ratingText } from "../lib/format";
+import { fileInfo, getMovie, getProgress, listFavorites, listMovies, movieVersions, revealInExplorer, setWatched, toggleFavorite, type FileInfoResult } from "../lib/api";
+import { dedupeMovies, formatBytes, formatRuntime, parseGenres, quality, qualityFromDims, ratingText } from "../lib/format";
 import { backdropUrl, posterUrl } from "../lib/img";
 import { useStore } from "../lib/store";
 import { ArtworkDialog } from "../components/ArtworkDialog";
 import { Extras } from "../components/Extras";
-import { IdentifyDialog } from "../components/IdentifyDialog";
-import { Button, EmptyState, SkeletonDetail } from "../components/ui";
+import { IdentifyDialog, type IdentifyTarget } from "../components/IdentifyDialog";
+import { MovieCardItem } from "../components/cards";
+import { MediaRow } from "../components/MediaRow";
+import { Button, EmptyState, Modal, SkeletonDetail } from "../components/ui";
+import { useMemo } from "react";
 
 export default function MovieDetail() {
   const { id } = useParams();
@@ -17,7 +20,10 @@ export default function MovieDetail() {
   const navigate = useNavigate();
   const profileId = useStore((s) => s.profileId);
   const [identify, setIdentify] = useState(false);
+  const [identifyOther, setIdentifyOther] = useState<IdentifyTarget | null>(null);
   const [artwork, setArtworkOpen] = useState(false);
+  const [info, setInfo] = useState<FileInfoResult | null>(null);
+  const [infoOpen, setInfoOpen] = useState(false);
 
   const qc = useQueryClient();
   const toast = useStore((s) => s.toast);
@@ -28,6 +34,22 @@ export default function MovieDetail() {
   });
   const favs = useQuery({ queryKey: ["favorites", profileId], queryFn: () => listFavorites(profileId) });
   const vers = useQuery({ queryKey: ["movieVersions", mid], queryFn: () => movieVersions(mid) });
+  const allMoviesQ = useQuery({ queryKey: ["movies"], queryFn: listMovies });
+
+  // local library titles sharing genres with this movie ("Ähnliche Filme")
+  const similar = useMemo(() => {
+    const me = movie.data;
+    if (!me) return [];
+    const mine = new Set(parseGenres(me.genres));
+    if (mine.size === 0) return [];
+    return dedupeMovies(allMoviesQ.data ?? [])
+      .filter((x) => x.tmdbId !== me.tmdbId && x.id !== me.id)
+      .map((x) => ({ m: x, overlap: parseGenres(x.genres).filter((g) => mine.has(g)).length }))
+      .filter((x) => x.overlap >= 1)
+      .sort((a, b) => b.overlap - a.overlap || (b.m.rating ?? 0) - (a.m.rating ?? 0))
+      .slice(0, 12)
+      .map((x) => x.m);
+  }, [movie.data, allMoviesQ.data]);
   const isFav = (favs.data ?? []).some((f) => f.mediaType === "movie" && f.refId === mid);
 
   const toggleFav = () =>
@@ -157,6 +179,15 @@ export default function MovieDetail() {
             <Button variant="ghost" onClick={() => void revealInExplorer(m.path).catch((e) => toast(String(e), "error"))}>
               In Ordner anzeigen
             </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setInfoOpen(true);
+                void fileInfo(m.path).then(setInfo).catch(() => setInfo(null));
+              }}
+            >
+              Dateiinfo
+            </Button>
             <Button variant="ghost" onClick={() => setArtworkOpen(true)}>
               <ImageIcon className="w-4 h-4" /> Bild ändern
             </Button>
@@ -170,6 +201,47 @@ export default function MovieDetail() {
       <div className="px-10">
         <Extras mediaType="movie" tmdbId={m.tmdbId} />
       </div>
+
+      {similar.length >= 3 && (
+        <div className="mt-8">
+          <MediaRow title="Ähnliche Filme aus deiner Bibliothek">
+            {similar.map((s) => (
+              <MovieCardItem key={s.id} movie={s} onIdentify={setIdentifyOther} />
+            ))}
+          </MediaRow>
+        </div>
+      )}
+
+      <Modal open={infoOpen} onClose={() => setInfoOpen(false)} title="Dateiinfo">
+        <div className="space-y-2 text-sm">
+          <div className="flex justify-between gap-4 border-b border-ghg-line py-1.5">
+            <span className="text-ghg-muted shrink-0">Pfad</span>
+            <span className="font-mono text-xs break-all text-right">{m.path}</span>
+          </div>
+          <div className="flex justify-between border-b border-ghg-line py-1.5">
+            <span className="text-ghg-muted">Größe</span>
+            <span>{info ? (info.exists ? formatBytes(info.sizeBytes) : "Datei nicht gefunden") : "…"}</span>
+          </div>
+          <div className="flex justify-between border-b border-ghg-line py-1.5">
+            <span className="text-ghg-muted">Auflösung</span>
+            <span>{m.width && m.height ? `${m.width}×${m.height} (${quality(m) ?? "?"})` : "unbekannt"}</span>
+          </div>
+          <div className="flex justify-between border-b border-ghg-line py-1.5">
+            <span className="text-ghg-muted">Geändert</span>
+            <span>{info?.modifiedSecs ? new Date(info.modifiedSecs * 1000).toLocaleString("de-DE") : "–"}</span>
+          </div>
+          {(vers.data?.length ?? 0) > 1 && (
+            <div className="flex justify-between py-1.5">
+              <span className="text-ghg-muted">Versionen</span>
+              <span>{vers.data!.length} Dateien</span>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {identifyOther && (
+        <IdentifyDialog open onClose={() => setIdentifyOther(null)} target={identifyOther} onDone={() => {}} />
+      )}
 
       {identify && (
         <IdentifyDialog

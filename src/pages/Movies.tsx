@@ -2,8 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Film } from "lucide-react";
 import { useMemo, useState } from "react";
 import { listMovies, listProgress } from "../lib/api";
-import { dedupeMovies, parseGenres, quality } from "../lib/format";
+import { certAllowed, dedupeMovies, parseGenres, quality } from "../lib/format";
 import { useStore } from "../lib/store";
+import { useUiPrefs } from "../lib/uiPrefs";
 import { MovieCardItem } from "../components/cards";
 import { IdentifyDialog, type IdentifyTarget } from "../components/IdentifyDialog";
 import { EmptyState, SkeletonGrid } from "../components/ui";
@@ -66,15 +67,16 @@ export default function Movies() {
     return [...set].sort();
   }, [data]);
 
+  const kidsMaxCert = useUiPrefs((s) => s.kidsMaxCert);
   const movies = useMemo(() => {
-    let list = dedupeMovies(data ?? []);
+    let list = dedupeMovies(data ?? []).filter((m) => certAllowed(m.cert, kidsMaxCert));
     if (hideWatched) list = list.filter((m) => !watchedSet.has(m.id));
     const f = filter.trim().toLowerCase();
     if (f) list = list.filter((m) => m.title.toLowerCase().includes(f));
     if (genre) list = list.filter((m) => parseGenres(m.genres).includes(genre));
     if (qual) list = list.filter((m) => quality(m) === qual);
     return sortMovies(list, sort);
-  }, [data, sort, hideWatched, watchedSet, filter, genre, qual]);
+  }, [data, sort, hideWatched, watchedSet, filter, genre, qual, kidsMaxCert]);
 
   if (isLoading)
     return (

@@ -8,11 +8,13 @@ import {
   listFavorites,
   listMovies,
   listProgress,
+  listShowEpisodes,
   listShows,
+  recentlyWatched,
   setProgress,
   toggleFavorite,
 } from "../lib/api";
-import { dedupeMovies, parseGenres, quality, ratingText } from "../lib/format";
+import { certAllowed, dedupeMovies, parseGenres, quality, ratingText } from "../lib/format";
 import { backdropUrl } from "../lib/img";
 import { useStore } from "../lib/store";
 import { useUiPrefs } from "../lib/uiPrefs";
@@ -36,11 +38,23 @@ export default function Home() {
   const movies = useQuery({ queryKey: ["movies"], queryFn: listMovies });
   const shows = useQuery({ queryKey: ["shows"], queryFn: listShows });
   const cont = useQuery({ queryKey: ["continue", profileId], queryFn: () => continueWatching(profileId) });
+  const history = useQuery({
+    queryKey: ["recentlyWatched", profileId],
+    queryFn: () => recentlyWatched(profileId, 20),
+    enabled: prefs.rowHistory,
+  });
   const prog = useQuery({ queryKey: ["progress", "list", profileId], queryFn: () => listProgress(profileId) });
   const favs = useQuery({ queryKey: ["favorites", profileId], queryFn: () => listFavorites(profileId) });
 
-  const allMovies = useMemo(() => dedupeMovies(movies.data ?? []), [movies.data]);
-  const allShows = useMemo(() => shows.data ?? [], [shows.data]);
+  // optional kids filter (Einstellungen → Allgemein): hide everything above the max FSK
+  const allMovies = useMemo(
+    () => dedupeMovies(movies.data ?? []).filter((m) => certAllowed(m.cert, prefs.kidsMaxCert)),
+    [movies.data, prefs.kidsMaxCert],
+  );
+  const allShows = useMemo(
+    () => (shows.data ?? []).filter((s) => certAllowed(s.cert, prefs.kidsMaxCert)),
+    [shows.data, prefs.kidsMaxCert],
+  );
 
   // optional timed hero rotation (Einstellungen → Allgemein)
   useEffect(() => {
@@ -176,8 +190,35 @@ export default function Home() {
     );
   };
 
+  // hero "Abspielen" on a show plays the first unwatched episode directly
+  const playFeatured = async () => {
+    if (!featured) return;
+    if (!isShow) {
+      navigate(`/play/movie/${featured.id}`);
+      return;
+    }
+    try {
+      const [eps, plist] = await Promise.all([listShowEpisodes(featured.id), listProgress(profileId)]);
+      const watched = new Set(plist.filter((p) => p.mediaType === "episode" && p.watched).map((p) => p.refId));
+      const next = eps.find((e) => !watched.has(e.id)) ?? eps[0];
+      if (next) navigate(`/play/episode/${next.id}`);
+      else navigate(`/show/${featured.id}`);
+    } catch {
+      navigate(`/show/${featured.id}`);
+    }
+  };
+
+  const hour = new Date().getHours();
+  const greetWord = hour < 5 ? "Gute Nacht" : hour < 11 ? "Guten Morgen" : hour < 18 ? "Guten Tag" : "Guten Abend";
+
   return (
     <div className="pb-10">
+      {prefs.greeting && (
+        <p className="px-8 pt-5 pb-1 text-sm text-ghg-muted">
+          {greetWord}
+          {profileId !== "local" || true ? <span className="text-ghg-text font-semibold">, {useStore.getState().profileName}</span> : null} 👋
+        </p>
+      )}
       {prefs.heroEnabled && featured && (
         <Hero
           title={featured.title}
@@ -195,7 +236,7 @@ export default function Home() {
               qc.invalidateQueries({ queryKey: ["favorites"] }),
             )
           }
-          onPlay={() => navigate(isShow ? `/show/${featured.id}` : `/play/movie/${featured.id}`)}
+          onPlay={() => void playFeatured()}
           onDetails={() => navigate(isShow ? `/show/${featured.id}` : `/movie/${featured.id}`)}
         />
       )}
@@ -270,6 +311,14 @@ export default function Home() {
               />
             ),
           )}
+        </MediaRow>
+      )}
+
+      {prefs.rowHistory && (history.data?.length ?? 0) > 0 && (
+        <MediaRow title="Zuletzt gesehen">
+          {(history.data ?? []).map((c) => (
+            <ContinueCardItem key={`h-${c.mediaType}-${c.refId}`} item={{ ...c, progress: 0 }} />
+          ))}
         </MediaRow>
       )}
 

@@ -37,6 +37,15 @@ html.mpv-mode #root {
   background: transparent;
 }
 
+/* Mini-player mode: the window chain stays transparent (video renders behind the
+   webview, shrunk into the bottom-right corner via mpv video-margin-ratios); the
+   Layout paints its opaque background WITH a clip-path hole over the video rect. */
+html.mpv-mini,
+html.mpv-mini body,
+html.mpv-mini #root {
+  background: transparent;
+}
+
 body {
   font-family: var(--font-display);
   color: var(--color-ghg-text);

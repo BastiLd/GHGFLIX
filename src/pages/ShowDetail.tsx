@@ -3,7 +3,12 @@ import clsx from "clsx";
 import { ArrowLeft, Check, ImageIcon, MoreVertical, Pencil, Play, Plus, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { detectIntros, getSeasonArt, getShowDetail, listFavorites, listProgress, setSeasonWatched, setShowIntro, setShowWatched, setWatched, toggleFavorite } from "../lib/api";
+import { listShows } from "../lib/api";
+import { ShowCardItem } from "../components/cards";
+import { MediaRow } from "../components/MediaRow";
+import { detectIntros, getSeasonArt, getShowDetail, listFavorites, listProgress, mediaThumbnail, revealInExplorer, setSeasonWatched, setShowIntro, setShowWatched, setWatched, toggleFavorite } from "../lib/api";
+import { enqueueSeasonRest, playback } from "../lib/playback";
+import { useUiPrefs } from "../lib/uiPrefs";
 import { formatRuntime, formatTime, parseGenres, quality, ratingText, seasonEpisodeLabel } from "../lib/format";
 import { backdropUrl, posterUrl, stillUrl } from "../lib/img";
 import { useStore } from "../lib/store";
@@ -31,6 +36,21 @@ export default function ShowDetail() {
   const seasonArtQ = useQuery({ queryKey: ["seasonArt", sid], queryFn: () => getSeasonArt(sid) });
   const seasonArt = useMemo(() => new Map(seasonArtQ.data ?? []), [seasonArtQ.data]);
   const prog = useQuery({ queryKey: ["progress", "list", profileId], queryFn: () => listProgress(profileId) });
+  const allShowsQ = useQuery({ queryKey: ["shows"], queryFn: listShows });
+
+  const similar = useMemo(() => {
+    const me = detail.data?.show;
+    if (!me) return [];
+    const mine = new Set(parseGenres(me.genres));
+    if (mine.size === 0) return [];
+    return (allShowsQ.data ?? [])
+      .filter((x) => x.id !== me.id && (me.tmdbId == null || x.tmdbId !== me.tmdbId))
+      .map((x) => ({ s: x, overlap: parseGenres(x.genres).filter((g) => mine.has(g)).length }))
+      .filter((x) => x.overlap >= 1)
+      .sort((a, b) => b.overlap - a.overlap || (b.s.rating ?? 0) - (a.s.rating ?? 0))
+      .slice(0, 12)
+      .map((x) => x.s);
+  }, [detail.data, allShowsQ.data]);
   const favs = useQuery({ queryKey: ["favorites", profileId], queryFn: () => listFavorites(profileId) });
   const isFav = (favs.data ?? []).some((f) => f.mediaType === "show" && f.refId === sid);
   const toggleFav = () =>
@@ -191,8 +211,30 @@ export default function ShowDetail() {
             <Button variant="ghost" onClick={toggleFav}>
               {isFav ? <Check className="w-4 h-4" /> : <Plus className="w-4 h-4" />} Meine Liste
             </Button>
-            <Button variant="ghost" onClick={markShowWatched}>
-              <Check className="w-4 h-4" /> Alle gesehen
+            {watchedCount < totalCount && (
+              <Button variant="ghost" onClick={markShowWatched}>
+                <Check className="w-4 h-4" /> Alle gesehen
+              </Button>
+            )}
+            {watchedCount > 0 && (
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  void setShowWatched(profileId, sid, false).then(() => toast("Serie als ungesehen markiert", "success"))
+                }
+              >
+                Alle ungesehen
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              onClick={() =>
+                void enqueueSeasonRest(profileId, sid, show.title, null, null).then((n) =>
+                  toast(n > 0 ? `${n} ungesehene Folgen in die Warteschlange gelegt` : "Keine ungesehenen Folgen", n > 0 ? "success" : "info"),
+                )
+              }
+            >
+              + Warteschlange
             </Button>
             <Button
               variant="ghost"
@@ -261,14 +303,28 @@ export default function ShowDetail() {
               <span className="text-ghg-muted font-normal text-sm ml-2">{currentSeason.episodes.length} Folgen</span>
             </h3>
             <button
-              onClick={() =>
-                void setSeasonWatched(profileId, show.id, selectedSeason, true).then(() =>
-                  toast("Staffel als gesehen markiert", "success"),
-                )
-              }
+              onClick={() => {
+                const allSeen = seasonAllWatched(selectedSeason);
+                void setSeasonWatched(profileId, show.id, selectedSeason, !allSeen).then(() =>
+                  toast(allSeen ? "Staffel als ungesehen markiert" : "Staffel als gesehen markiert", "success"),
+                );
+              }}
               className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-ghg-surface2 hover:bg-ghg-elevated text-sm text-ghg-muted hover:text-ghg-text transition"
             >
-              <Check className="w-4 h-4" /> Staffel gesehen
+              <Check className="w-4 h-4" /> {seasonAllWatched(selectedSeason) ? "Staffel ungesehen" : "Staffel gesehen"}
+            </button>
+            <button
+              onClick={() =>
+                void enqueueSeasonRest(profileId, show.id, show.title, selectedSeason, null).then((n) =>
+                  toast(
+                    n > 0 ? `Staffel ${selectedSeason}: ${n} Folgen in die Warteschlange gelegt` : "Keine ungesehenen Folgen in dieser Staffel",
+                    n > 0 ? "success" : "info",
+                  ),
+                )
+              }
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-ghg-surface2 hover:bg-ghg-elevated text-sm text-ghg-muted hover:text-ghg-text transition"
+            >
+              + Warteschlange
             </button>
             <button
               onClick={() =>
@@ -292,6 +348,7 @@ export default function ShowDetail() {
             <EpisodeRow
               key={ep.id}
               ep={ep}
+              showTitle={show.title}
               progress={progMap.get(ep.id)}
               onToggleWatched={(w) =>
                 void setWatched(profileId, "episode", ep.id, w).then(() =>
@@ -300,7 +357,15 @@ export default function ShowDetail() {
               }
               onPlay={() => navigate(`/play/episode/${ep.id}`)}
               onIdentify={() =>
-                setIdentify({ type: "episode", id: ep.id, season: ep.season, episode: ep.episode, showTitle: show.title })
+                setIdentify({
+                  type: "episode",
+                  id: ep.id,
+                  season: ep.season,
+                  episode: ep.episode,
+                  showTitle: show.title,
+                  showId: show.id,
+                  showTmdbId: show.tmdbId,
+                })
               }
               onArtwork={() =>
                 setArtwork({
@@ -320,6 +385,16 @@ export default function ShowDetail() {
       <div className="px-10 mt-10">
         <Extras mediaType="tv" tmdbId={show.tmdbId} />
       </div>
+
+      {similar.length >= 3 && (
+        <div className="mt-8">
+          <MediaRow title="Ähnliche Serien aus deiner Bibliothek">
+            {similar.map((s) => (
+              <ShowCardItem key={s.id} show={s} onIdentify={setIdentify} />
+            ))}
+          </MediaRow>
+        </div>
+      )}
 
       {identify && (
         <IdentifyDialog open onClose={() => setIdentify(null)} target={identify} onDone={() => {}} />
@@ -375,6 +450,7 @@ function EpisodeRow({
   onIdentify,
   onArtwork,
   onToggleWatched,
+  showTitle,
 }: {
   ep: Episode;
   progress?: Progress;
@@ -382,9 +458,14 @@ function EpisodeRow({
   onIdentify: () => void;
   onArtwork: () => void;
   onToggleWatched: (watched: boolean) => void;
+  showTitle?: string;
 }) {
   const [menu, setMenu] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const toast = useStore((s) => s.toast);
+  const epLocalStills = useUiPrefs((s) => s.epLocalStills);
+  const [localStill, setLocalStill] = useState<string | null>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!menu) return;
     const fn = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setMenu(false);
@@ -392,11 +473,33 @@ function EpisodeRow({
     return () => document.removeEventListener("mousedown", fn);
   }, [menu]);
 
+  // No TMDb still? Extract a frame from the actual video file (lazy, only when
+  // the row scrolls into view; the backend disk cache makes repeats instant).
+  useEffect(() => {
+    if (!epLocalStills || ep.stillPath || localStill) return;
+    const el = rowRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          io.disconnect();
+          const t = ep.runtime ? Math.max(60, ep.runtime * 60 * 0.25) : 300;
+          mediaThumbnail(ep.path, t)
+            .then(setLocalStill)
+            .catch(() => {});
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [epLocalStills, ep.stillPath, ep.path, ep.runtime, localStill]);
+
   const pct = progress && progress.durationSec > 0 ? (progress.positionSec / progress.durationSec) * 100 : 0;
-  const still = stillUrl(ep.stillPath);
+  const still = stillUrl(ep.stillPath) ?? localStill;
 
   return (
-    <div className="group flex gap-4 p-3 rounded-xl hover:bg-ghg-surface2 transition border border-transparent hover:border-ghg-line">
+    <div ref={rowRef} className="group flex gap-4 p-3 rounded-xl hover:bg-ghg-surface2 transition border border-transparent hover:border-ghg-line">
       <div
         className="relative w-44 aspect-video shrink-0 rounded-lg overflow-hidden bg-ghg-bg2 cursor-pointer"
         onClick={onPlay}
@@ -486,6 +589,50 @@ function EpisodeRow({
               className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2"
             >
               Identifizieren
+            </button>
+            <button
+              onClick={() => {
+                setMenu(false);
+                playback().enqueue(
+                  {
+                    kind: "episode",
+                    mediaType: "episode",
+                    label: `${showTitle || "Folge"} · ${seasonEpisodeLabel(ep.season, ep.episode)}`,
+                    sub: ep.title || undefined,
+                    ids: [ep.id],
+                  },
+                  true,
+                );
+                toast("Wird als Nächstes abgespielt", "success");
+              }}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2 border-t border-ghg-line"
+            >
+              ▶ Als Nächstes abspielen
+            </button>
+            <button
+              onClick={() => {
+                setMenu(false);
+                playback().enqueue({
+                  kind: "episode",
+                  mediaType: "episode",
+                  label: `${showTitle || "Folge"} · ${seasonEpisodeLabel(ep.season, ep.episode)}`,
+                  sub: ep.title || undefined,
+                  ids: [ep.id],
+                });
+                toast("Zur Warteschlange hinzugefügt", "success");
+              }}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2"
+            >
+              + Zur Warteschlange
+            </button>
+            <button
+              onClick={() => {
+                setMenu(false);
+                void revealInExplorer(ep.path).catch((e) => toast(String(e), "error"));
+              }}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2 border-t border-ghg-line"
+            >
+              In Ordner anzeigen
             </button>
           </div>
         )}

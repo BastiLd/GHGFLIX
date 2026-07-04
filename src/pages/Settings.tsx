@@ -46,7 +46,8 @@ import {
 } from "../lib/api";
 import { comboFromEvent, comboHasKey, comboLabel } from "../lib/keys";
 import { useStore } from "../lib/store";
-import { useUiPrefs, type UiPrefs } from "../lib/uiPrefs";
+import { applyAccent, loadAccent, useUiPrefs, type UiPrefs } from "../lib/uiPrefs";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { getSession, reinitSupabase, signOut } from "../lib/supabase";
 import { Button, InfoButton, Modal, Spinner, TextInput } from "../components/ui";
 import { ThemeStore } from "../components/ThemeStore";
@@ -265,12 +266,45 @@ export default function Settings() {
   const [tools, setTools] = useState<ToolsReport | null>(null);
   const [toolsBusy, setToolsBusy] = useState(false);
   const [cacheBytes, setCacheBytes] = useState<number | null>(null);
+  const [accent, setAccent] = useState<string>(() => loadAccent() ?? "#e50914");
+  const [updateInfo, setUpdateInfo] = useState<string | null>(null);
+  const updateCheckPref = useUiPrefs((s) => s.updateCheck);
+
+  const checkUpdates = async (silent = false) => {
+    try {
+      const res = await fetch("https://api.github.com/repos/BastiLd/GHGFLIX/releases/latest", {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (!res.ok) throw new Error(`GitHub: ${res.status}`);
+      const data = (await res.json()) as { tag_name?: string; html_url?: string };
+      const latest = (data.tag_name || "").replace(/^v/i, "");
+      const cur = version || "0.0.0";
+      const newer = latest && latest.localeCompare(cur, undefined, { numeric: true }) > 0;
+      setUpdateInfo(
+        newer
+          ? `Update verfügbar: v${latest} (installiert: v${cur})`
+          : latest
+            ? `Du bist aktuell (v${cur}).`
+            : "Keine Releases gefunden.",
+      );
+      if (newer && !silent) toast(`Update v${latest} verfügbar – siehe GitHub-Releases`, "info");
+    } catch (e) {
+      if (!silent) toast(`Update-Prüfung fehlgeschlagen: ${e}`, "error");
+      setUpdateInfo(null);
+    }
+  };
 
   const [tab, setTab] = useState<TabId>("allgemein");
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
   }, []);
+
+  // silent update check when opening the settings (if enabled)
+  useEffect(() => {
+    if (version && updateCheckPref) void checkUpdates(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version]);
 
   useEffect(() => {
     (async () => {
@@ -560,7 +594,32 @@ export default function Settings() {
             </div>
             <div className="flex gap-4 flex-wrap mb-3">
               <PrefSelect k="cardSize" label="Kartengröße" options={[["sm", "Klein"], ["md", "Mittel"], ["lg", "Groß"]]} />
+              <PrefNumber k="fontScale" label="Schriftgröße / UI-Zoom (%)" min={80} max={130} step={5} />
               <PrefNumber k="toastSec" label="Hinweis-Dauer (Sek.)" min={2} max={15} />
+              <label className="flex-1 min-w-40">
+                <span className="text-xs uppercase tracking-wide text-ghg-muted">Akzentfarbe</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={accent}
+                    onChange={(e) => {
+                      setAccent(e.target.value);
+                      applyAccent(e.target.value);
+                    }}
+                    className="h-9 w-14 rounded-lg bg-ghg-bg2 border border-ghg-line cursor-pointer"
+                  />
+                  <button
+                    onClick={() => {
+                      applyAccent(null);
+                      setAccent("#e50914");
+                      toast("Akzentfarbe zurückgesetzt", "info");
+                    }}
+                    className="text-xs text-ghg-muted hover:text-ghg-text underline"
+                  >
+                    Zurücksetzen
+                  </button>
+                </div>
+              </label>
             </div>
             <div className="grid sm:grid-cols-2 gap-x-6">
               <PrefToggle k="animations" label="Animationen (Übergänge, Einblendungen)" />
@@ -569,7 +628,21 @@ export default function Settings() {
               <PrefToggle k="badgeUnmatched" label="„Nicht erkannt“-Badge anzeigen" />
               <PrefToggle k="badgeNew" label="„NEU“-Badge (letzte 7 Tage)" />
               <PrefToggle k="badgeWatched" label="Gesehen-Häkchen auf Karten" />
+              <PrefToggle k="sidebarCompact" label="Kompakte Seitenleiste (nur Icons)" />
+              <PrefToggle k="greeting" label="Begrüßung auf der Startseite" />
             </div>
+          </Section>
+
+          <Section
+            title="Kindersicherung"
+            desc="Blendet Titel oberhalb der gewählten Altersfreigabe überall aus. Titel ohne bekannte Freigabe werden sicherheitshalber mit ausgeblendet."
+          >
+            <PrefSelect
+              k="kidsMaxCert"
+              label="Maximale Altersfreigabe"
+              options={[["off", "Aus (alles zeigen)"], ["0", "FSK 0"], ["6", "FSK 6"], ["12", "FSK 12"], ["16", "FSK 16"]]}
+              className="max-w-xs block"
+            />
           </Section>
 
           <Section title="Startseite" desc="Welche Reihen angezeigt werden und wie das große Titelbild funktioniert.">
@@ -591,6 +664,7 @@ export default function Settings() {
               <PrefToggle k="rowShows" label="Reihe: Serien" />
               <PrefToggle k="rowMovies" label="Reihe: Filme" />
               <PrefToggle k="rowTopRated" label="Reihe: Top bewertet" />
+              <PrefToggle k="rowHistory" label="Reihe: Zuletzt gesehen" />
               <PrefToggle k="rowGenres" label="Genre-Reihen" />
             </div>
           </Section>
@@ -612,7 +686,15 @@ export default function Settings() {
               <PrefSelect
                 k="mascot"
                 label="Maskottchen"
-                options={[["off", "Aus"], ["blitz", "⚡ Blitzi"], ["katze", "🐱 Kino-Katze"], ["robo", "🤖 Robo"], ["geist", "👻 Flixi"]]}
+                options={[
+                  ["off", "Aus"],
+                  ["blitz", "⚡ Blitzi"],
+                  ["katze", "🐱 Kino-Katze"],
+                  ["robo", "🤖 Robo"],
+                  ["geist", "👻 Flixi"],
+                  ["drache", "🐲 Drako"],
+                  ["pinguin", "🐧 Pingu"],
+                ]}
               />
               <div className="pb-1">
                 <PrefToggle k="mascotTips" label="Tipps anzeigen" />
@@ -638,6 +720,22 @@ export default function Settings() {
               <KeyCapture value={markerKey} onChange={setMarkerKey} />
               <Button onClick={saveMarker}>Speichern</Button>
             </div>
+          </Section>
+
+          <Section title="Über GHGFlix & Updates" desc="Version, Projektseite und Update-Prüfung gegen GitHub-Releases.">
+            <div className="flex items-center gap-3 flex-wrap mb-3">
+              <span className="text-sm">
+                Version: <span className="font-mono font-semibold">{version || "…"}</span>
+              </span>
+              <Button variant="ghost" onClick={() => void openUrl("https://github.com/BastiLd/GHGFLIX").catch(() => {})}>
+                GitHub öffnen
+              </Button>
+              <Button variant="ghost" onClick={() => void checkUpdates(false)}>
+                Auf Updates prüfen
+              </Button>
+            </div>
+            {updateInfo && <p className="text-sm text-ghg-muted mb-3">{updateInfo}</p>}
+            <PrefToggle k="updateCheck" label="Beim Öffnen der Einstellungen automatisch auf Updates prüfen" />
           </Section>
         </>
       )}
@@ -690,11 +788,32 @@ export default function Settings() {
               <PrefToggle k="rememberTrackLang" label="Gewählte Audio-Sprache merken" />
               <PrefToggle k="autoplayNext" label="Nächste Folge automatisch abspielen" />
               <PrefToggle k="endAutoBack" label="Nach dem Ende automatisch zurück" />
+              <PrefToggle k="screenshotEnabled" label="Screenshot-Knopf & S-Taste anzeigen" />
+              <PrefToggle k="showClock" label="Uhrzeit im Player anzeigen" />
+              <PrefToggle k="showEndsAt" label="„endet um …“ anzeigen" />
+              <PrefToggle k="chapterMarkers" label="Kapitel-Markierungen auf der Zeitleiste" />
+              <PrefToggle k="introMarker" label="Intro-Bereich auf der Zeitleiste markieren" />
+              <PrefToggle k="epLocalStills" label="Folgen ohne TMDb-Bild: Bild aus der Videodatei ziehen" />
             </div>
             <div className="flex gap-4 flex-wrap mb-4">
               <PrefNumber k="nextCountdownSec" label="„Nächste Folge“-Countdown (Sek.)" min={5} max={60} />
+              <PrefNumber k="watchedThreshold" label="Als gesehen ab (%)" min={50} max={99} />
             </div>
             <Button onClick={savePlayback}>Speichern</Button>
+          </Section>
+
+          <Section
+            title="Mini-Player"
+            desc="Zurück-Knopf im Player öffnet einen kleinen Player unten rechts (wie YouTube) – du kannst weiter stöbern, Dinge in die Warteschlange legen und das Video läuft weiter."
+          >
+            <div className="grid sm:grid-cols-2 gap-x-6 mb-3">
+              <PrefToggle k="miniPlayer" label="Mini-Player beim Zurückgehen (empfohlen)" />
+            </div>
+            <PrefSelect k="miniSize" label="Mini-Player-Größe" options={[["sm", "Klein"], ["md", "Mittel"], ["lg", "Groß"]]} className="max-w-xs block" />
+            <p className="text-xs text-ghg-muted mt-3">
+              Warteschlange füllen: Rechtsklick auf Filme/Folgen → „Als Nächstes“ / „Zur Warteschlange“ – eine ganze
+              (Rest-)Staffel landet dabei als EIN Eintrag. Aus = der Zurück-Knopf beendet die Wiedergabe wie früher.
+            </p>
           </Section>
 
           <Section title="Seek-Vorschau" desc="Das Vorschaubild beim Ziehen/Überfahren der Zeitleiste.">
@@ -937,9 +1056,13 @@ export default function Settings() {
                 Vorschau-Cache leeren{cacheBytes != null ? ` (${(cacheBytes / 1024 / 1024).toFixed(1)} MB)` : ""}
               </Button>
             </div>
+            <div className="grid sm:grid-cols-2 gap-x-6 mb-3">
+              <PrefToggle k="autoBackup" label="Wöchentliches Auto-Backup der Gesehen-Daten (in App-Daten)" />
+            </div>
             <p className="text-xs text-ghg-muted">
               „Bibliothek neu aufbauen" behält Gesehen-Stand, Favoriten und gemerkte Zuordnungen – alles wird nach dem Scan
-              automatisch wieder verknüpft. Der Export sichert Gesehen-Stand + Favoriten als JSON (z. B. für einen anderen PC).
+              automatisch wieder verknüpft (jetzt zusätzlich über den Dateipfad, funktioniert also auch komplett ohne TMDb).
+              Der Export sichert Gesehen-Stand + Favoriten als JSON (z. B. für einen anderen PC).
             </p>
           </Section>
         </>
@@ -1143,6 +1266,8 @@ export default function Settings() {
             ["0 – 9", "Zu 0–90 % springen"],
             ["↑ / ↓ · Mausrad", "Lautstärke +/−"],
             ["[ / ]", "Geschwindigkeit −/+"],
+            [". / ,", "Einzelbild vor / zurück"],
+            ["A", "Bildformat wechseln"],
             ["M", "Stummschalten"],
             ["C", "Untertitel an/aus"],
             ["S", "Screenshot speichern"],
