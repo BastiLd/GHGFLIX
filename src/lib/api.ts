@@ -62,10 +62,14 @@ export const assignEpisodesSequential = (episodeId: number, season: number, epis
 export interface TmdbEpisodeInfo {
   episode: number;
   title?: string | null;
+  overview?: string | null;
+  stillPath?: string | null;
   airDate?: string | null;
 }
 export const tmdbSeasonList = (tmdbId: number, season: number) =>
   invoke<TmdbEpisodeInfo[]>("tmdb_season_list", { tmdbId, season });
+export const tmdbSeasonNumbers = (tmdbId: number) =>
+  invoke<number[]>("tmdb_season_numbers", { tmdbId });
 
 // ===== progress =====
 export const setProgress = (

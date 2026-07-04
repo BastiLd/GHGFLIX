@@ -1264,10 +1264,56 @@ pub fn update_episode_meta(
     Ok(())
 }
 
-pub fn set_episode_numbers(conn: &Connection, id: i64, season: i64, episode: i64) -> Result<()> {
+/// Set an episode's season/episode number, CONFLICT-SAFE: if another episode of
+/// the same show already occupies the target (season, episode) slot, it is first
+/// pushed onto a free temporary slot so the UNIQUE(show,season,episode) index
+/// never blocks the change. Returns the id of the displaced episode (if any) so
+/// the caller can flag it for the user to re-check.
+pub fn set_episode_numbers(conn: &Connection, id: i64, season: i64, episode: i64) -> Result<Option<i64>> {
+    let show_id: i64 = conn.query_row("SELECT show_id FROM episodes WHERE id=?1", [id], |r| r.get(0))?;
+    let occupant: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM episodes WHERE show_id=?1 AND season=?2 AND episode=?3 AND id<>?4",
+            params![show_id, season, episode, id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(other) = occupant {
+        // park the occupant on a guaranteed-free negative episode number
+        let free: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MIN(episode), 0) - 1 FROM episodes WHERE show_id=?1 AND season=?2",
+                params![show_id, season],
+                |r| r.get(0),
+            )
+            .unwrap_or(-1);
+        conn.execute("UPDATE episodes SET episode=?2 WHERE id=?1", params![other, free.min(-1)])?;
+    }
     conn.execute(
         "UPDATE episodes SET season=?2, episode=?3 WHERE id=?1",
         params![id, season, episode],
+    )?;
+    Ok(occupant)
+}
+
+/// Write episode metadata DIRECTLY to one row by its id (not by season/episode
+/// number match). This guarantees the file the user picked gets exactly the
+/// chosen episode's title + still, regardless of any numbering chaos.
+pub fn update_episode_meta_by_id(
+    conn: &Connection,
+    episode_id: i64,
+    title: Option<&str>,
+    overview: Option<&str>,
+    still_path: Option<&str>,
+    air_date: Option<&str>,
+    runtime: Option<i64>,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE episodes SET title=?2, overview=?3,
+            still_path=CASE WHEN still_locked=1 THEN still_path ELSE ?4 END,
+            air_date=?5, runtime=?6
+         WHERE id=?1",
+        params![episode_id, title, overview, still_path, air_date, runtime],
     )?;
     Ok(())
 }

@@ -150,6 +150,7 @@ pub fn run() {
             commands::export_data,
             commands::import_data,
             commands::tmdb_season_list,
+            commands::tmdb_season_numbers,
             commands::assign_episodes_sequential,
             commands::file_info,
             commands::recently_watched,

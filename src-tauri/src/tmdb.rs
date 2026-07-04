@@ -208,6 +208,13 @@ struct TvDetailsResp {
     episode_run_time: Vec<i64>,
     #[serde(default)]
     content_ratings: Option<ContentRatingsResp>,
+    #[serde(default)]
+    seasons: Vec<SeasonStub>,
+}
+
+#[derive(Deserialize)]
+struct SeasonStub {
+    season_number: i64,
 }
 
 #[derive(Deserialize)]
@@ -404,6 +411,25 @@ impl Tmdb {
             last_year: year_from_date(&r.last_air_date),
             runtime: r.episode_run_time.into_iter().next(),
         })
+    }
+
+    /// Real season numbers of a show (skips season 0 / "Specials" unless it is
+    /// the only one), so the identify dialog offers a proper dropdown.
+    pub async fn season_numbers(&self, id: i64) -> Result<Vec<i64>> {
+        let url = format!("{BASE}/tv/{id}");
+        let r: TvDetailsResp = self
+            .client
+            .get(url)
+            .query(&[("api_key", self.key.as_str()), ("language", self.lang.as_str())])
+            .send()
+            .await?
+            .json()
+            .await?;
+        let mut nums: Vec<i64> = r.seasons.into_iter().map(|s| s.season_number).collect();
+        nums.sort_unstable();
+        nums.dedup();
+        let non_special: Vec<i64> = nums.iter().copied().filter(|n| *n > 0).collect();
+        Ok(if non_special.is_empty() { nums } else { non_special })
     }
 
     pub async fn extras(&self, media_type: &str, id: i64) -> Result<crate::models::Extras> {

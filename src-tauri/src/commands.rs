@@ -498,9 +498,10 @@ pub async fn identify_show(
     Ok(surviving)
 }
 
-/// Set an episode's season/episode AND pull the real TMDb metadata (title,
-/// description, image) for it right away — so a manual assignment shows the
-/// episode's actual name instead of just "S01 E05".
+/// Set an episode's season/episode AND write the chosen TMDb episode's metadata
+/// (title, description, image) DIRECTLY onto this file — so the file the user
+/// picked always shows that exact episode's name and still, no matter how the
+/// rest of the show is numbered. Conflict-safe (displaces any occupant).
 #[tauri::command]
 pub async fn set_episode_numbers(
     app: AppHandle,
@@ -525,6 +526,14 @@ pub async fn set_episode_numbers(
             let tmdb = Tmdb::new(state.http.clone(), key, lang);
             if let Ok(eps) = tmdb.season_episodes(tmdb_id, season).await {
                 let conn = state.conn.lock().unwrap();
+                // 1) the picked episode's meta goes straight onto THIS file by id
+                if let Some(chosen) = eps.iter().find(|e| e.episode == episode) {
+                    let _ = db::update_episode_meta_by_id(
+                        &conn, episode_id, chosen.title.as_deref(), chosen.overview.as_deref(),
+                        chosen.still_path.as_deref(), chosen.air_date.as_deref(), chosen.runtime,
+                    );
+                }
+                // 2) siblings that already carry the right numbers get theirs too
                 for e in eps {
                     let _ = db::update_episode_meta(
                         &conn, show_id, season, e.episode, e.title.as_deref(), e.overview.as_deref(),
@@ -543,11 +552,13 @@ pub async fn set_episode_numbers(
 pub struct TmdbEpisodeInfo {
     pub episode: i64,
     pub title: Option<String>,
+    pub overview: Option<String>,
+    pub still_path: Option<String>,
     pub air_date: Option<String>,
 }
 
-/// Episode list of a TMDb season — for picking the REAL episode by name when
-/// identifying a file manually.
+/// Episode list of a TMDb season — for picking the REAL episode (name + still)
+/// when identifying a file manually.
 #[tauri::command]
 pub async fn tmdb_season_list(state: State<'_, AppState>, tmdb_id: i64, season: i64) -> R<Vec<TmdbEpisodeInfo>> {
     let (key, lang) = read_key_lang(&state);
@@ -558,8 +569,26 @@ pub async fn tmdb_season_list(state: State<'_, AppState>, tmdb_id: i64, season: 
     let eps = tmdb.season_episodes(tmdb_id, season).await.map_err(err)?;
     Ok(eps
         .into_iter()
-        .map(|e| TmdbEpisodeInfo { episode: e.episode, title: e.title, air_date: e.air_date })
+        .map(|e| TmdbEpisodeInfo {
+            episode: e.episode,
+            title: e.title,
+            overview: e.overview,
+            still_path: e.still_path,
+            air_date: e.air_date,
+        })
         .collect())
+}
+
+/// Season numbers TMDb knows for a show (so the identify dialog offers only the
+/// real seasons instead of a blind number field).
+#[tauri::command]
+pub async fn tmdb_season_numbers(state: State<'_, AppState>, tmdb_id: i64) -> R<Vec<i64>> {
+    let (key, lang) = read_key_lang(&state);
+    if key.trim().is_empty() {
+        return Err("Kein TMDb-Key gesetzt".into());
+    }
+    let tmdb = Tmdb::new(state.http.clone(), key, lang);
+    tmdb.season_numbers(tmdb_id).await.map_err(err)
 }
 
 /// "Diese Datei ist S{season}E{episode} — und alles danach fortlaufend":
