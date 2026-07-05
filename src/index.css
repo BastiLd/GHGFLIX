@@ -108,15 +108,18 @@ body {
   text-shadow: 0 0 18px rgba(229, 9, 20, 0.55);
 }
 
-/* Fade-in helper */
+/* Fade-in helper.
+   IMPORTANT: opacity ONLY — no transform. With `animation … both` a transform
+   in the final keyframe persists forever, which turns the element into a
+   containing block for position:fixed descendants. That once anchored every
+   modal to the scrolled page wrapper instead of the viewport ("dialog hangs at
+   the bottom"). Never add transform back here. */
 @keyframes ghg-fade-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 @utility fade-in {

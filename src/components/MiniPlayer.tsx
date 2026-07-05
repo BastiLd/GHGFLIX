@@ -6,7 +6,7 @@ import { getEpisode, getMovie, setProgress } from "../lib/api";
 import { formatTime, seasonEpisodeLabel } from "../lib/format";
 import { applyMiniMargins, miniRect, playback, usePlayback } from "../lib/playback";
 import { useStore } from "../lib/store";
-import { useUiPrefs } from "../lib/uiPrefs";
+import { uiPrefs, useUiPrefs } from "../lib/uiPrefs";
 
 /** YouTube-style mini-player: the mpv video keeps running, shrunk into the
  *  bottom-right corner (the Layout paints a clip-path hole there). This overlay
@@ -36,7 +36,9 @@ export function MiniPlayer() {
     (watched = false) => {
       const m = miniRef.current;
       if (!m || durRef.current <= 0) return;
-      const done = watched || posRef.current >= durRef.current * 0.95;
+      // same user-configurable watched threshold as the full player
+      const thr = Math.min(0.99, Math.max(0.5, (uiPrefs().watchedThreshold || 95) / 100));
+      const done = watched || posRef.current >= durRef.current * thr;
       setProgress(profileId, m.mediaType, m.mediaId, posRef.current, durRef.current, done).catch(() => {});
     },
     [profileId],
@@ -88,12 +90,15 @@ export function MiniPlayer() {
   // own observers while the mini player is alive
   useEffect(() => {
     if (!mini) return;
+    // a previous mini session may have ended at EOF — this is a NEW session
+    endedRef.current = false;
     document.documentElement.classList.add("mpv-mini");
     applyMiniMargins(true, size);
     const onResize = () => applyMiniMargins(true, size);
     window.addEventListener("resize", onResize);
 
     let un: (() => void) | null = null;
+    let disposed = false;
     void observeProperties(["pause", "time-pos", "duration", "eof-reached"], ({ name, data }) => {
       if (name === "pause") setPaused(Boolean(data));
       else if (name === "duration") {
@@ -117,10 +122,14 @@ export function MiniPlayer() {
         }
       }
     }).then((u) => {
-      un = u;
+      // the effect may already be cleaned up before this async subscribe
+      // resolves — unsubscribe immediately instead of leaking the observer
+      if (disposed) u();
+      else un = u;
     });
 
     return () => {
+      disposed = true;
       window.removeEventListener("resize", onResize);
       document.documentElement.classList.remove("mpv-mini");
       if (un) un();

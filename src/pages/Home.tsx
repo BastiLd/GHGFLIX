@@ -216,7 +216,7 @@ export default function Home() {
       {prefs.greeting && (
         <p className="px-8 pt-5 pb-1 text-sm text-ghg-muted">
           {greetWord}
-          {profileId !== "local" || true ? <span className="text-ghg-text font-semibold">, {useStore.getState().profileName}</span> : null} 👋
+          <span className="text-ghg-text font-semibold">, {useStore.getState().profileName}</span> 👋
         </p>
       )}
       {prefs.heroEnabled && featured && (

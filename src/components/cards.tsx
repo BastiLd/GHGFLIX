@@ -148,11 +148,23 @@ export function ShowCardItem({ show, onIdentify }: { show: Show; onIdentify: (t:
           },
           {
             label: "Ganze Serie als gesehen",
-            onClick: () => void setShowWatched(profileId, show.id, true).then(() => toast("Serie als gesehen markiert", "success")),
+            onClick: () =>
+              void setShowWatched(profileId, show.id, true).then(() => {
+                qc.invalidateQueries({ queryKey: ["progress"] });
+                qc.invalidateQueries({ queryKey: ["continue"] });
+                qc.invalidateQueries({ queryKey: ["recentlyWatched"] });
+                toast("Serie als gesehen markiert", "success");
+              }),
           },
           {
             label: "Ganze Serie als ungesehen",
-            onClick: () => void setShowWatched(profileId, show.id, false).then(() => toast("Serie als ungesehen markiert", "success")),
+            onClick: () =>
+              void setShowWatched(profileId, show.id, false).then(() => {
+                qc.invalidateQueries({ queryKey: ["progress"] });
+                qc.invalidateQueries({ queryKey: ["continue"] });
+                qc.invalidateQueries({ queryKey: ["recentlyWatched"] });
+                toast("Serie als ungesehen markiert", "success");
+              }),
           },
           {
             label: favorite ? "Aus Meine Liste entfernen" : "Zu Meine Liste",

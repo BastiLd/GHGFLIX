@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import { AlertTriangle, CheckCircle2, Info, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { usePlayback } from "../lib/playback";
 import { useStore } from "../lib/store";
 
@@ -20,8 +21,10 @@ export function Toasts() {
   const dismiss = useStore((s) => s.dismiss);
   const miniActive = usePlayback((s) => s.mini != null);
   return (
-    // shift up-left while the mini-player occupies the bottom-right corner
-    <div className={`fixed right-6 z-[200] flex flex-col gap-2 ${miniActive ? "bottom-72" : "bottom-6"}`}>
+    // z-[400]: toasts must stay visible ABOVE open modals (z-300) so error
+    // feedback from a dialog (e.g. failed TMDb call) is never hidden behind it;
+    // shift up while the mini-player occupies the bottom-right corner
+    <div className={`fixed right-6 z-[400] flex flex-col gap-2 ${miniActive ? "bottom-72" : "bottom-6"}`}>
       {toasts.map((t) => (
         <div
           key={t.id}
@@ -120,9 +123,15 @@ export function Modal({
   }, [open, onClose]);
 
   if (!open) return null;
-  return (
+  // Render into document.body via a portal. This is essential: the page content
+  // is wrapped in a `.fade-in` element whose finished animation leaves a
+  // `transform` on it, which makes it a containing block for position:fixed
+  // descendants. Without the portal, this modal would anchor to the SCROLLED
+  // page wrapper instead of the viewport and appear off-centre / at the bottom
+  // (and dialogs like "Bild ändern" would seem broken when the page is scrolled).
+  return createPortal(
     <div
-      className="fixed inset-0 z-[150] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-[300] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
       onClick={onClose}
     >
       <div
@@ -132,7 +141,7 @@ export function Modal({
         )}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-ghg-line">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-ghg-line shrink-0">
           <h2 className="text-lg font-bold">{title}</h2>
           <button
             onClick={onClose}
@@ -143,7 +152,8 @@ export function Modal({
         </div>
         <div className="overflow-y-auto p-5">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

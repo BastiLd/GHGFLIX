@@ -837,6 +837,36 @@ pub fn merge_shows_by_tmdb(conn: &Connection) -> Result<()> {
         }
         let canonical = shows[0];
         for &other in &shows[1..] {
+            // GUARD: only fold rows we can corroborate as the SAME show. Two
+            // auto-matched (identified=0) rows that landed on the same TMDb id
+            // can still be different local shows (a bad fuzzy match) — merging
+            // them would permanently mix their episodes. We merge when either
+            // row was manually identified (user intent) OR the cleaned titles
+            // match OR the two rows share a grouping key prefix.
+            let can_merge = {
+                let (c_ident, c_title): (i64, String) = conn.query_row(
+                    "SELECT identified, title FROM shows WHERE id=?1",
+                    [canonical],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                let (o_ident, o_title): (i64, String) = conn.query_row(
+                    "SELECT identified, title FROM shows WHERE id=?1",
+                    [other],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                if c_ident != 0 || o_ident != 0 {
+                    true
+                } else if c_title.trim().to_lowercase() == o_title.trim().to_lowercase() {
+                    true
+                } else {
+                    let ck = keys_for_show(conn, canonical).unwrap_or_default();
+                    let ok = keys_for_show(conn, other).unwrap_or_default();
+                    ck.iter().any(|a| ok.iter().any(|b| a == b || a.starts_with(b.as_str()) || b.starts_with(a.as_str())))
+                }
+            };
+            if !can_merge {
+                continue;
+            }
             let eps: Vec<(i64, i64, i64)> = {
                 let mut stmt = conn.prepare("SELECT id, season, episode FROM episodes WHERE show_id=?1")?;
                 let rows = stmt

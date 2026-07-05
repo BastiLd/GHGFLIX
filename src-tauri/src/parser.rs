@@ -35,8 +35,10 @@ static RE_JUNK_CUT: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 // "Season 2", "Staffel 02", "S03" — used to cut a season suffix off a show folder.
+// The word form REQUIRES digits: with \d{0,3} a bare "Series" matched too and
+// truncated titles like "A Series of Unfortunate Events" down to "A".
 static RE_SEASON_CUT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\b(?:season|staffel|saison|series)\b\s*\d{0,3}|\bs\d{1,2}(?:e\d{1,3})?\b").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)\b(?:season|staffel|saison|series)\b\s*\d{1,3}|\bs\d{1,2}(?:e\d{1,3})?\b").unwrap());
 // Leading scene/URL prefixes like "www.UIndex.org - " (dots already turned to
 // spaces by `normalize`, so this is space-tolerant: "www UIndex org - ").
 static RE_URL_PREFIX: LazyLock<Regex> =
@@ -275,6 +277,9 @@ mod tests {
         assert_eq!(clean_show_title("Daredevil S03"), "Daredevil");
         assert_eq!(clean_show_title("Daredevil.Born.Again.2025.S01.2160p"), "Daredevil Born Again");
         assert_eq!(clean_show_title("www.UIndex.org - Daredevil Born Again"), "Daredevil Born Again");
+        // titles CONTAINING season-ish words must survive intact
+        assert_eq!(clean_show_title("A Series of Unfortunate Events"), "A Series of Unfortunate Events");
+        assert_eq!(clean_show_title("Series of Unfortunate Events Series 2"), "Series of Unfortunate Events");
     }
 
     #[test]

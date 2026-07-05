@@ -1,7 +1,9 @@
 use crate::{db, parser, probe, tmdb::Tmdb};
 use anyhow::Result;
+use regex::Regex;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use tauri::{AppHandle, Emitter};
 use walkdir::WalkDir;
 
@@ -106,14 +108,43 @@ fn scan_movies(conn: &Connection, root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The folder name a show is grouped by: the first path component under the
-/// library root, or — for a file sitting directly in the root — its own stem.
+/// True if a folder name is PURELY a season marker ("Season 2", "Staffel 02",
+/// "S03", "Specials") — i.e. it names a season, not a show. Kept strict so real
+/// show folders like "Stranger Things S01-S04" or "Marvel's …" don't match.
+fn is_pure_season_dir(name: &str) -> bool {
+    let t = name.trim().to_lowercase();
+    if t == "specials" || t == "special" || t == "extras" {
+        return true;
+    }
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)^(?:season|staffel|saison|s)\s*0*\d{1,3}$").unwrap()
+    });
+    RE.is_match(&t)
+}
+
+/// The folder name a show is grouped by. Normally the first path component under
+/// the library root (`root/Show/Season N/file` → "Show"). BUT if that first
+/// component is itself just a season folder — which happens when the user adds
+/// the SHOW folder directly as a library (`root/Season N/file`) — the show name
+/// is the library root's own folder name instead. Without this, every season of
+/// such a show became a separate "Season N" group and got mis-matched on TMDb.
 fn show_source_name(root: &Path, path: &Path) -> String {
     let rel = path.strip_prefix(root).unwrap_or(path);
     let comps: Vec<_> = rel.components().collect();
     if comps.len() >= 2 {
-        comps[0].as_os_str().to_string_lossy().to_string()
+        let first = comps[0].as_os_str().to_string_lossy().to_string();
+        if is_pure_season_dir(&first) {
+            // root itself is the show folder → use its name
+            if let Some(rn) = root.file_name().map(|s| s.to_string_lossy().to_string()) {
+                if !rn.is_empty() {
+                    return rn;
+                }
+            }
+        }
+        first
     } else {
+        // a file sitting directly in the root: if the root looks like a show
+        // folder (has a real name), prefer it over the bare file stem
         let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         file_stem(&name)
     }
@@ -284,33 +315,104 @@ async fn search_with_fallback(
     Vec::new()
 }
 
-/// Pick the TV result that best matches what we actually have locally. When the
-/// local episode count is meaningful, the candidate whose TMDb episode count is
-/// closest wins — that's what tells the 2005 animated "Avatar" (61 eps) apart from
-/// the 2024 live-action one (8 eps).
+/// A title reduced to lowercase letter-tokens for fuzzy comparison.
+fn title_tokens(s: &str) -> Vec<String> {
+    parser::letters_only(s)
+        .to_lowercase()
+        .split_whitespace()
+        .map(|t| t.to_string())
+        .collect()
+}
+
+/// Fraction of the query's tokens that appear in the candidate (0.0–1.0).
+fn token_overlap(want: &[String], cand: &[String]) -> f64 {
+    if want.is_empty() {
+        return 0.0;
+    }
+    let hit = want.iter().filter(|w| cand.contains(w)).count();
+    hit as f64 / want.len() as f64
+}
+
+/// Pick the TV result that best matches what we actually have locally.
+///
+/// TITLE + YEAR come first; the TMDb total-episode count is only a tiebreaker
+/// between otherwise near-equal candidates (e.g. the 2005 vs 2024 "Avatar").
+///
+/// The old version scored purely by |tmdb_total_eps − local_eps|, which broke
+/// badly for a folder holding just ONE season of a multi-season show: a 13-file
+/// "Daredevil" season would match "Daredevil: Born Again" (≈13 total) instead of
+/// the 39-episode original. Episode count is now a weak signal, and a local count
+/// that merely FITS inside a bigger show is not penalised.
 async fn best_tv_match(tmdb: &Tmdb, query: &str, year: Option<i64>, local_eps: i64) -> Option<i64> {
     let results = search_with_fallback(tmdb, query, "tv", year).await;
     if results.is_empty() {
         return None;
     }
-    if local_eps < 3 {
-        return results.first().map(|r| r.tmdb_id);
+
+    let want = title_tokens(query);
+    // 1) score each candidate on title + year alone (no extra network calls)
+    let mut scored: Vec<(f64, usize, i64)> = results
+        .iter()
+        .take(8)
+        .enumerate()
+        .map(|(i, r)| {
+            let cand = title_tokens(&r.title);
+            let mut s = 0.0f64;
+            if cand == want && !want.is_empty() {
+                s += 100.0;
+            }
+            let joined_want = want.join(" ");
+            let joined_cand = cand.join(" ");
+            if joined_cand.starts_with(&joined_want) || joined_want.starts_with(&joined_cand) {
+                s += 55.0;
+            } else if joined_cand.contains(&joined_want) || joined_want.contains(&joined_cand) {
+                s += 30.0;
+            }
+            s += token_overlap(&want, &cand) * 25.0;
+            if let (Some(y), Some(cy)) = (year, r.year) {
+                let d = (y - cy).abs();
+                s += if d == 0 {
+                    28.0
+                } else if d <= 1 {
+                    14.0
+                } else if d <= 3 {
+                    4.0
+                } else {
+                    -(d.min(25) as f64)
+                };
+            }
+            s -= i as f64 * 0.5; // gentle nudge toward TMDb's own ranking
+            (s, i, r.tmdb_id)
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // 2) collect the near-top contenders; a clear title winner ends it here
+    let top = scored[0].0;
+    let contenders: Vec<(f64, usize, i64)> =
+        scored.iter().filter(|(s, _, _)| top - s < 15.0).copied().collect();
+    if contenders.len() == 1 || local_eps < 3 {
+        return Some(contenders[0].2);
     }
-    let mut best: Option<(i64, i64, usize)> = None; // (id, score, order)
-    for (i, r) in results.iter().take(6).enumerate() {
-        if let Ok(meta) = tmdb.tv_details(r.tmdb_id).await {
-            let eps = meta.episode_count.unwrap_or(0);
-            let score = (eps - local_eps).abs();
-            let better = match best {
-                None => true,
-                Some((_, bs, bo)) => score < bs || (score == bs && i < bo),
+
+    // 3) disambiguate the tie by TMDb episode count — but only lightly, and never
+    //    punish a show for merely being LARGER than the local folder (single season)
+    let mut best: Option<(i64, f64)> = None;
+    for (_, _, id) in &contenders {
+        if let Ok(meta) = tmdb.tv_details(*id).await {
+            let total = meta.episode_count.unwrap_or(0);
+            let penalty = if local_eps > total + 2 {
+                (local_eps - total) as f64 * 2.0 // local has MORE than the show → wrong show
+            } else {
+                (total - local_eps).abs() as f64 * 0.2 // fits inside → weak signal
             };
+            let better = best.map(|(_, bp)| penalty < bp).unwrap_or(true);
             if better {
-                best = Some((r.tmdb_id, score, i));
+                best = Some((*id, penalty));
             }
         }
     }
-    best.map(|b| b.0).or_else(|| results.first().map(|r| r.tmdb_id))
+    best.map(|b| b.0).or(Some(contenders[0].2))
 }
 
 /// The user's remembered identification for a movie file, if any.
@@ -506,6 +608,41 @@ mod tests {
         }
         let mut f = fs::File::create(path).unwrap();
         f.write_all(b"x").unwrap();
+    }
+
+    #[test]
+    fn pure_season_dir_detection() {
+        assert!(is_pure_season_dir("Season 1"));
+        assert!(is_pure_season_dir("Staffel 02"));
+        assert!(is_pure_season_dir("S03"));
+        assert!(is_pure_season_dir("Specials"));
+        // real show folders must NOT be treated as season folders
+        assert!(!is_pure_season_dir("Marvel's Daredevil"));
+        assert!(!is_pure_season_dir("Stranger Things S01-S04"));
+        assert!(!is_pure_season_dir("Daredevil Born Again"));
+    }
+
+    #[test]
+    fn show_source_name_handles_show_folder_as_library() {
+        let root = Path::new("/lib/Marvel's Daredevil");
+        // root IS the show folder, seasons directly inside → show name = root name
+        let p = Path::new("/lib/Marvel's Daredevil/Season 1/ep.mkv");
+        assert_eq!(show_source_name(root, p), "Marvel's Daredevil");
+        let p2 = Path::new("/lib/Marvel's Daredevil/Season 3/ep.mkv");
+        assert_eq!(show_source_name(root, p2), "Marvel's Daredevil");
+        // normal case: parent folder contains show folders
+        let root2 = Path::new("/lib");
+        let p3 = Path::new("/lib/Breaking Bad/Season 1/ep.mkv");
+        assert_eq!(show_source_name(root2, p3), "Breaking Bad");
+    }
+
+    #[test]
+    fn title_token_overlap_scoring() {
+        let want = title_tokens("Marvel's Daredevil");
+        let cand = title_tokens("Marvel's Daredevil");
+        assert!((token_overlap(&want, &cand) - 1.0).abs() < 1e-9);
+        let partial = title_tokens("Daredevil Born Again");
+        assert!(token_overlap(&want, &partial) < 1.0 && token_overlap(&want, &partial) > 0.0);
     }
 
     #[test]

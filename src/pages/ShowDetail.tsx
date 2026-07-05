@@ -7,9 +7,10 @@ import { listShows } from "../lib/api";
 import { ShowCardItem } from "../components/cards";
 import { MediaRow } from "../components/MediaRow";
 import { detectIntros, getSeasonArt, getShowDetail, listFavorites, listProgress, mediaThumbnail, revealInExplorer, setSeasonWatched, setShowIntro, setShowWatched, setWatched, toggleFavorite } from "../lib/api";
+import { openCtx } from "../lib/contextmenu";
 import { enqueueSeasonRest, playback } from "../lib/playback";
 import { useUiPrefs } from "../lib/uiPrefs";
-import { formatRuntime, formatTime, parseGenres, quality, ratingText, seasonEpisodeLabel } from "../lib/format";
+import { certAllowed, formatRuntime, formatTime, parseGenres, quality, ratingText, seasonEpisodeLabel } from "../lib/format";
 import { backdropUrl, posterUrl, stillUrl } from "../lib/img";
 import { useStore } from "../lib/store";
 import { ArtworkDialog } from "../components/ArtworkDialog";
@@ -37,6 +38,7 @@ export default function ShowDetail() {
   const seasonArt = useMemo(() => new Map(seasonArtQ.data ?? []), [seasonArtQ.data]);
   const prog = useQuery({ queryKey: ["progress", "list", profileId], queryFn: () => listProgress(profileId) });
   const allShowsQ = useQuery({ queryKey: ["shows"], queryFn: listShows });
+  const kidsMaxCert = useUiPrefs((s) => s.kidsMaxCert);
 
   const similar = useMemo(() => {
     const me = detail.data?.show;
@@ -45,18 +47,29 @@ export default function ShowDetail() {
     if (mine.size === 0) return [];
     return (allShowsQ.data ?? [])
       .filter((x) => x.id !== me.id && (me.tmdbId == null || x.tmdbId !== me.tmdbId))
+      .filter((x) => certAllowed(x.cert, kidsMaxCert)) // Kindersicherung gilt überall
       .map((x) => ({ s: x, overlap: parseGenres(x.genres).filter((g) => mine.has(g)).length }))
       .filter((x) => x.overlap >= 1)
       .sort((a, b) => b.overlap - a.overlap || (b.s.rating ?? 0) - (a.s.rating ?? 0))
       .slice(0, 12)
       .map((x) => x.s);
-  }, [detail.data, allShowsQ.data]);
+  }, [detail.data, allShowsQ.data, kidsMaxCert]);
   const favs = useQuery({ queryKey: ["favorites", profileId], queryFn: () => listFavorites(profileId) });
   const isFav = (favs.data ?? []).some((f) => f.mediaType === "show" && f.refId === sid);
   const toggleFav = () =>
     void toggleFavorite(profileId, "show", sid).then(() => qc.invalidateQueries({ queryKey: ["favorites"] }));
+  // every watched-mutation must refresh the progress-derived UI (badges, bar,
+  // "Fortsetzen", season checkmarks) — don't rely solely on the backend event
+  const refreshProgress = () => {
+    qc.invalidateQueries({ queryKey: ["progress"] });
+    qc.invalidateQueries({ queryKey: ["continue"] });
+    qc.invalidateQueries({ queryKey: ["recentlyWatched"] });
+  };
   const markShowWatched = () =>
-    void setShowWatched(profileId, sid, true).then(() => toast("Serie als gesehen markiert", "success"));
+    void setShowWatched(profileId, sid, true).then(() => {
+      refreshProgress();
+      toast("Serie als gesehen markiert", "success");
+    });
 
   const progMap = useMemo(() => {
     const map = new Map<number, Progress>();
@@ -220,7 +233,10 @@ export default function ShowDetail() {
               <Button
                 variant="ghost"
                 onClick={() =>
-                  void setShowWatched(profileId, sid, false).then(() => toast("Serie als ungesehen markiert", "success"))
+                  void setShowWatched(profileId, sid, false).then(() => {
+                    refreshProgress();
+                    toast("Serie als ungesehen markiert", "success");
+                  })
                 }
               >
                 Alle ungesehen
@@ -305,9 +321,10 @@ export default function ShowDetail() {
             <button
               onClick={() => {
                 const allSeen = seasonAllWatched(selectedSeason);
-                void setSeasonWatched(profileId, show.id, selectedSeason, !allSeen).then(() =>
-                  toast(allSeen ? "Staffel als ungesehen markiert" : "Staffel als gesehen markiert", "success"),
-                );
+                void setSeasonWatched(profileId, show.id, selectedSeason, !allSeen).then(() => {
+                  refreshProgress();
+                  toast(allSeen ? "Staffel als ungesehen markiert" : "Staffel als gesehen markiert", "success");
+                });
               }}
               className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-ghg-surface2 hover:bg-ghg-elevated text-sm text-ghg-muted hover:text-ghg-text transition"
             >
@@ -351,9 +368,10 @@ export default function ShowDetail() {
               showTitle={show.title}
               progress={progMap.get(ep.id)}
               onToggleWatched={(w) =>
-                void setWatched(profileId, "episode", ep.id, w).then(() =>
-                  toast(w ? "Als gesehen markiert" : "Als ungesehen markiert", "success"),
-                )
+                void setWatched(profileId, "episode", ep.id, w).then(() => {
+                  refreshProgress();
+                  toast(w ? "Als gesehen markiert" : "Als ungesehen markiert", "success");
+                })
               }
               onPlay={() => navigate(`/play/episode/${ep.id}`)}
               onIdentify={() =>
@@ -498,8 +516,34 @@ function EpisodeRow({
   const pct = progress && progress.durationSec > 0 ? (progress.positionSec / progress.durationSec) * 100 : 0;
   const still = stillUrl(ep.stillPath) ?? localStill;
 
+  // shared action set for both the "…" menu and right-click on the whole row
+  const rowActions = [
+    { label: "Abspielen", onClick: onPlay },
+    { label: progress?.watched ? "Als ungesehen markieren" : "Als gesehen markieren", onClick: () => onToggleWatched(!progress?.watched) },
+    { label: "Bild ändern", onClick: onArtwork },
+    { label: "Identifizieren", onClick: onIdentify },
+    {
+      label: "▶ Als Nächstes abspielen",
+      onClick: () => {
+        playback().enqueue(
+          { kind: "episode" as const, mediaType: "episode" as const, label: `${showTitle || "Folge"} · ${seasonEpisodeLabel(ep.season, ep.episode)}`, sub: ep.title || undefined, ids: [ep.id] },
+          true,
+        );
+        toast("Wird als Nächstes abgespielt", "success");
+      },
+    },
+    {
+      label: "In Ordner anzeigen",
+      onClick: () => void revealInExplorer(ep.path).catch((e) => toast(String(e), "error")),
+    },
+  ];
+
   return (
-    <div ref={rowRef} className="group flex gap-4 p-3 rounded-xl hover:bg-ghg-surface2 transition border border-transparent hover:border-ghg-line">
+    <div
+      ref={rowRef}
+      className="group flex gap-4 p-3 rounded-xl hover:bg-ghg-surface2 transition border border-transparent hover:border-ghg-line"
+      onContextMenu={(e) => openCtx(e, rowActions)}
+    >
       <div
         className="relative w-44 aspect-video shrink-0 rounded-lg overflow-hidden bg-ghg-bg2 cursor-pointer"
         onClick={onPlay}
@@ -545,7 +589,16 @@ function EpisodeRow({
         {ep.runtime ? <p className="text-xs text-ghg-muted mt-1">{formatRuntime(ep.runtime)}</p> : null}
       </div>
 
-      <div ref={ref} className="relative self-start">
+      <div ref={ref} className="relative self-start flex items-center gap-0.5">
+        {/* always-visible identify shortcut — the user asked for a BUTTON, not
+            just a hidden menu entry */}
+        <button
+          onClick={onIdentify}
+          title="Folge identifizieren (echten Titel & Bild zuordnen)"
+          className="p-1.5 rounded-lg hover:bg-ghg-elevated text-ghg-muted hover:text-ghg-red opacity-0 group-hover:opacity-100 transition"
+        >
+          <Pencil className="w-4 h-4" />
+        </button>
         <button
           onClick={() => setMenu((o) => !o)}
           className="p-1.5 rounded-lg hover:bg-ghg-elevated text-ghg-muted hover:text-ghg-text opacity-0 group-hover:opacity-100 transition"

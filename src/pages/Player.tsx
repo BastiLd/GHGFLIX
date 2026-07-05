@@ -695,6 +695,13 @@ export default function Player() {
         // skip loadfile + resume so the video continues without a hiccup.
         const expand = playback().expandTo;
         const fromMini = expand && expand.mediaType === mediaType && expand.mediaId === mediaId;
+        // Starting something NEW while a mini is still running (user clicked
+        // "Abspielen" in the library): tear the stale mini down, otherwise its
+        // observers would keep saving the OLD item's progress against the NEW
+        // item's timeline.
+        if (!fromMini && playback().mini) {
+          playback().setMini(null);
+        }
         if (fromMini) {
           playback().setExpandTo(null);
           if (expand.path) {

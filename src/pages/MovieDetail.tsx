@@ -3,7 +3,8 @@ import { ArrowLeft, Check, ImageIcon, Pencil, Play, Plus, Star } from "lucide-re
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { fileInfo, getMovie, getProgress, listFavorites, listMovies, movieVersions, revealInExplorer, setWatched, toggleFavorite, type FileInfoResult } from "../lib/api";
-import { dedupeMovies, formatBytes, formatRuntime, parseGenres, quality, qualityFromDims, ratingText } from "../lib/format";
+import { certAllowed, dedupeMovies, formatBytes, formatRuntime, parseGenres, quality, qualityFromDims, ratingText } from "../lib/format";
+import { useUiPrefs } from "../lib/uiPrefs";
 import { backdropUrl, posterUrl } from "../lib/img";
 import { useStore } from "../lib/store";
 import { ArtworkDialog } from "../components/ArtworkDialog";
@@ -36,6 +37,7 @@ export default function MovieDetail() {
   const vers = useQuery({ queryKey: ["movieVersions", mid], queryFn: () => movieVersions(mid) });
   const allMoviesQ = useQuery({ queryKey: ["movies"], queryFn: listMovies });
 
+  const kidsMaxCert = useUiPrefs((s) => s.kidsMaxCert);
   // local library titles sharing genres with this movie ("Ähnliche Filme")
   const similar = useMemo(() => {
     const me = movie.data;
@@ -44,18 +46,24 @@ export default function MovieDetail() {
     if (mine.size === 0) return [];
     return dedupeMovies(allMoviesQ.data ?? [])
       .filter((x) => x.tmdbId !== me.tmdbId && x.id !== me.id)
+      .filter((x) => certAllowed(x.cert, kidsMaxCert)) // Kindersicherung gilt überall
       .map((x) => ({ m: x, overlap: parseGenres(x.genres).filter((g) => mine.has(g)).length }))
       .filter((x) => x.overlap >= 1)
       .sort((a, b) => b.overlap - a.overlap || (b.m.rating ?? 0) - (a.m.rating ?? 0))
       .slice(0, 12)
       .map((x) => x.m);
-  }, [movie.data, allMoviesQ.data]);
+  }, [movie.data, allMoviesQ.data, kidsMaxCert]);
   const isFav = (favs.data ?? []).some((f) => f.mediaType === "movie" && f.refId === mid);
 
   const toggleFav = () =>
     void toggleFavorite(profileId, "movie", mid).then(() => qc.invalidateQueries({ queryKey: ["favorites"] }));
   const markWatched = () =>
-    void setWatched(profileId, "movie", mid, true).then(() => toast("Als gesehen markiert", "success"));
+    void setWatched(profileId, "movie", mid, true).then(() => {
+      qc.invalidateQueries({ queryKey: ["progress"] });
+      qc.invalidateQueries({ queryKey: ["continue"] });
+      qc.invalidateQueries({ queryKey: ["recentlyWatched"] });
+      toast("Als gesehen markiert", "success");
+    });
 
   if (movie.isLoading) return <SkeletonDetail />;
 
