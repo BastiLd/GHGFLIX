@@ -186,9 +186,30 @@ export default function Player() {
   const subDefaultRef = useRef<string>("off");
   const subLangRef = useRef<string>("en");
   const introSkipRef = useRef<number>(85);
+  // the "audio/manual" intro window (from DB fingerprint, per-show/episode manual
+  // marking) kept SEPARATE from the chapter-derived one, so the intro source
+  // setting (auto | audio | chapters | fixed) can choose deterministically
   const introWindowRef = useRef<{ start: number; end: number } | null>(null);
+  const chapterWindowRef = useRef<{ start: number; end: number } | null>(null);
   const introModeRef = useRef<string>("button");
   const introSourceRef = useRef<string>("auto");
+  // Resolve the effective intro window for the current source setting. This is
+  // the SINGLE source of truth for both the skip button's visibility and where
+  // it seeks to — so "skip" always jumps to the real intro end, never blindly to
+  // the fixed seconds unless the user actually chose "feste Zeit".
+  const resolveIntroWindow = useCallback((): { start: number; end: number } | null => {
+    const fixed = introSkipRef.current > 0 ? { start: 1, end: introSkipRef.current } : null;
+    switch (introSourceRef.current) {
+      case "fixed":
+        return fixed;
+      case "chapters":
+        return chapterWindowRef.current;
+      case "audio":
+        return introWindowRef.current; // fingerprint / manual only
+      default: // "auto": chapters → audio/manual → fixed fallback
+        return chapterWindowRef.current ?? introWindowRef.current ?? fixed;
+    }
+  }, []);
   const introSkippedRef = useRef(false);
   const autoQualityRef = useRef<string>("highest");
 
@@ -299,7 +320,7 @@ export default function Player() {
           break;
         }
       }
-      if (win) introWindowRef.current = win; // chapter takes priority; else keep fingerprint window
+      chapterWindowRef.current = win; // kept separate from the audio/manual window
     } catch {
       /* keep existing window */
     }
@@ -555,10 +576,7 @@ export default function Player() {
             if (introModeRef.current === "off") {
               setIntroSkipVisible(false);
             } else {
-              // detected window (chapter/audio) unless the user forces "feste Zeit";
-              // fall back to a fixed-seconds window so "Automatisch" always works.
-              let win = introSourceRef.current === "fixed" ? null : introWindowRef.current;
-              if (!win && introSkipRef.current > 0) win = { start: 1, end: introSkipRef.current };
+              const win = resolveIntroWindow();
               if (win) {
                 const inWin = p >= win.start - 1 && p < win.end - 0.3;
                 if (inWin && introModeRef.current === "auto" && !introSkippedRef.current && p > 0.5) {
@@ -633,6 +651,7 @@ export default function Player() {
     tracksLoadedRef.current = false;
     markerRef.current = null;
     introWindowRef.current = null;
+    chapterWindowRef.current = null;
     introSkippedRef.current = false;
     setIntroSkipVisible(false);
     setNextCancelled(false);
@@ -902,9 +921,12 @@ export default function Player() {
     }
   };
   const skipIntro = () => {
-    const w = introSourceRef.current === "fixed" ? null : introWindowRef.current;
-    if (w) command("seek", [w.end, "absolute"]).catch(() => {});
-    else command("seek", [Math.max(introSkipRef.current, posRef.current + 1), "absolute"]).catch(() => {});
+    // always jump to the END of the resolved window (chapter/audio/fixed per the
+    // user's setting) — never blindly to a fixed offset
+    const w = resolveIntroWindow();
+    const target = w ? w.end : Math.max(introSkipRef.current, posRef.current + 1);
+    command("seek", [target, "absolute"]).catch(() => {});
+    setIntroSkipVisible(false);
   };
 
   // drag the window in PiP mode by pressing anywhere
@@ -1261,7 +1283,7 @@ export default function Player() {
               interval={thumbInterval}
               previewWidth={thumbWidth}
               markers={prefsRef.current.chapterMarkers ? chapters.map((c) => c.time) : undefined}
-              intro={prefsRef.current.introMarker ? introWindowRef.current : null}
+              intro={prefsRef.current.introMarker ? resolveIntroWindow() : null}
             />
           )}
           <button

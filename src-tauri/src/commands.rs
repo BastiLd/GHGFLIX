@@ -591,6 +591,129 @@ pub async fn tmdb_season_numbers(state: State<'_, AppState>, tmdb_id: i64) -> R<
     tmdb.season_numbers(tmdb_id).await.map_err(err)
 }
 
+/// Move a WHOLE season of one show onto another TMDb show (existing or created).
+/// This is the Plex/Jellyfin-style "this season belongs to a different series"
+/// fix. It (1) records a per-FILE placement override so the move survives every
+/// rescan and "Bibliothek neu aufbauen", (2) moves the episodes now, and (3)
+/// pulls the target show's real metadata. Returns the surviving target show id.
+#[tauri::command]
+pub async fn reassign_season(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    show_id: i64,
+    season: i64,
+    target_tmdb: i64,
+) -> R<i64> {
+    // fetch target show metadata (title etc.) up front
+    let (key, lang) = read_key_lang(&state);
+    let title = {
+        if key.trim().is_empty() {
+            format!("TMDb {target_tmdb}")
+        } else {
+            let tmdb = Tmdb::new(state.http.clone(), key.clone(), lang.clone());
+            tmdb.tv_details(target_tmdb).await.map(|m| m.title).unwrap_or_else(|_| format!("TMDb {target_tmdb}"))
+        }
+    };
+    let target_show = {
+        let conn = state.conn.lock().unwrap();
+        // remember every file's placement FIRST (survives rebuilds)
+        for (path, ep) in db::season_file_coords(&conn, show_id, season).map_err(err)? {
+            db::set_placement(&conn, &path, target_tmdb, season, ep).map_err(err)?;
+        }
+        let target = db::find_or_create_show_for_tmdb(&conn, target_tmdb, &title).map_err(err)?;
+        db::move_season(&conn, show_id, season, target).map_err(err)?;
+        target
+    };
+    // pull real metadata WITHOUT holding the db lock across network calls
+    if !key.trim().is_empty() {
+        let tmdb = Tmdb::new(state.http.clone(), key, lang);
+        write_show_metadata(&state, &tmdb, target_show, target_tmdb).await;
+        let conn = state.conn.lock().unwrap();
+        let _ = db::merge_shows_by_tmdb(&conn);
+    }
+    let surviving = {
+        let conn = state.conn.lock().unwrap();
+        db::find_show_by_tmdb(&conn, target_tmdb).map_err(err)?.unwrap_or(target_show)
+    };
+    let _ = app.emit("library://updated", ());
+    Ok(surviving)
+}
+
+/// Fetch a show's TMDb details + all present seasons' episodes and write them,
+/// never holding the DB lock across a network await.
+async fn write_show_metadata(state: &State<'_, AppState>, tmdb: &Tmdb, show_id: i64, tmdb_id: i64) {
+    let meta = match tmdb.tv_details(tmdb_id).await {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    let seasons: Vec<i64> = {
+        let conn = state.conn.lock().unwrap();
+        db::distinct_seasons(&conn, show_id).unwrap_or_default()
+    };
+    let mut fetched: Vec<(i64, Vec<crate::tmdb::EpisodeMeta>)> = Vec::new();
+    for s in seasons {
+        if let Ok(eps) = tmdb.season_episodes(tmdb_id, s).await {
+            fetched.push((s, eps));
+        }
+    }
+    let conn = state.conn.lock().unwrap();
+    let genres = serde_json::to_string(&meta.genres).ok();
+    let _ = db::update_show_match(
+        &conn, show_id, meta.tmdb_id, &meta.title, meta.year, meta.overview.as_deref(),
+        meta.poster_path.as_deref(), meta.backdrop_path.as_deref(), genres.as_deref(), meta.rating,
+        true, meta.cert.as_deref(), meta.status.as_deref(), meta.last_year, meta.runtime,
+    );
+    for (s, eps) in fetched {
+        for e in eps {
+            let _ = db::update_episode_meta(
+                &conn, show_id, s, e.episode, e.title.as_deref(), e.overview.as_deref(),
+                e.still_path.as_deref(), e.air_date.as_deref(), e.runtime,
+            );
+        }
+    }
+}
+
+/// Move a single episode onto another TMDb show as SxxEyy. Same persistence as
+/// reassign_season (per-file placement).
+#[tauri::command]
+pub async fn reassign_episode(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    episode_id: i64,
+    target_tmdb: i64,
+    season: i64,
+    episode: i64,
+) -> R<i64> {
+    let (key, lang) = read_key_lang(&state);
+    let title = {
+        if key.trim().is_empty() {
+            format!("TMDb {target_tmdb}")
+        } else {
+            let tmdb = Tmdb::new(state.http.clone(), key.clone(), lang.clone());
+            tmdb.tv_details(target_tmdb).await.map(|m| m.title).unwrap_or_else(|_| format!("TMDb {target_tmdb}"))
+        }
+    };
+    let target_show = {
+        let conn = state.conn.lock().unwrap();
+        for path in db::file_paths_of_episode(&conn, episode_id).map_err(err)? {
+            db::set_placement(&conn, &path, target_tmdb, season, episode).map_err(err)?;
+        }
+        let target = db::find_or_create_show_for_tmdb(&conn, target_tmdb, &title).map_err(err)?;
+        db::move_episode(&conn, episode_id, target, season, episode).map_err(err)?;
+        target
+    };
+    if !key.trim().is_empty() {
+        let tmdb = Tmdb::new(state.http.clone(), key, lang);
+        write_show_metadata(&state, &tmdb, target_show, target_tmdb).await;
+    }
+    let surviving = {
+        let conn = state.conn.lock().unwrap();
+        db::find_show_by_tmdb(&conn, target_tmdb).map_err(err)?.unwrap_or(target_show)
+    };
+    let _ = app.emit("library://updated", ());
+    Ok(surviving)
+}
+
 /// "Diese Datei ist S{season}E{episode} — und alles danach fortlaufend":
 /// re-numbers the anchor file and every following file (natural path order)
 /// sequentially, rolling into the next season based on TMDb episode counts,

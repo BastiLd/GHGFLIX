@@ -152,6 +152,8 @@ pub fn run() {
             commands::tmdb_season_list,
             commands::tmdb_season_numbers,
             commands::assign_episodes_sequential,
+            commands::reassign_season,
+            commands::reassign_episode,
             commands::file_info,
             commands::recently_watched,
         ])

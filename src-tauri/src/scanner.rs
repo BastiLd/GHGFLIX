@@ -192,6 +192,27 @@ fn scan_tv(conn: &Connection, root: &Path) -> Result<()> {
         let source_name = show_source_name(root, path_buf);
         let key = parser::show_key(&source_name);
 
+        // A per-file placement override ("this file belongs to show TMDb X as
+        // SxxEyy", set by the user moving a season/episode) ALWAYS wins and is
+        // re-applied on every scan — even for already-indexed files.
+        if let Some((show_tmdb, ov_season, ov_episode)) = db::placement_for(conn, &path)? {
+            let target_show = db::find_or_create_show_for_tmdb(conn, show_tmdb, &parser::clean_show_title(&source_name))?;
+            match db::show_id_of_episode_file(conn, &path)? {
+                Some(cur_ep_show) => {
+                    // already indexed → move it if it's not already correct
+                    if let Some(eid) = db::episode_id_of_file(conn, &path)? {
+                        let _ = db::move_episode(conn, eid, target_show, ov_season, ov_episode);
+                    }
+                    let _ = cur_ep_show;
+                }
+                None => {
+                    let ep_id = db::find_or_create_episode(conn, target_show, ov_season, ov_episode, &path)?;
+                    db::add_episode_file(conn, ep_id, &path)?;
+                }
+            }
+            continue;
+        }
+
         // Already indexed? Leave its show/season/episode exactly as they are so
         // manual matches (Identifizieren) and episode renumbering survive the
         // rescan. We only (re)affirm the grouping key of its current show.
@@ -460,6 +481,18 @@ async fn match_all(conn: &Connection, tmdb: &Tmdb, app: &AppHandle, auto_match: 
             if let Some(tmdb_id) = best_tv_match(tmdb, &search_query(&s.title), s.year, local).await {
                 let _ = apply_show_match(conn, tmdb, s.id, tmdb_id, false).await;
             }
+        }
+    }
+
+    // Shows matched but still without a poster (e.g. a bare row created by a
+    // placement override during rebuild) → pull their full metadata now.
+    for s in db::matched_shows(conn)? {
+        if s.poster_path.is_some() {
+            continue;
+        }
+        if let Some(t) = s.tmdb_id {
+            emit(app, "match", format!("Aktualisiere: {}", s.title), 0, 0);
+            let _ = apply_show_match(conn, tmdb, s.id, t, s.identified).await;
         }
     }
 

@@ -16,6 +16,7 @@ import { useStore } from "../lib/store";
 import { ArtworkDialog } from "../components/ArtworkDialog";
 import { Extras } from "../components/Extras";
 import { IdentifyDialog, type IdentifyTarget } from "../components/IdentifyDialog";
+import { ReassignDialog, type ReassignTarget } from "../components/ReassignDialog";
 import { Button, EmptyState, Modal, SkeletonDetail, TextInput } from "../components/ui";
 import type { ArtworkTarget, Episode, Progress } from "../lib/types";
 
@@ -30,6 +31,7 @@ export default function ShowDetail() {
   const [introDialog, setIntroDialog] = useState(false);
   const [introFrom, setIntroFrom] = useState("0");
   const [introTo, setIntroTo] = useState("60");
+  const [reassign, setReassign] = useState<ReassignTarget | null>(null);
 
   const qc = useQueryClient();
   const toast = useStore((s) => s.toast);
@@ -345,6 +347,15 @@ export default function ShowDetail() {
             </button>
             <button
               onClick={() =>
+                setReassign({ kind: "season", showId: show.id, season: selectedSeason, showTitle: show.title })
+              }
+              title="Diese Staffel gehört eigentlich zu einer anderen Serie"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-ghg-surface2 hover:bg-ghg-elevated text-sm text-ghg-muted hover:text-ghg-text transition"
+            >
+              <Pencil className="w-4 h-4" /> Staffel → andere Serie
+            </button>
+            <button
+              onClick={() =>
                 setArtwork({
                   target: "season",
                   id: show.id,
@@ -395,6 +406,15 @@ export default function ShowDetail() {
                   title: `${seasonEpisodeLabel(ep.season, ep.episode)}${ep.title ? " · " + ep.title : ""}`,
                 })
               }
+              onReassign={() =>
+                setReassign({
+                  kind: "episode",
+                  episodeId: ep.id,
+                  season: ep.season,
+                  episode: ep.episode,
+                  showTitle: show.title,
+                })
+              }
             />
           ))}
         </div>
@@ -419,6 +439,10 @@ export default function ShowDetail() {
       )}
 
       {artwork && <ArtworkDialog open onClose={() => setArtwork(null)} target={artwork} />}
+
+      {reassign && (
+        <ReassignDialog open onClose={() => setReassign(null)} target={reassign} suggest={show.title} />
+      )}
 
       <Modal open={introDialog} onClose={() => setIntroDialog(false)} title="Intro für diese Serie festlegen">
         <div className="space-y-4">
@@ -468,6 +492,7 @@ function EpisodeRow({
   onIdentify,
   onArtwork,
   onToggleWatched,
+  onReassign,
   showTitle,
 }: {
   ep: Episode;
@@ -476,6 +501,7 @@ function EpisodeRow({
   onIdentify: () => void;
   onArtwork: () => void;
   onToggleWatched: (watched: boolean) => void;
+  onReassign: () => void;
   showTitle?: string;
 }) {
   const [menu, setMenu] = useState(false);
@@ -521,7 +547,8 @@ function EpisodeRow({
     { label: "Abspielen", onClick: onPlay },
     { label: progress?.watched ? "Als ungesehen markieren" : "Als gesehen markieren", onClick: () => onToggleWatched(!progress?.watched) },
     { label: "Bild ändern", onClick: onArtwork },
-    { label: "Identifizieren", onClick: onIdentify },
+    { label: "Identifizieren (Staffel/Folge)", onClick: onIdentify },
+    { label: "Folge → andere Serie verschieben", onClick: onReassign },
     {
       label: "▶ Als Nächstes abspielen",
       onClick: () => {
@@ -530,6 +557,19 @@ function EpisodeRow({
           true,
         );
         toast("Wird als Nächstes abgespielt", "success");
+      },
+    },
+    {
+      label: "+ Zur Warteschlange",
+      onClick: () => {
+        playback().enqueue({
+          kind: "episode" as const,
+          mediaType: "episode" as const,
+          label: `${showTitle || "Folge"} · ${seasonEpisodeLabel(ep.season, ep.episode)}`,
+          sub: ep.title || undefined,
+          ids: [ep.id],
+        });
+        toast("Zur Warteschlange hinzugefügt", "success");
       },
     },
     {
@@ -606,87 +646,19 @@ function EpisodeRow({
           <MoreVertical className="w-4 h-4" />
         </button>
         {menu && (
-          <div className="absolute right-0 mt-1 w-44 bg-ghg-elevated border border-ghg-line rounded-lg shadow-2xl overflow-hidden z-20 fade-in">
-            <button
-              onClick={() => {
-                setMenu(false);
-                onPlay();
-              }}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2"
-            >
-              Abspielen
-            </button>
-            <button
-              onClick={() => {
-                setMenu(false);
-                onToggleWatched(!progress?.watched);
-              }}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2"
-            >
-              {progress?.watched ? "Als ungesehen markieren" : "Als gesehen markieren"}
-            </button>
-            <button
-              onClick={() => {
-                setMenu(false);
-                onArtwork();
-              }}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2"
-            >
-              Bild ändern
-            </button>
-            <button
-              onClick={() => {
-                setMenu(false);
-                onIdentify();
-              }}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2"
-            >
-              Identifizieren
-            </button>
-            <button
-              onClick={() => {
-                setMenu(false);
-                playback().enqueue(
-                  {
-                    kind: "episode",
-                    mediaType: "episode",
-                    label: `${showTitle || "Folge"} · ${seasonEpisodeLabel(ep.season, ep.episode)}`,
-                    sub: ep.title || undefined,
-                    ids: [ep.id],
-                  },
-                  true,
-                );
-                toast("Wird als Nächstes abgespielt", "success");
-              }}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2 border-t border-ghg-line"
-            >
-              ▶ Als Nächstes abspielen
-            </button>
-            <button
-              onClick={() => {
-                setMenu(false);
-                playback().enqueue({
-                  kind: "episode",
-                  mediaType: "episode",
-                  label: `${showTitle || "Folge"} · ${seasonEpisodeLabel(ep.season, ep.episode)}`,
-                  sub: ep.title || undefined,
-                  ids: [ep.id],
-                });
-                toast("Zur Warteschlange hinzugefügt", "success");
-              }}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2"
-            >
-              + Zur Warteschlange
-            </button>
-            <button
-              onClick={() => {
-                setMenu(false);
-                void revealInExplorer(ep.path).catch((e) => toast(String(e), "error"));
-              }}
-              className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2 border-t border-ghg-line"
-            >
-              In Ordner anzeigen
-            </button>
+          <div className="absolute right-0 mt-1 w-56 bg-ghg-elevated border border-ghg-line rounded-lg shadow-2xl overflow-hidden z-20 fade-in">
+            {rowActions.map((a, i) => (
+              <button
+                key={i}
+                onClick={() => {
+                  setMenu(false);
+                  a.onClick();
+                }}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2"
+              >
+                {a.label}
+              </button>
+            ))}
           </div>
         )}
       </div>

@@ -70,6 +70,12 @@ export const tmdbSeasonList = (tmdbId: number, season: number) =>
   invoke<TmdbEpisodeInfo[]>("tmdb_season_list", { tmdbId, season });
 export const tmdbSeasonNumbers = (tmdbId: number) =>
   invoke<number[]>("tmdb_season_numbers", { tmdbId });
+/** Move a whole season onto another TMDb show (survives rebuilds). Returns the target show id. */
+export const reassignSeason = (showId: number, season: number, targetTmdb: number) =>
+  invoke<number>("reassign_season", { showId, season, targetTmdb });
+/** Move one episode onto another TMDb show as SxxEyy. Returns the target show id. */
+export const reassignEpisode = (episodeId: number, targetTmdb: number, season: number, episode: number) =>
+  invoke<number>("reassign_episode", { episodeId, targetTmdb, season, episode });
 
 // ===== progress =====
 export const setProgress = (

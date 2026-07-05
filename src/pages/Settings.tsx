@@ -872,7 +872,9 @@ export default function Settings() {
               <label className="flex-1 min-w-40">
                 <span className="text-xs uppercase tracking-wide text-ghg-muted">Quelle</span>
                 <select value={introSource} onChange={(e) => setIntroSource(e.target.value)} className="w-full bg-ghg-bg2 border border-ghg-line rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-ghg-red">
-                  <option value="auto">Erkannt (Kapitel/Audio/manuell), sonst feste Zeit</option>
+                  <option value="auto">Automatisch (Kapitel → Audio → feste Zeit)</option>
+                  <option value="audio">Nur Audio-Erkennung (keine Kapitel)</option>
+                  <option value="chapters">Nur Kapitel</option>
                   <option value="fixed">Nur feste Zeit</option>
                 </select>
               </label>

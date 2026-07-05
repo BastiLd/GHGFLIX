@@ -1,7 +1,8 @@
+import { useQuery } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { scanLibraries } from "../lib/api";
+import { continueWatching, scanLibraries } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useUiPrefs } from "../lib/uiPrefs";
 import type { ScanProgress } from "../lib/types";
@@ -37,6 +38,7 @@ export function Mascot() {
   const mascot = useUiPrefs((s) => s.mascot);
   const tipsOn = useUiPrefs((s) => s.mascotTips);
   const toast = useStore((s) => s.toast);
+  const profileId = useStore((s) => s.profileId);
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [happy, setHappy] = useState(false);
@@ -44,6 +46,14 @@ export function Mascot() {
   const [tip, setTip] = useState(0);
   const happyTimer = useRef<number | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  // the most recent in-progress item, so the mascot can actually DO something
+  // useful: one-click resume of what you last watched
+  const resume = useQuery({
+    queryKey: ["continue", profileId],
+    queryFn: () => continueWatching(profileId),
+    enabled: mascot !== "off",
+  });
+  const nextUp = (resume.data ?? [])[0];
 
   useEffect(() => {
     const un = listen<ScanProgress>("scan://progress", (e) => {
@@ -80,6 +90,20 @@ export function Mascot() {
       {open && (
         <div className="absolute bottom-14 left-0 w-64 bg-ghg-elevated border border-ghg-line rounded-xl shadow-2xl p-3 pop-in space-y-2">
           <p className="text-sm font-bold">{face.name}</p>
+          {/* one-click resume of the last in-progress item */}
+          {!busy && nextUp && (
+            <button
+              onClick={() => {
+                setOpen(false);
+                navigate(`/play/${nextUp.mediaType}/${nextUp.refId}`);
+              }}
+              className="w-full text-left rounded-lg bg-ghg-red/15 hover:bg-ghg-red/25 border border-ghg-red/30 px-2.5 py-2 transition"
+            >
+              <p className="text-[11px] text-ghg-red font-semibold">▶ Weiterschauen</p>
+              <p className="text-xs font-semibold truncate">{nextUp.title}</p>
+              {nextUp.subtitle && <p className="text-[11px] text-ghg-muted truncate">{nextUp.subtitle}</p>}
+            </button>
+          )}
           {busy ? (
             <p className="text-xs text-ghg-muted">Ich scanne gerade deine Bibliothek …</p>
           ) : (

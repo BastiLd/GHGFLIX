@@ -169,6 +169,18 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             PRIMARY KEY(kind, key)
         );
 
+        -- Per-FILE placement overrides: "this exact video file belongs to show
+        -- TMDb X as SxxEyy". Keyed by absolute path, so it is bulletproof across
+        -- rescans AND "Bibliothek neu aufbauen" (paths don't change). This is how
+        -- a user permanently moves a wrongly-grouped season/episode to the right
+        -- show — the scanner re-applies it every time. Never wiped by reset.
+        CREATE TABLE IF NOT EXISTS placements (
+            path       TEXT PRIMARY KEY,
+            show_tmdb  INTEGER NOT NULL,
+            season     INTEGER NOT NULL,
+            episode    INTEGER NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_episodes_show    ON episodes(show_id);
         CREATE INDEX IF NOT EXISTS idx_epfiles_episode  ON episode_files(episode_id);
         CREATE INDEX IF NOT EXISTS idx_movies_tmdb      ON movies(tmdb_id);
@@ -607,6 +619,23 @@ pub fn show_id_of_episode_file(conn: &Connection, path: &str) -> Result<Option<i
     Ok(id)
 }
 
+/// The episode row a given file path currently belongs to.
+pub fn episode_id_of_file(conn: &Connection, path: &str) -> Result<Option<i64>> {
+    let id = conn
+        .query_row("SELECT episode_id FROM episode_files WHERE path=?1", [path], |r| r.get::<_, i64>(0))
+        .optional()?;
+    Ok(id)
+}
+
+/// All physical file paths of one episode (all qualities).
+pub fn file_paths_of_episode(conn: &Connection, episode_id: i64) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT path FROM episode_files WHERE episode_id=?1")?;
+    let rows = stmt
+        .query_map([episode_id], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 /// (show_id, file_path) for every indexed episode file — used to backfill keys.
 pub fn all_show_file_paths(conn: &Connection) -> Result<Vec<(i64, String)>> {
     let mut stmt = conn
@@ -659,6 +688,125 @@ pub fn find_show_by_tmdb(conn: &Connection, tmdb_id: i64) -> Result<Option<i64>>
         )
         .optional()?;
     Ok(id)
+}
+
+/// Find the local show for a TMDb id, or create a bare one (identified) ready for
+/// metadata. Used when moving episodes/seasons onto a show the library doesn't
+/// have a row for yet.
+pub fn find_or_create_show_for_tmdb(conn: &Connection, tmdb_id: i64, title: &str) -> Result<i64> {
+    if let Some(id) = find_show_by_tmdb(conn, tmdb_id)? {
+        return Ok(id);
+    }
+    conn.execute(
+        "INSERT INTO shows(folder, title, tmdb_id, added_at, identified) VALUES(NULL, ?1, ?2, ?3, 1)",
+        params![title, tmdb_id, now()],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// ===== per-file placement overrides (survive rescans + rebuilds; path-keyed) =====
+
+pub fn set_placement(conn: &Connection, path: &str, show_tmdb: i64, season: i64, episode: i64) -> Result<()> {
+    conn.execute(
+        "INSERT INTO placements(path, show_tmdb, season, episode) VALUES(?1,?2,?3,?4)
+         ON CONFLICT(path) DO UPDATE SET show_tmdb=excluded.show_tmdb, season=excluded.season, episode=excluded.episode",
+        params![path, show_tmdb, season, episode],
+    )?;
+    Ok(())
+}
+
+pub fn placement_for(conn: &Connection, path: &str) -> Result<Option<(i64, i64, i64)>> {
+    let row = conn
+        .query_row(
+            "SELECT show_tmdb, season, episode FROM placements WHERE path=?1",
+            [path],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
+        )
+        .optional()?;
+    Ok(row)
+}
+
+pub fn clear_placement(conn: &Connection, path: &str) -> Result<()> {
+    conn.execute("DELETE FROM placements WHERE path=?1", [path])?;
+    Ok(())
+}
+
+/// Every physical file path of a whole season of a show (all qualities).
+pub fn season_file_paths(conn: &Connection, show_id: i64, season: i64) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT f.path FROM episode_files f JOIN episodes e ON e.id=f.episode_id
+         WHERE e.show_id=?1 AND e.season=?2",
+    )?;
+    let rows = stmt
+        .query_map(params![show_id, season], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// (path, episode) for every file of one show's season — to remember placements.
+pub fn season_file_coords(conn: &Connection, show_id: i64, season: i64) -> Result<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT f.path, e.episode FROM episode_files f JOIN episodes e ON e.id=f.episode_id
+         WHERE e.show_id=?1 AND e.season=?2",
+    )?;
+    let rows = stmt
+        .query_map(params![show_id, season], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Move every episode of (from_show, season) onto `to_show`, merging on number
+/// clashes and deleting the now-empty source show if it has no episodes left.
+pub fn move_season(conn: &Connection, from_show: i64, season: i64, to_show: i64) -> Result<()> {
+    if from_show == to_show {
+        return Ok(());
+    }
+    let eps: Vec<(i64, i64)> = {
+        let mut stmt = conn.prepare("SELECT id, episode FROM episodes WHERE show_id=?1 AND season=?2")?;
+        let rows = stmt
+            .query_map(params![from_show, season], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    for (eid, episode) in eps {
+        match find_episode_id(conn, to_show, season, episode)? {
+            Some(t) if t != eid => merge_episodes(conn, eid, t)?,
+            Some(_) => {}
+            None => {
+                conn.execute("UPDATE episodes SET show_id=?2 WHERE id=?1", params![eid, to_show])?;
+            }
+        }
+    }
+    set_all_episode_primaries(conn)?;
+    // drop the source show if it is now empty
+    let remaining: i64 =
+        conn.query_row("SELECT COUNT(*) FROM episodes WHERE show_id=?1", [from_show], |r| r.get(0))?;
+    if remaining == 0 {
+        conn.execute("DELETE FROM shows WHERE id=?1", [from_show])?;
+    }
+    Ok(())
+}
+
+/// Move a single episode onto another show (same conflict handling as move_season).
+pub fn move_episode(conn: &Connection, episode_id: i64, to_show: i64, season: i64, episode: i64) -> Result<()> {
+    let from_show: i64 = conn.query_row("SELECT show_id FROM episodes WHERE id=?1", [episode_id], |r| r.get(0))?;
+    match find_episode_id(conn, to_show, season, episode)? {
+        Some(t) if t != episode_id => merge_episodes(conn, episode_id, t)?,
+        Some(_) => {}
+        None => {
+            conn.execute(
+                "UPDATE episodes SET show_id=?2, season=?3, episode=?4 WHERE id=?1",
+                params![episode_id, to_show, season, episode],
+            )?;
+        }
+    }
+    set_all_episode_primaries(conn)?;
+    let remaining: i64 =
+        conn.query_row("SELECT COUNT(*) FROM episodes WHERE show_id=?1", [from_show], |r| r.get(0))?;
+    if remaining == 0 && from_show != to_show {
+        conn.execute("DELETE FROM shows WHERE id=?1", [from_show])?;
+    }
+    Ok(())
 }
 
 /// Re-link progress + favorites whose ref_id no longer exists (e.g. after
