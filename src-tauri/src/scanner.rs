@@ -408,32 +408,34 @@ async fn best_tv_match(tmdb: &Tmdb, query: &str, year: Option<i64>, local_eps: i
         .collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    // 2) collect the near-top contenders; a clear title winner ends it here
+    // 2) collect the near-top contenders (already sorted best-first). A clear
+    //    title/year winner ends it here — just like Plex, which trusts the folder
+    //    name + year and the agent's own relevance ranking.
     let top = scored[0].0;
-    let contenders: Vec<(f64, usize, i64)> =
-        scored.iter().filter(|(s, _, _)| top - s < 15.0).copied().collect();
+    let mut contenders: Vec<(f64, usize, i64)> =
+        scored.iter().filter(|(s, _, _)| top - s < 12.0).copied().collect();
+    // among ties, TMDb's own ranking (order index) wins — its #1 hit for a plain
+    // "Daredevil" is the popular original, not a niche same-named show
+    contenders.sort_by(|a, b| a.1.cmp(&b.1));
     if contenders.len() == 1 || local_eps < 3 {
         return Some(contenders[0].2);
     }
 
-    // 3) disambiguate the tie by TMDb episode count — but only lightly, and never
-    //    punish a show for merely being LARGER than the local folder (single season)
-    let mut best: Option<(i64, f64)> = None;
+    // 3) LAST resort only: if the top-ranked contender's episode total is clearly
+    //    too small to contain what we have locally (local ≫ total), it's the wrong
+    //    show — step to the next contender that can actually hold our episodes.
+    //    (Never the reverse: a big show is fine for a single local season.)
+    let mut chosen = contenders[0].2;
     for (_, _, id) in &contenders {
         if let Ok(meta) = tmdb.tv_details(*id).await {
             let total = meta.episode_count.unwrap_or(0);
-            let penalty = if local_eps > total + 2 {
-                (local_eps - total) as f64 * 2.0 // local has MORE than the show → wrong show
-            } else {
-                (total - local_eps).abs() as f64 * 0.2 // fits inside → weak signal
-            };
-            let better = best.map(|(_, bp)| penalty < bp).unwrap_or(true);
-            if better {
-                best = Some((*id, penalty));
+            if local_eps <= total + 2 {
+                chosen = *id;
+                break;
             }
         }
     }
-    best.map(|b| b.0).or(Some(contenders[0].2))
+    Some(chosen)
 }
 
 /// The user's remembered identification for a movie file, if any.

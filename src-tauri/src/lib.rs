@@ -44,6 +44,32 @@ pub fn run() {
             // Re-link any watched-state rows that lost their target (e.g. the app
             // was closed mid-rebuild) — cheap, and makes the state visible instantly.
             let _ = db::remap_stale_refs(&conn);
+            // ONE-TIME auto-repair: earlier versions mis-grouped shows whose
+            // seasons were spread across differently-named folders/drives (the
+            // "original Daredevil season folded into Born Again" bug). The grouping
+            // + matching are fixed now, but existing DBs are already contaminated
+            // at the episode level, which only a fresh index can undo. So on the
+            // first launch of this fixed build we clear the SHOW/EPISODE index
+            // (keeping settings, progress, favorites, placements, identity) and let
+            // the normal scan rebuild it correctly. Watched state survives via the
+            // path-based remap. Gated by a flag so it runs exactly once.
+            const REPAIR_TAG: &str = "regroup-v095";
+            let need_repair = db::get_setting(&conn, "repair_done").ok().flatten().as_deref() != Some(REPAIR_TAG);
+            if need_repair {
+                for sql in [
+                    "DELETE FROM episode_files",
+                    "DELETE FROM episodes",
+                    "DELETE FROM show_keys",
+                    "DELETE FROM shows",
+                    "DELETE FROM movies",
+                ] {
+                    let _ = conn.execute(sql, []);
+                }
+                let _ = db::set_setting(&conn, "repair_done", REPAIR_TAG);
+                // force a scan on this launch even if auto-scan is off, so the
+                // library is never left empty after the wipe
+                let _ = db::set_setting(&conn, "force_scan_once", "1");
+            }
             // Weekly automatic backup of watched data + favorites into app-data.
             let backup_on = db::get_setting(&conn, "pref_autoBackup")
                 .ok()

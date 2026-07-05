@@ -5,7 +5,7 @@ import { Film, Heart, House, RefreshCw, Search, Settings as SettingsIcon, Tv, Us
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getSetting, listMovies, listShows, scanLibraries } from "../lib/api";
+import { getSetting, listMovies, listShows, scanLibraries, setSetting } from "../lib/api";
 import { dedupeMovies } from "../lib/format";
 import { miniClipPath, usePlayback } from "../lib/playback";
 import { useStore } from "../lib/store";
@@ -89,11 +89,22 @@ export function Layout() {
   useEffect(() => {
     if (!autoScanned) {
       autoScanned = true;
-      getSetting("auto_scan").then((v) => {
+      // a one-time forced scan (set by the backend auto-repair) always runs,
+      // even if the user turned auto-scan off — otherwise the freshly-wiped
+      // library would stay empty after the regrouping repair
+      void (async () => {
+        const forced = await getSetting("force_scan_once").catch(() => null);
+        if (forced === "1") {
+          await setSetting("force_scan_once", "off").catch(() => {});
+          scanLibraries().catch(() => {});
+          toast("Bibliothek wird einmalig neu sortiert – Serien werden korrekt zusammengeführt …", "info");
+          return;
+        }
+        const v = await getSetting("auto_scan").catch(() => null);
         if (v !== "off") scanLibraries().catch(() => {});
-      });
+      })();
     }
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     const un = listen<ScanProgress>("scan://progress", (e) => {
