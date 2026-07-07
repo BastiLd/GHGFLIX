@@ -53,7 +53,11 @@ pub fn run() {
             // (keeping settings, progress, favorites, placements, identity) and let
             // the normal scan rebuild it correctly. Watched state survives via the
             // path-based remap. Gated by a flag so it runs exactly once.
-            const REPAIR_TAG: &str = "regroup-v095";
+            // v096: re-run after fixing a poisoned identity override ("Marvel's
+            // Daredevil" folder was remembered as Born Again) + Miraculous S6
+            // title-based placements — the index must be rebuilt once more so the
+            // corrected mappings take effect everywhere.
+            const REPAIR_TAG: &str = "regroup-v096";
             let need_repair = db::get_setting(&conn, "repair_done").ok().flatten().as_deref() != Some(REPAIR_TAG);
             if need_repair {
                 for sql in [
@@ -180,6 +184,7 @@ pub fn run() {
             commands::assign_episodes_sequential,
             commands::reassign_season,
             commands::reassign_episode,
+            commands::repair_season_titles,
             commands::file_info,
             commands::recently_watched,
         ])

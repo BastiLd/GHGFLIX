@@ -6,7 +6,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { listShows } from "../lib/api";
 import { ShowCardItem } from "../components/cards";
 import { MediaRow } from "../components/MediaRow";
-import { detectIntros, getSeasonArt, getShowDetail, listFavorites, listProgress, mediaThumbnail, revealInExplorer, setSeasonWatched, setShowIntro, setShowWatched, setWatched, toggleFavorite } from "../lib/api";
+import { detectIntros, getSeasonArt, getShowDetail, listFavorites, listProgress, mediaThumbnail, repairSeasonTitles, revealInExplorer, setSeasonWatched, setShowIntro, setShowWatched, setWatched, toggleFavorite } from "../lib/api";
 import { openCtx } from "../lib/contextmenu";
 import { enqueueSeasonRest, playback } from "../lib/playback";
 import { useUiPrefs } from "../lib/uiPrefs";
@@ -32,6 +32,7 @@ export default function ShowDetail() {
   const [introFrom, setIntroFrom] = useState("0");
   const [introTo, setIntroTo] = useState("60");
   const [reassign, setReassign] = useState<ReassignTarget | null>(null);
+  const [artworkTab, setArtworkTab] = useState<"poster" | "backdrop" | undefined>(undefined);
 
   const qc = useQueryClient();
   const toast = useStore((s) => s.toast);
@@ -153,9 +154,11 @@ export default function ShowDetail() {
       </div>
 
       <div className="px-10 -mt-32 relative flex gap-8">
-        <div className="w-52 shrink-0 aspect-[2/3] rounded-xl overflow-hidden border border-ghg-line shadow-2xl bg-ghg-surface2">
+        <div className="w-52 shrink-0 aspect-[2/3] rounded-xl overflow-hidden border border-ghg-line shadow-2xl bg-ghg-bg2">
           {posterUrl(show.posterPath, "w500") ? (
-            <img src={posterUrl(show.posterPath, "w500")!} alt="" className="w-full h-full object-cover" />
+            // object-contain: a custom image in a different aspect ratio is
+            // letterboxed instead of cropped ("nichts wird abgeschnitten")
+            <img src={posterUrl(show.posterPath, "w500")!} alt="" className="w-full h-full object-contain" />
           ) : (
             <div className="w-full h-full flex items-center justify-center p-3 text-center text-ghg-muted">{show.title}</div>
           )}
@@ -256,9 +259,35 @@ export default function ShowDetail() {
             </Button>
             <Button
               variant="ghost"
-              onClick={() => setArtwork({ target: "show", id: show.id, tmdbId: show.tmdbId, title: show.title })}
+              onClick={() => {
+                setArtworkTab("poster");
+                setArtwork({ target: "show", id: show.id, tmdbId: show.tmdbId, title: show.title });
+              }}
             >
-              <ImageIcon className="w-4 h-4" /> Bild ändern
+              <ImageIcon className="w-4 h-4" /> Poster ändern
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setArtworkTab("backdrop");
+                setArtwork({ target: "show", id: show.id, tmdbId: show.tmdbId, title: show.title });
+              }}
+            >
+              <ImageIcon className="w-4 h-4" /> Banner ändern
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                // open the show's folder on disk: parent of the current season
+                // folder (falls back to the season folder for flat layouts)
+                const ep = seasons.find((s) => s.season === selectedSeason)?.episodes[0] ?? seasons[0]?.episodes[0];
+                if (!ep) return;
+                const parts = ep.path.split("\\");
+                const dir = parts.length > 3 ? parts.slice(0, -2).join("\\") : parts.slice(0, -1).join("\\");
+                void revealInExplorer(dir).catch((e) => toast(String(e), "error"));
+              }}
+            >
+              Ordner öffnen
             </Button>
             <Button variant="ghost" onClick={() => setIdentify({ type: "show", id: show.id, title: show.title })}>
               <Pencil className="w-4 h-4" /> Identifizieren
@@ -355,6 +384,37 @@ export default function ShowDetail() {
               <Pencil className="w-4 h-4" /> Staffel → andere Serie
             </button>
             <button
+              onClick={() => {
+                toast("Titel-Abgleich läuft – Dateinamen werden mit den echten Folgentiteln verglichen …", "info");
+                void repairSeasonTitles(show.id, selectedSeason)
+                  .then(([m, t]) =>
+                    toast(
+                      m > 0
+                        ? `${m} von ${t} Folgen anhand der Titel korrigiert (bleibt dauerhaft)`
+                        : "Keine eindeutigen Titel-Treffer in den Dateinamen gefunden",
+                      m > 0 ? "success" : "info",
+                    ),
+                  )
+                  .catch((e) => toast(String(e), "error"));
+              }}
+              title="Folgen-Nummern anhand der ECHTEN Titel in den Dateinamen korrigieren (wenn SxxEyy im Dateinamen falsch ist)"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-ghg-surface2 hover:bg-ghg-elevated text-sm text-ghg-muted hover:text-ghg-text transition"
+            >
+              Titel-Abgleich
+            </button>
+            <button
+              onClick={() => {
+                const ep = currentSeason?.episodes[0];
+                if (!ep) return;
+                const dir = ep.path.split("\\").slice(0, -1).join("\\");
+                void revealInExplorer(dir).catch((e) => toast(String(e), "error"));
+              }}
+              title="Staffel-Ordner im Explorer öffnen"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-ghg-surface2 hover:bg-ghg-elevated text-sm text-ghg-muted hover:text-ghg-text transition"
+            >
+              Ordner
+            </button>
+            <button
               onClick={() =>
                 setArtwork({
                   target: "season",
@@ -438,7 +498,17 @@ export default function ShowDetail() {
         <IdentifyDialog open onClose={() => setIdentify(null)} target={identify} onDone={() => {}} />
       )}
 
-      {artwork && <ArtworkDialog open onClose={() => setArtwork(null)} target={artwork} />}
+      {artwork && (
+        <ArtworkDialog
+          open
+          onClose={() => {
+            setArtwork(null);
+            setArtworkTab(undefined);
+          }}
+          target={artwork}
+          initialTab={artworkTab}
+        />
+      )}
 
       {reassign && (
         <ReassignDialog open onClose={() => setReassign(null)} target={reassign} suggest={show.title} />

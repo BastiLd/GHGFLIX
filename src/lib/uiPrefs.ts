@@ -30,6 +30,10 @@ export interface UiPrefs {
   // ── scrolling ──
   scrollSpeed: number; // multiplier 0.5–3
   scrollSmooth: boolean;
+  /** plain vertical wheel scrolls a row horizontally while hovering it — for
+   *  mice whose thumb/tilt wheel doesn't reach the app (e.g. some MX Master
+   *  configs). The page still scrolls when the cursor is not over a row. */
+  wheelRowScroll: boolean;
   // ── player ──
   seekSmall: number;
   seekBig: number;
@@ -92,6 +96,7 @@ export const DEFAULT_PREFS: UiPrefs = {
   startPage: "home",
   scrollSpeed: 1.8,
   scrollSmooth: true,
+  wheelRowScroll: false,
   seekSmall: 10,
   seekBig: 60,
   volumeStep: 5,

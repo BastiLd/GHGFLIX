@@ -825,6 +825,147 @@ pub async fn assign_episodes_sequential(
     Ok(targets.len() as i64)
 }
 
+/// Fix a season whose files carry WRONG SxxEyy numbers but the REAL episode
+/// title in the filename (e.g. "… S06E01 - Climatiqueen.mp4" where Climatiqueen
+/// is actually episode 6). Matches each file's trailing title text against the
+/// TMDb episode names, renumbers confident unique matches, records per-file
+/// placements (survive rescans + rebuilds) and reloads metadata.
+/// Returns (matched, total) counts.
+#[tauri::command]
+pub async fn repair_season_titles(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    show_id: i64,
+    season: i64,
+) -> R<(i64, i64)> {
+    let (key, lang) = read_key_lang(&state);
+    if key.trim().is_empty() {
+        return Err("Kein TMDb-Key gesetzt".into());
+    }
+    let tmdb_id: i64 = {
+        let conn = state.conn.lock().unwrap();
+        conn.query_row("SELECT tmdb_id FROM shows WHERE id=?1", [show_id], |r| r.get::<_, Option<i64>>(0))
+            .map_err(err)?
+            .ok_or("Serie ist nicht mit TMDb verknüpft – zuerst identifizieren")?
+    };
+    let tmdb = Tmdb::new(state.http.clone(), key, lang);
+    let names: Vec<(i64, String)> = tmdb
+        .season_episodes(tmdb_id, season)
+        .await
+        .map_err(err)?
+        .into_iter()
+        .filter_map(|e| e.title.map(|t| (e.episode, t)))
+        .collect();
+    if names.is_empty() {
+        return Err("TMDb kennt keine Folgen für diese Staffel".into());
+    }
+
+    fn norm(s: &str) -> String {
+        crate::parser::letters_only(s).to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+    /// trailing title text of a filename stem: everything after the SxxEyy tag
+    fn candidate_of(stem: &str) -> Option<String> {
+        let re = regex::Regex::new(r"(?i)s\d{1,2}\s*[-. _]*e\d{1,3}[-. _]*").ok()?;
+        let m = re.find(stem)?;
+        let rest = &stem[m.end()..];
+        let c = norm(rest);
+        if c.len() < 3 { None } else { Some(c) }
+    }
+
+    // collect this season's episodes (id, primary path)
+    let eps: Vec<(i64, String, i64)> = {
+        let conn = state.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, path, episode FROM episodes WHERE show_id=?1 AND season=?2")
+            .map_err(err)?;
+        let rows = stmt
+            .query_map(params![show_id, season], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(err)?;
+        rows
+    };
+    let total = eps.len() as i64;
+
+    // match candidates against real titles: exact, candidate-prefix-of-title
+    // (≥4 chars), or title-prefix-of-candidate (release junk after the title)
+    let normed: Vec<(i64, String)> = names.iter().map(|(n, t)| (*n, norm(t))).collect();
+    let mut assign: Vec<(i64, i64)> = Vec::new(); // (episode_row_id, real_number)
+    let mut claimed: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    for (eid, path, _) in &eps {
+        let stem = std::path::Path::new(path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let Some(cand) = candidate_of(&stem) else { continue };
+        let mut hits: Vec<i64> = Vec::new();
+        for (num, t) in &normed {
+            let hit = cand == *t
+                || (cand.len() >= 4 && t.starts_with(&cand))
+                || (t.len() >= 4 && cand.starts_with(t.as_str()));
+            if hit {
+                hits.push(*num);
+            }
+        }
+        hits.dedup();
+        if hits.len() == 1 && !claimed.contains(&hits[0]) {
+            claimed.insert(hits[0]);
+            assign.push((*eid, hits[0]));
+        }
+    }
+    let matched = assign.len() as i64;
+
+    if matched > 0 {
+        let conn = state.conn.lock().unwrap();
+        // two-phase renumber to dodge UNIQUE(show,season,episode)
+        for (eid, _) in &eps.iter().map(|(e, _, _)| (*e, ())).collect::<Vec<_>>() {
+            conn.execute("UPDATE episodes SET episode = -id WHERE id=?1", [eid]).map_err(err)?;
+        }
+        for (eid, real) in &assign {
+            conn.execute("UPDATE episodes SET episode=?2 WHERE id=?1", params![eid, real]).map_err(err)?;
+            // remember it per file so every rescan/rebuild re-applies the fix
+            for p in db::file_paths_of_episode(&conn, *eid).map_err(err)? {
+                let _ = db::set_placement(&conn, &p, tmdb_id, season, *real);
+            }
+        }
+        // unmatched files: keep their old number when free, else next free slot
+        for (eid, _, old_num) in &eps {
+            if assign.iter().any(|(a, _)| a == eid) {
+                continue;
+            }
+            let mut n = (*old_num).max(1);
+            loop {
+                let taken: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM episodes WHERE show_id=?1 AND season=?2 AND episode=?3 AND id<>?4",
+                        params![show_id, season, n, eid],
+                        |r| r.get(0),
+                    )
+                    .map_err(err)?;
+                if taken == 0 {
+                    break;
+                }
+                n += 1;
+            }
+            conn.execute("UPDATE episodes SET episode=?2 WHERE id=?1", params![eid, n]).map_err(err)?;
+        }
+        let _ = db::set_all_episode_primaries(&conn);
+    }
+
+    // reload the real titles/images for the season
+    if let Ok(fetched) = tmdb.season_episodes(tmdb_id, season).await {
+        let conn = state.conn.lock().unwrap();
+        for e in fetched {
+            let _ = db::update_episode_meta(
+                &conn, show_id, season, e.episode, e.title.as_deref(), e.overview.as_deref(),
+                e.still_path.as_deref(), e.air_date.as_deref(), e.runtime,
+            );
+        }
+    }
+    let _ = app.emit("library://updated", ());
+    Ok((matched, total))
+}
+
 /// Basic file facts for the "Dateiinfo" dialog.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]

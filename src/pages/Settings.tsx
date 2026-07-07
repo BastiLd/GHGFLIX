@@ -670,12 +670,19 @@ export default function Settings() {
           </Section>
 
           <Section title="Scrollen" desc="Verhalten des seitlichen Scrollens (Tilt-Rad / Shift+Mausrad) in den Reihen.">
-            <div className="flex gap-4 flex-wrap items-end">
+            <div className="flex gap-4 flex-wrap items-end mb-3">
               <PrefNumber k="scrollSpeed" label="Scroll-Geschwindigkeit (×)" min={0.5} max={4} step={0.1} />
               <div className="pb-1">
                 <PrefToggle k="scrollSmooth" label="Sanftes Gleiten (aus = direkt)" />
               </div>
             </div>
+            <PrefToggle k="wheelRowScroll" label="Normales Mausrad scrollt Reihen seitwärts (wenn der Zeiger über einer Reihe ist)" />
+            <p className="text-xs text-ghg-muted mt-2">
+              MX Master / Logitech: Falls das Daumenrad hier nichts tut, stelle in{" "}
+              <span className="text-ghg-text">Logi Options+ → Maus → Daumenrad</span> die Aktion auf{" "}
+              <span className="text-ghg-text">„Horizontaler Bildlauf"</span> (ggf. app-spezifisch für ghgflix.exe).
+              Alternativ den Schalter oben aktivieren oder Shift+Mausrad nutzen.
+            </p>
           </Section>
 
           <Section

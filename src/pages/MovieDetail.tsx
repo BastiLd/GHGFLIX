@@ -95,9 +95,9 @@ export default function MovieDetail() {
       </div>
 
       <div className="px-10 -mt-32 relative flex gap-8">
-        <div className="relative w-52 shrink-0 aspect-[2/3] rounded-xl overflow-hidden border border-ghg-line shadow-2xl bg-ghg-surface2">
+        <div className="relative w-52 shrink-0 aspect-[2/3] rounded-xl overflow-hidden border border-ghg-line shadow-2xl bg-ghg-bg2">
           {posterUrl(m.posterPath, "w500") ? (
-            <img src={posterUrl(m.posterPath, "w500")!} alt="" className="w-full h-full object-cover" />
+            <img src={posterUrl(m.posterPath, "w500")!} alt="" className="w-full h-full object-contain" />
           ) : (
             <div className="w-full h-full flex items-center justify-center p-3 text-center text-ghg-muted">{m.title}</div>
           )}

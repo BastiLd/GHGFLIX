@@ -76,6 +76,9 @@ export const reassignSeason = (showId: number, season: number, targetTmdb: numbe
 /** Move one episode onto another TMDb show as SxxEyy. Returns the target show id. */
 export const reassignEpisode = (episodeId: number, targetTmdb: number, season: number, episode: number) =>
   invoke<number>("reassign_episode", { episodeId, targetTmdb, season, episode });
+/** Renumber a season by matching filename titles against TMDb episode names. Returns [matched, total]. */
+export const repairSeasonTitles = (showId: number, season: number) =>
+  invoke<[number, number]>("repair_season_titles", { showId, season });
 
 // ===== progress =====
 export const setProgress = (

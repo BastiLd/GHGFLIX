@@ -17,11 +17,14 @@ export function ArtworkDialog({
   onClose,
   target,
   onDone,
+  initialTab,
 }: {
   open: boolean;
   onClose: () => void;
   target: ArtworkTarget;
   onDone?: () => void;
+  /** open directly on "poster" or "backdrop" (separate Poster/Banner buttons) */
+  initialTab?: Tab;
 }) {
   const toast = useStore((s) => s.toast);
   const qc = useQueryClient();
@@ -34,13 +37,14 @@ export function ArtworkDialog({
     if (target.target === "season") return ["poster"];
     return ["still"];
   }, [target.target]);
-  const [tab, setTab] = useState<Tab>(tabs[0]);
+  const [tab, setTab] = useState<Tab>(initialTab && tabs.includes(initialTab) ? initialTab : tabs[0]);
 
   const mediaType = target.target === "movie" ? "movie" : target.target === "show" ? "tv" : target.target;
 
   useEffect(() => {
     if (!open) return;
-    setTab(tabs[0]);
+    setTab(initialTab && tabs.includes(initialTab) ? initialTab : tabs[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, tabs]);
 
   useEffect(() => {

@@ -52,7 +52,12 @@ function animate(el: HTMLElement) {
 
 export function installHorizontalWheel(): () => void {
   const onWheel = (e: WheelEvent) => {
-    const horiz = e.deltaX !== 0 ? e.deltaX : e.shiftKey ? e.deltaY : 0;
+    let horiz = e.deltaX !== 0 ? e.deltaX : e.shiftKey ? e.deltaY : 0;
+    // opt-in for mice whose tilt/thumb wheel never reaches the app (some MX
+    // Master setups): plain vertical wheel scrolls the hovered row sideways
+    if (horiz === 0 && e.deltaY !== 0 && uiPrefs().wheelRowScroll && !e.ctrlKey && !e.altKey) {
+      horiz = e.deltaY;
+    }
     if (horiz === 0) return;
     const el = findScrollable(e.target);
     if (!el) return;
