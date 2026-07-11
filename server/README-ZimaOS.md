@@ -34,6 +34,26 @@ Der Server scannt automatisch im Hintergrund; Fortschritt siehst du direkt im
 Bibliotheken-Panel. Ordner wieder entfernen (🗑) nimmt nur den Eintrag aus
 GHGFlix raus — deine Dateien auf der Platte bleiben unangetastet.
 
+### Wichtig: Platten müssen im Container sichtbar sein
+
+Der Server sieht nur, was du ihm als **Volume** eingebunden hast. Liegen deine
+Platten bei ZimaOS **nicht** unter `/DATA` oder `/media`, sondern an eigenen
+Pfaden (z. B. `/Toshiba/…`, `/Samsung/…`), musst du sie beim Installieren im
+**Speicher**-Bereich hinzufügen — links der ZimaOS-Pfad, rechts der
+Container-Pfad. Beispiel für drei Platten:
+
+| ZimaOS (Host) | Container |
+|---|---|
+| `/Toshiba/TO-MOONDOOM` | `/media/Toshiba` |
+| `/Samsung 3 Platte/SM3-MOONDOOM` | `/media/Samsung3` |
+| `/Samsung/SM-MOONDOOM` | `/media/Samsung` |
+| `/DATA/AppData/ghgflix/data` | `/data` |
+
+Danach findest du im Ordner-Browser (bzw. bei „Automatisch erkennen“) alle
+drei Platten unter `/media`. Am einfachsten: nimm die bereits fertig
+ausgefüllte `docker-compose.zimaos.yml` (falls für dich generiert) — da sind
+diese Mounts schon drin.
+
 Beim ersten Start scannt der Server die Bibliothek. TMDb-Key (für Poster und
 Beschreibungen — derselbe Key wie in der PC-App) entweder in der Compose-Datei
 bei `TMDB_API_KEY` eintragen oder später in der Web-Oberfläche unter
@@ -61,15 +81,18 @@ ein, und im Modus **„Automatisch“** wird immer die erste erreichbare gewähl
 
 ## App-Icon in ZimaOS
 
-Für das **„Icon URL“**-Feld beim Installieren in ZimaOS kannst du das
-mitgelieferte GHGFlix-Logo verwenden:
+Für das **„Icon URL“**-Feld beim Installieren in ZimaOS die Adresse des
+**Servers selbst** verwenden (funktioniert zuverlässig, weil der Server das
+SVG mit dem richtigen Bildtyp ausliefert):
 
 ```
-https://raw.githubusercontent.com/BastiLd/GHGFLIX/main/server/web/icon.svg
+http://<zimaboard-ip>:8484/icon.svg
 ```
 
-Oder — sobald der Container läuft — die Adresse des Servers selbst:
-`http://<zimaboard-ip>:8484/icon.svg`
+(z. B. `http://192.168.68.10:8484/icon.svg`)
+
+> Ein `raw.githubusercontent.com`-Link funktioniert hier **nicht** — GitHub
+> liefert SVGs als reinen Text aus, dann zeigt ZimaOS kein Bild.
 
 ## 3. Handy
 

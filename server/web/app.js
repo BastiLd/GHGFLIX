@@ -7,6 +7,21 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const app = $("#app");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+// Line icons that match the desktop app's lucide set (House/Film/Tv/Settings…).
+const ICONS = {
+  home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/>',
+  film: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/>',
+  tv: '<rect width="20" height="15" x="2" y="7" rx="2" ry="2"/><path d="m17 2-5 5-5-5"/>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  hdd: '<line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" x2="6.01" y1="16" y2="16"/><line x1="10" x2="10.01" y1="16" y2="16"/>',
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  sparkles: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z"/>',
+};
+const svgIcon = (name, size = 20) =>
+  `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block">${ICONS[name] || ""}</svg>`;
+
 // ── connection manager ──────────────────────────────────────────────────────
 // Saved endpoints (Lokal / Domain / Tailscale). When the PWA shell loads but
 // the current origin is unreachable (e.g. you left the house), it pings the
@@ -104,10 +119,10 @@ const wordmark = (fontSize = 26) => `
   </div>`;
 
 const NAV = [
-  { id: "home", hash: "#/", label: "Start", ic: "🏠" },
-  { id: "movies", hash: "#/movies", label: "Filme", ic: "🎬" },
-  { id: "shows", hash: "#/shows", label: "Serien", ic: "📺" },
-  { id: "settings", hash: "#/settings", label: "Einstellungen", ic: "⚙️" },
+  { id: "home", hash: "#/", label: "Start", icon: "home" },
+  { id: "movies", hash: "#/movies", label: "Filme", icon: "film" },
+  { id: "shows", hash: "#/shows", label: "Serien", icon: "tv" },
+  { id: "settings", hash: "#/settings", label: "Einstellungen", icon: "settings" },
 ];
 
 let lastCounts = { shows: null, movies: null };
@@ -121,7 +136,7 @@ function shell(active, inner) {
         <nav>
           ${NAV.map((n) => `
             <button class="navitem ${active === n.id ? "active" : ""}" onclick="location.hash='${n.hash}'">
-              <span class="ic">${n.ic}</span><span class="lbl">${n.label}</span>
+              <span class="ic">${svgIcon(n.icon)}</span><span class="lbl">${n.label}</span>
               ${n.id === "movies" && lastCounts.movies != null ? `<span class="count">${lastCounts.movies}</span>` : ""}
               ${n.id === "shows" && lastCounts.shows != null ? `<span class="count">${lastCounts.shows}</span>` : ""}
             </button>`).join("")}
@@ -134,11 +149,11 @@ function shell(active, inner) {
       <div class="main">
         <div class="topbar">
           <div class="searchwrap">
-            <span class="si">🔍</span>
+            <span class="si">${svgIcon("search", 18)}</span>
             <input class="search" id="topsearch" placeholder="Suchen …" value="${esc(active === "search" ? currentQuery : "")}">
           </div>
           <div class="spacer"></div>
-          <button class="iconbtn" id="rescanTop" title="Bibliothek scannen">↻</button>
+          <button class="iconbtn" id="rescanTop" title="Bibliothek scannen">${svgIcon("refresh", 18)}</button>
         </div>
         <div class="content"><div class="page">${inner}</div></div>
       </div>
@@ -523,12 +538,12 @@ async function openBrowseModal(onPick) {
         <div class="breadcrumb">${isRoots ? "Alle eingebundenen Laufwerke" : esc(data.path)}</div>
         <div class="browse-list">
           ${!isRoots && data.parent ? `<button class="browse-item up" data-p="${esc(data.parent)}">‹ .. (zurück)</button>` : ""}
-          ${data.entries.map((e) => `<button class="browse-item" data-p="${esc(e.path)}">${isRoots ? "💽" : "📁"} ${esc(e.name)}</button>`).join("") || '<div class="hint" style="padding:8px 4px">Keine Unterordner hier</div>'}
+          ${data.entries.map((e) => `<button class="browse-item" data-p="${esc(e.path)}">${svgIcon(isRoots ? "hdd" : "folder", 18)} ${esc(e.name)}</button>`).join("") || '<div class="hint" style="padding:8px 4px">Keine Unterordner hier</div>'}
         </div>
         ${isRoots ? '<p class="hint">Öffne die Platte, auf der deine Filme/Serien liegen, und navigiere in den passenden Ordner.</p>' : `
         <div class="btnrow" style="margin-top:14px">
-          <button class="btn" id="pickShow">📺 Als Serien-Ordner</button>
-          <button class="btn ghost" id="pickMovie">🎬 Als Film-Ordner</button>
+          <button class="btn" id="pickShow">${svgIcon("tv", 16)} Als Serien-Ordner</button>
+          <button class="btn ghost" id="pickMovie">${svgIcon("film", 16)} Als Film-Ordner</button>
         </div>`}
       </div>`;
     overlay.querySelectorAll(".browse-item").forEach((b) => (b.onclick = () => render(b.dataset.p)));
@@ -607,16 +622,16 @@ async function viewSettings() {
         .map(
           (l) => `
         <div class="libitem">
-          <span class="tag ${l.kind === "show" ? "ok" : ""}">${l.kind === "show" ? "📺 Serien" : "🎬 Filme"}</span>
+          <span class="tag ${l.kind === "show" ? "ok" : ""}">${l.kind === "show" ? "Serien" : "Filme"}</span>
           <span class="lp">${esc(l.path)}</span>
-          <button class="iconbtn" data-libdel="${l.id}" title="Entfernen">🗑</button>
+          <button class="iconbtn" data-libdel="${l.id}" title="Entfernen">✕</button>
         </div>`,
         )
         .join("") || '<div class="hint" style="margin:8px 0">Noch keine Bibliothek. Klick auf <b>Automatisch erkennen</b> — das durchsucht alle Laufwerke.</div>'}</div>
       <div class="btnrow">
-        <button class="btn" id="detectLib">✨ Automatisch erkennen</button>
-        <button class="btn ghost" id="addLib">+ Ordner hinzufügen</button>
-        <button class="btn ghost" id="rescan">↻ Neu scannen</button>
+        <button class="btn" id="detectLib">${svgIcon("sparkles", 16)} Automatisch erkennen</button>
+        <button class="btn ghost" id="addLib">${svgIcon("folder", 16)} Ordner hinzufügen</button>
+        <button class="btn ghost" id="rescan">${svgIcon("refresh", 16)} Neu scannen</button>
       </div>
       <div class="field" style="margin-top:14px"><label>TMDb API-Key (für Poster & Beschreibungen)</label><input id="tmdb" placeholder="${s.tmdb_key_set ? "•••••• (gesetzt)" : "z.B. 1ab2c3…"}"></div>
       <p class="hint">Mehrere Platten werden automatisch mitgesucht (alles, was im Container unter <code>/media</code>, <code>/DATA</code> oder <code>/mnt</code> eingebunden ist). „Automatisch erkennen“ findet Film-/Serienordner von selbst; mit „Ordner hinzufügen“ klickst du dich manuell durch alle Laufwerke.</p>
