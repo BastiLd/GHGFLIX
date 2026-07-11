@@ -9,6 +9,7 @@ import { MiniPlayer } from "./components/MiniPlayer";
 import { openCtx } from "./lib/contextmenu";
 import { scanLibraries } from "./lib/api";
 import { loadAccent, useUiPrefs } from "./lib/uiPrefs";
+import { loadServerConfig, startServerSync } from "./lib/serverSync";
 import { useGlobalHorizontalWheel } from "./lib/useHorizontalWheel";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
@@ -87,6 +88,13 @@ export default function App() {
   // custom accent color persists across restarts
   useEffect(() => {
     loadAccent();
+  }, []);
+
+  // background sync with a GHGFlix server (ZimaOS box), if configured
+  useEffect(() => {
+    void loadServerConfig().then((cfg) => {
+      if (cfg.enabled) startServerSync();
+    });
   }, []);
 
   const defaultMenu = (e: React.MouseEvent) =>

@@ -49,6 +49,7 @@ import { useStore } from "../lib/store";
 import { applyAccent, loadAccent, useUiPrefs, type UiPrefs } from "../lib/uiPrefs";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getSession, reinitSupabase, signOut } from "../lib/supabase";
+import { loadServerConfig, loginServer, saveServerConfig, startServerSync, syncOnce, testServer, type ServerConfig } from "../lib/serverSync";
 import { Button, InfoButton, Modal, Spinner, TextInput } from "../components/ui";
 import { ThemeStore } from "../components/ThemeStore";
 
@@ -823,6 +824,22 @@ export default function Settings() {
             </p>
           </Section>
 
+          <Section
+            title="Player verlassen (← und ✕)"
+            desc="Was der Zurück-Pfeil und das X oben links im Player machen. Standard: Pfeil → Mini-Player, X → Player komplett schließen."
+          >
+            <div className="grid sm:grid-cols-2 gap-x-6 mb-3">
+              <PrefToggle k="showCloseX" label="X-Knopf im Player anzeigen" />
+            </div>
+            <div className="flex gap-4 flex-wrap">
+              <PrefSelect k="backButtonAction" label="Zurück-Pfeil (←)" options={[["mini", "Mini-Player öffnen"], ["close", "Player schließen"]]} className="flex-1 min-w-48" />
+              <PrefSelect k="xButtonAction" label="X-Knopf (✕)" options={[["close", "Player schließen"], ["mini", "Mini-Player öffnen"]]} className="flex-1 min-w-48" />
+            </div>
+            <p className="text-xs text-ghg-muted mt-3">
+              „Mini-Player öffnen“ greift nur, wenn der Mini-Player oben aktiviert ist – sonst wird geschlossen.
+            </p>
+          </Section>
+
           <Section title="Seek-Vorschau" desc="Das Vorschaubild beim Ziehen/Überfahren der Zeitleiste.">
             <div className="grid sm:grid-cols-2 gap-x-6 mb-3">
               <PrefToggle k="thumbEnabled" label="Vorschaubilder anzeigen" />
@@ -1193,6 +1210,8 @@ export default function Settings() {
         </Section>
       )}
 
+      {tab === "konto" && <ServerSyncSection />}
+
       {tab === "konto" && (
         <Section
           title="Konto & Sync (Supabase)"
@@ -1297,5 +1316,139 @@ export default function Settings() {
         </div>
       </Modal>
     </div>
+  );
+}
+
+/** Sync with a GHGFlix server (ZimaOS/Docker) — addresses for Lokal/Domain/
+ *  Tailscale with automatic switching, optional password, manual sync. */
+function ServerSyncSection() {
+  const toast = useStore((s) => s.toast);
+  const [cfg, setCfg] = useState<ServerConfig | null>(null);
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<Record<number, "ok" | "fail" | "…">>({});
+
+  useEffect(() => {
+    void loadServerConfig().then(setCfg);
+  }, []);
+  if (!cfg) return null;
+
+  const update = (patch: Partial<ServerConfig>) => setCfg({ ...cfg, ...patch });
+  const updateEndpoint = (i: number, patch: Partial<{ name: string; url: string }>) => {
+    const endpoints = cfg.endpoints.map((e, j) => (j === i ? { ...e, ...patch } : e));
+    update({ endpoints });
+  };
+
+  const save = async () => {
+    const clean = { ...cfg, endpoints: cfg.endpoints.filter((e) => e.url.trim()) };
+    await saveServerConfig(clean);
+    setCfg(clean);
+    if (clean.enabled) startServerSync();
+    toast("Server-Sync gespeichert", "success");
+  };
+
+  const test = async (i: number) => {
+    setStatus((s) => ({ ...s, [i]: "…" }));
+    const r = await testServer(cfg.endpoints[i].url);
+    setStatus((s) => ({ ...s, [i]: r.ok ? "ok" : "fail" }));
+    if (r.ok) toast(`Verbunden: ${r.name ?? "GHGFlix"}${r.auth ? " (Passwort nötig)" : ""}`, "success");
+    else toast("Nicht erreichbar", "error");
+  };
+
+  const login = async () => {
+    const base = cfg.mode === "manual" && cfg.manualUrl ? cfg.manualUrl : cfg.endpoints[0]?.url;
+    if (!base) return toast("Zuerst eine Adresse eintragen", "error");
+    const token = await loginServer(base, pw);
+    if (token) {
+      update({ token });
+      await saveServerConfig({ ...cfg, token });
+      toast("Angemeldet — Token gespeichert", "success");
+      setPw("");
+    } else toast("Anmeldung fehlgeschlagen", "error");
+  };
+
+  const syncNow = async () => {
+    setBusy(true);
+    try {
+      const r = await syncOnce();
+      toast(r ? `Sync fertig: ${r.pushed} gesendet, ${r.pulled} empfangen` : "Kein Server erreichbar (oder Sync aus)", r ? "success" : "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section
+      title="GHGFlix-Server (ZimaOS)"
+      desc="Fortschritt automatisch mit deinem eigenen GHGFlix-Server abgleichen — zuhause über die lokale IP, unterwegs über Domain oder Tailscale. Bei „Automatisch“ nimmt die App immer die erste erreichbare Adresse."
+    >
+      <label className="flex items-center gap-3 mb-3 cursor-pointer">
+        <input type="checkbox" checked={cfg.enabled} onChange={(e) => update({ enabled: e.target.checked })} className="w-4 h-4 accent-ghg-red" />
+        <span>Sync mit GHGFlix-Server aktivieren</span>
+      </label>
+
+      <label className="block mb-3 max-w-xs">
+        <span className="text-xs uppercase tracking-wide text-ghg-muted">Verbindungsmodus</span>
+        <select
+          value={cfg.mode}
+          onChange={(e) => update({ mode: e.target.value as "auto" | "manual" })}
+          className="w-full bg-ghg-bg2 border border-ghg-line rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-ghg-red"
+        >
+          <option value="auto">Automatisch (erste erreichbare Adresse)</option>
+          <option value="manual">Manuell (feste Adresse)</option>
+        </select>
+      </label>
+
+      {cfg.mode === "manual" ? (
+        <label className="block mb-3">
+          <span className="text-xs uppercase tracking-wide text-ghg-muted">Server-Adresse</span>
+          <TextInput value={cfg.manualUrl} onChange={(v) => update({ manualUrl: v })} placeholder="http://192.168.1.50:8484" />
+        </label>
+      ) : (
+        <div className="space-y-2 mb-3">
+          {cfg.endpoints.map((e, i) => (
+            <div key={i} className="flex gap-2 items-center">
+              <div className="w-36">
+                <TextInput value={e.name} onChange={(v) => updateEndpoint(i, { name: v })} placeholder="z.B. Zuhause" />
+              </div>
+              <div className="flex-1">
+                <TextInput value={e.url} onChange={(v) => updateEndpoint(i, { url: v })} placeholder="http://192.168.1.50:8484" />
+              </div>
+              <Button variant="ghost" onClick={() => void test(i)}>
+                {status[i] === "…" ? "…" : status[i] === "ok" ? "✓" : status[i] === "fail" ? "✗" : "Testen"}
+              </Button>
+              <Button variant="danger" onClick={() => update({ endpoints: cfg.endpoints.filter((_, j) => j !== i) })}>
+                ✕
+              </Button>
+            </div>
+          ))}
+          <Button variant="ghost" onClick={() => update({ endpoints: [...cfg.endpoints, { name: "", url: "" }] })}>
+            + Adresse (Lokal / Domain / Tailscale)
+          </Button>
+        </div>
+      )}
+
+      <div className="flex gap-2 items-end flex-wrap mb-4">
+        <label className="block">
+          <span className="text-xs uppercase tracking-wide text-ghg-muted">Server-Passwort (falls gesetzt)</span>
+          <TextInput value={pw} onChange={setPw} type="password" placeholder="••••••" />
+        </label>
+        <Button variant="ghost" onClick={() => void login()}>
+          Anmelden
+        </Button>
+        {cfg.token && <span className="text-xs text-ghg-muted pb-2">Token gespeichert ✓</span>}
+      </div>
+
+      <div className="flex gap-2 flex-wrap">
+        <Button onClick={() => void save()}>Speichern</Button>
+        <Button variant="ghost" onClick={() => void syncNow()} disabled={busy}>
+          {busy ? "Synchronisiert …" : "Jetzt synchronisieren"}
+        </Button>
+      </div>
+      <p className="text-xs text-ghg-muted mt-3">
+        Der Abgleich läuft alle 30 Sekunden im Hintergrund (über TMDb-Zuordnung, funktioniert also auch wenn die
+        Dateien auf PC und Server unterschiedlich heißen). Anleitung zum Server: server/README-ZimaOS.md im Repo.
+      </p>
+    </Section>
   );
 }

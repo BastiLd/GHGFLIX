@@ -347,30 +347,37 @@ export default function Player() {
     await w.setSize(new LogicalSize(1280, 800)).catch(() => {});
   }, []);
 
-  const goBack = useCallback(async () => {
-    saveProgress();
-    if (fullscreen) await getCurrentWindow().setFullscreen(false).catch(() => {});
-    if (pipRef.current) {
-      await restoreWindow();
-      pipRef.current = false;
-    }
-    // Back → YouTube-style mini player (default; configurable). The video keeps
-    // playing in the corner while the user browses the library.
-    const { type: t, id: i } = itemRef.current;
-    if (prefsRef.current.miniPlayer && videoReadyRef.current && !errorRef.current && pathRef.current) {
-      playback().setHandoff(true);
-      playback().setMini({
-        mediaType: t,
-        mediaId: i,
-        title: titleRef.current,
-        subtitle: subtitleRef.current,
-        path: pathRef.current,
-      });
-    }
-    // Replace the /play entry so a later "back" on the detail page goes to the
-    // overview the user actually came from — never back into the player.
-    navigate(backTargetRef.current, { replace: true });
-  }, [fullscreen, navigate, restoreWindow, saveProgress]);
+  /** Leave the player. "mini" hands the video off to the corner mini player
+   *  (if enabled + a video is actually running), "close" always stops playback.
+   *  Which button does what is user-configurable (Einstellungen → Wiedergabe). */
+  const leavePlayer = useCallback(
+    async (action: "mini" | "close") => {
+      saveProgress();
+      if (fullscreen) await getCurrentWindow().setFullscreen(false).catch(() => {});
+      if (pipRef.current) {
+        await restoreWindow();
+        pipRef.current = false;
+      }
+      const { type: t, id: i } = itemRef.current;
+      if (action === "mini" && prefsRef.current.miniPlayer && videoReadyRef.current && !errorRef.current && pathRef.current) {
+        playback().setHandoff(true);
+        playback().setMini({
+          mediaType: t,
+          mediaId: i,
+          title: titleRef.current,
+          subtitle: subtitleRef.current,
+          path: pathRef.current,
+        });
+      }
+      // Replace the /play entry so a later "back" on the detail page goes to the
+      // overview the user actually came from — never back into the player.
+      navigate(backTargetRef.current, { replace: true });
+    },
+    [fullscreen, navigate, restoreWindow, saveProgress],
+  );
+
+  const goBack = useCallback(() => leavePlayer(prefsRef.current.backButtonAction), [leavePlayer]);
+  const closePlayer = useCallback(() => leavePlayer(prefsRef.current.xButtonAction), [leavePlayer]);
 
   const handleEnd = useCallback(() => {
     saveProgress(true);
@@ -671,7 +678,9 @@ export default function Player() {
           path = ep.path;
           setTitle(ep.showTitle || "Folge");
           setSubtitle(`${seasonEpisodeLabel(ep.season, ep.episode)}${ep.title ? " · " + ep.title : ""}`);
-          backTargetRef.current = `/show/${ep.showId}`;
+          // remember the season so the detail page reopens on the RIGHT tab
+          // (S6E3 → back must land on Staffel 6, not Staffel 1)
+          backTargetRef.current = `/show/${ep.showId}?season=${ep.season}`;
           if (ep.introStart != null && ep.introEnd != null && ep.introEnd > ep.introStart + 2) {
             introWindowRef.current = { start: ep.introStart, end: ep.introEnd };
           }
@@ -1231,9 +1240,14 @@ export default function Player() {
       {/* top bar */}
       <div className={`absolute top-0 left-0 right-0 p-5 bg-gradient-to-b from-black/80 to-transparent transition-opacity duration-300 ${showUi && !pip ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
         <div className="flex items-center gap-4">
-          <button onClick={goBack} className="p-2 rounded-lg bg-black/40 hover:bg-ghg-red transition">
+          <button onClick={goBack} title={prefsRef.current.backButtonAction === "mini" ? "Zurück (Mini-Player)" : "Zurück (Player schließen)"} className="p-2 rounded-lg bg-black/40 hover:bg-ghg-red transition">
             <ArrowLeft className="w-5 h-5" />
           </button>
+          {prefsRef.current.showCloseX && (
+            <button onClick={closePlayer} title={prefsRef.current.xButtonAction === "close" ? "Player schließen" : "Mini-Player öffnen"} className="p-2 rounded-lg bg-black/40 hover:bg-ghg-red transition">
+              <X className="w-5 h-5" />
+            </button>
+          )}
           <div>
             <p className="font-bold text-lg leading-tight flex items-center gap-2">
               {title}

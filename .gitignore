@@ -29,3 +29,7 @@ src-tauri/target/
 # secrets
 *.env
 .env.*
+
+# GHGFlix personal server config (enthält TMDb-Key)
+server/docker-compose.zimaos.yml
+docker-compose.zimaos.yml

@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { ArrowLeft, Check, ImageIcon, MoreVertical, Pencil, Play, Plus, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { listShows } from "../lib/api";
 import { ShowCardItem } from "../components/cards";
 import { MediaRow } from "../components/MediaRow";
@@ -24,6 +24,7 @@ export default function ShowDetail() {
   const { id } = useParams();
   const sid = Number(id);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const profileId = useStore((s) => s.profileId);
   const [identify, setIdentify] = useState<IdentifyTarget | null>(null);
   const [artwork, setArtwork] = useState<ArtworkTarget | null>(null);
@@ -82,12 +83,24 @@ export default function ShowDetail() {
 
   const seasons = detail.data?.seasons ?? [];
 
+  // Initial season tab: ?season=N in the URL (set by the player's back button)
+  // wins, then the last tab the user had open on THIS show, then the first
+  // season — so coming back from S6E3 lands on Staffel 6, never Staffel 1.
   useEffect(() => {
     if (selectedSeason === null && seasons.length > 0) {
+      const has = (n: number) => seasons.some((s) => s.season === n);
+      const fromUrl = parseInt(searchParams.get("season") ?? "", 10);
+      const fromLast = parseInt(sessionStorage.getItem(`ghgflix.season.${sid}`) ?? "", 10);
       const firstReal = seasons.find((s) => s.season > 0) ?? seasons[0];
-      setSelectedSeason(firstReal.season);
+      const pick = has(fromUrl) ? fromUrl : has(fromLast) ? fromLast : firstReal.season;
+      setSelectedSeason(pick);
     }
-  }, [seasons, selectedSeason]);
+  }, [seasons, selectedSeason, searchParams, sid]);
+
+  // remember the open tab so plain browser-back also restores it
+  useEffect(() => {
+    if (selectedSeason !== null) sessionStorage.setItem(`ghgflix.season.${sid}`, String(selectedSeason));
+  }, [selectedSeason, sid]);
 
   if (detail.isLoading) return <SkeletonDetail />;
 

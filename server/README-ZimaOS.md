@@ -1,0 +1,108 @@
+# GHGFlix Server auf ZimaOS installieren
+
+Dein eigener Plex/Jellyfin-Ersatz mit der GHGFlix-Oberfläche — läuft als
+Docker-Container auf dem ZimaBoard/ZimaCube und streamt an Browser, Handy
+(Expo-App oder PWA) und synchronisiert mit der PC-App.
+
+## 1. Installation (copy & paste)
+
+1. ZimaOS öffnen → **App Store** → oben rechts **„+“** → **Install a customized app**
+2. Auf **Import** (Docker Compose) klicken
+3. Den kompletten Inhalt von [`docker-compose.yml`](docker-compose.yml) einfügen
+4. **Nur den einen Medien-Pfad prüfen/anpassen** (linke Seite der ersten `volumes:`-Zeile, `/DATA`):
+   - Das ist bei ZimaOS normalerweise der **gesamte Speicherpool** — also
+     automatisch **alle deine Platten in einem**, egal wie viele es sind.
+   - Hast du zusätzlich eine Platte, die *nicht* im Pool steckt (z. B. eine
+     lose angeschlossene externe Platte), häng einfach eine weitere
+     `volumes:`-Zeile an (Beispiel steht als Kommentar in der Datei).
+5. **Install** drücken. Fertig!
+
+Danach im Browser öffnen: **`http://<zimaboard-ip>:8484`**
+
+### Bibliotheken einrichten (mehrere Ordner/Platten — ohne Docker-Bearbeiten)
+
+Welche Unterordner Serien und welche Filme sind, entscheidest du **in der
+GHGFlix-Weboberfläche**, nicht im docker-compose:
+
+1. **⚙️ Einstellungen → Bibliotheken → „+ Ordner hinzufügen“**
+2. Im Ordner-Browser durchklicken (auch über mehrere Platten hinweg, die
+   alle unter dem einen `/DATA`-Mount sichtbar sind)
+3. Pro Ordner auswählen: **„Als Serien-Bibliothek“** oder **„Als
+   Film-Bibliothek“** — beliebig oft wiederholen, für jede Platte/jeden
+   Ordner einzeln
+4. Der Server scannt automatisch im Hintergrund; Fortschritt siehst du direkt
+   im Bibliotheken-Panel
+
+Ordner wieder entfernen (🗑-Knopf) nimmt nur den Eintrag aus GHGFlix raus —
+deine Dateien auf der Platte bleiben unangetastet.
+
+Beim ersten Start scannt der Server die Bibliothek. TMDb-Key (für Poster und
+Beschreibungen — derselbe Key wie in der PC-App) entweder in der Compose-Datei
+bei `TMDB_API_KEY` eintragen oder später in der Web-Oberfläche unter
+**⚙️ Einstellungen → Bibliotheken**.
+
+## 2. Zugriff von unterwegs
+
+Der Server ist unter beliebig vielen Adressen gleichzeitig nutzbar — in der
+Web-App und Handy-App trägst du alle unter **Einstellungen → Verbindungen**
+ein, und im Modus **„Automatisch“** wird immer die erste erreichbare gewählt
+(zuhause → lokale IP, unterwegs → Tailscale/Domain). Manuell geht auch.
+
+### Weg A: Tailscale (empfohlen, kein Portfreigabe-Gefummel)
+1. Tailscale-App aus dem ZimaOS App Store installieren und anmelden
+2. Tailscale auch auf Handy/Laptop installieren (gleiches Konto)
+3. Adresse eintragen: `http://<zimaboard-tailscale-name>:8484`
+   (z.B. `http://zimaboard.tail1234.ts.net:8484`)
+
+### Weg B: Eigene Domain
+1. Portfreigabe im Router **oder** Reverse-Proxy (z.B. Nginx Proxy Manager aus
+   dem ZimaOS App Store) mit HTTPS auf Port 8484
+2. Adresse eintragen: `https://flix.deinedomain.de`
+3. **Wichtig:** In den Server-Einstellungen ein Passwort setzen
+   (`GHGFLIX_PASSWORD` oder Web-UI → Einstellungen → Server)!
+
+## 3. Handy
+
+- **PWA (sofort):** `http://<ip>:8484` im Handy-Browser öffnen → „Zum
+  Startbildschirm hinzufügen“. Sieht aus wie eine App, spielt Videos ab,
+  merkt sich den Fortschritt und wechselt die Server-Adresse automatisch.
+- **Expo-App (nativ):** siehe [`../mobile/README.md`](../mobile/README.md)
+
+## 4. Synchronisierung
+
+- **Server = Quelle:** Fortschritt, Profile und „Weiterschauen“ liegen in
+  SQLite im `ghgflix-data`-Volume. Alle Geräte, die sich mit dem Server
+  verbinden, sind automatisch synchron.
+- **PC-App:** In der GHGFlix-Windows-App unter *Einstellungen → GHGFlix-Server*
+  die Server-Adresse eintragen und Sync aktivieren — der Fortschritt gleicht
+  sich automatisch in beide Richtungen ab (auch die Staffel-/Folgen-Position).
+- **Supabase (optional):** Unter *⚙️ Einstellungen → Supabase-Sync* URL +
+  Service-Role-Key eintragen. „Senden“ und „Empfangen“ sind **einzeln**
+  schaltbar, und mit **„Alles aus Supabase importieren“** holst du deine
+  bestehenden Cloud-Daten einmalig komplett auf den Server.
+
+## 5. Transcoding
+
+Dateien, die der Browser direkt abspielen kann (MP4/H.264), werden 1:1
+gestreamt (Direct Play, keine CPU-Last). Alles andere (MKV, HEVC/x265, …)
+wandelt ffmpeg live in H.264/AAC um — auf schwachen Boards ggf. in den
+Einstellungen des Players eine niedrigere Qualität wählen.
+
+## 6. Updates
+
+Neue Version einspielen: ZimaOS → App → GHGFlix → *Check for updates* /
+Neuinstallation mit derselben Compose-Datei. Die Datenbank bleibt im
+`ghgflix-data`-Volume erhalten.
+
+## Alle Umgebungsvariablen
+
+| Variable | Standard | Bedeutung |
+|---|---|---|
+| `PORT` | `8484` | HTTP-Port |
+| `SHOWS_DIRS` / `MOVIES_DIRS` | – | Nur für den allerersten Start (zero-config): wird beim ersten Hochfahren einmalig als Bibliothek übernommen, falls der Pfad existiert. Danach verwaltest du alles in **Einstellungen → Bibliotheken**. |
+| `DATA_DIR` | `/data` | Datenbank + Bild-Cache |
+| `TMDB_API_KEY` | – | TMDb-Key für Metadaten |
+| `TMDB_LANG` | `de-DE` | Sprache der Metadaten |
+| `GHGFLIX_PASSWORD` | – | Login-Passwort (leer = offen) |
+| `SCAN_INTERVAL_SEC` | `1800` | Automatischer Rescan |
+| `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` | – | Cloud-Sync (optional) |

@@ -1,0 +1,52 @@
+# ============================================================================
+# GHGFlix Server für ZimaOS — einfach kopieren & einfügen!
+# ZimaOS: App Store → oben rechts "+" → "Install a customized app" →
+#         "Import" → diese Datei einfügen → NUR den einen Medien-Pfad
+#         anpassen → Install.  Danach: http://<zimaboard-ip>:8484 öffnen.
+#
+# MEHRERE PLATTEN? Musst du NICHT hier eintragen! Eine Zeile reicht (z.B.
+# /DATA deckt bei ZimaOS normalerweise schon alle Platten im Speicherpool
+# ab). Welche Unterordner davon Serien bzw. Filme sind, wählst du bequem
+# in der GHGFlix-Weboberfläche unter Einstellungen → Bibliotheken per
+# Ordner-Browser aus (klicken statt Pfade tippen, beliebig viele Ordner).
+# Hast du zusätzlich separate/externe Platten, die NICHT im Pool stecken,
+# häng einfach eine weitere volumes-Zeile an (Beispiele unten im Kommentar).
+#
+# WICHTIG: In ZimaOS KEINE Volume-Zeile leer lassen (leere "Source" führt zu
+# "field Source must not be empty"). Es werden ausschließlich echte Pfade
+# benutzt — keine benannten Volumes (die ZimaOS nicht abbilden kann).
+# ============================================================================
+services:
+  ghgflix:
+    image: ghcr.io/bastild/ghgflix-server:latest
+    # Kein fertiges Image? Dann stattdessen direkt von GitHub bauen (Zeile
+    # oben auskommentieren, diese aktivieren):
+    # build: https://github.com/BastiLd/GHGFLIX.git#main:server
+    container_name: ghgflix
+    restart: unless-stopped
+    ports:
+      - "8484:8484"
+    volumes:
+      # ⚠️ NUR diesen linken Pfad an deinen ZimaOS-Speicherpool anpassen.
+      #    (In ZimaOS unter "Files" nachsehen — meist /DATA). Rechte Seite
+      #    immer so lassen, das ist der Ordner, den der Browser in der
+      #    GHGFlix-Weboberfläche durchsucht.
+      - /DATA:/media:ro
+      # Zusätzliche, separate Platte (nicht im Pool)? Einfach dazuhängen:
+      # - /mnt/externe-platte:/media/extern1:ro
+      # Datenbank + Bild-Cache (echter Host-Pfad statt benanntem Volume):
+      - /DATA/AppData/ghgflix/data:/data
+    environment:
+      # TMDb-Key für Poster/Beschreibungen (kann auch später in der
+      # Web-Oberfläche → Einstellungen gesetzt werden):
+      TMDB_API_KEY: ""
+      TMDB_LANG: "de-DE"
+      # Optionales Login-Passwort (empfohlen, sobald der Server per Domain
+      # oder Tailscale von außen erreichbar ist; leer = kein Login):
+      GHGFLIX_PASSWORD: ""
+      # Bibliothek automatisch neu scannen (Sekunden):
+      SCAN_INTERVAL_SEC: "1800"
+      # Optional: Supabase-Sync (BRAUCHT den Service-Role-Key, nicht den
+      # anon-Key). Am einfachsten über die Web-Einstellungen setzen:
+      SUPABASE_URL: ""
+      SUPABASE_SERVICE_KEY: ""

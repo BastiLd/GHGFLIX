@@ -52,6 +52,10 @@ export interface UiPrefs {
   // ── mini player & queue ──
   miniPlayer: boolean; // back button → YouTube-style mini player
   miniSize: "sm" | "md" | "lg";
+  // ── player leave buttons ──
+  showCloseX: boolean; // extra X button in the player top bar
+  backButtonAction: "mini" | "close"; // what the ← arrow does
+  xButtonAction: "mini" | "close"; // what the X does
   // ── player extras ──
   screenshotEnabled: boolean;
   showClock: boolean; // current time in the player top bar
@@ -113,6 +117,9 @@ export const DEFAULT_PREFS: UiPrefs = {
   pipSize: "md",
   miniPlayer: true,
   miniSize: "md",
+  showCloseX: true,
+  backButtonAction: "mini",
+  xButtonAction: "close",
   screenshotEnabled: true,
   showClock: false,
   showEndsAt: true,
