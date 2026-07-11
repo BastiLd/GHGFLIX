@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 import { join, normalize, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb, getSetting, setSetting, settingOr, listLibraries, addLibrary, removeLibrary } from "./db.js";
-import { scanLibrary, scanState, removeLibraryContent } from "./scanner.js";
+import { scanLibrary, scanState, removeLibraryContent, detectLibraries, BROWSE_ROOTS } from "./scanner.js";
 import { canDirectPlay, ffprobe, serveFile, serveThumb, serveTranscode } from "./stream.js";
 import { cachedImage, tmdbEnabled } from "./tmdb.js";
 import * as supabase from "./supabase.js";
@@ -320,8 +320,20 @@ async function handle(req, res) {
   }
   // Browse the container's filesystem so folders can be picked by clicking
   // instead of typing paths blind — mirrors the desktop app's folder picker.
+  // With no path it lists the mounted drive roots (every disk mounted under
+  // /media shows up), so multiple drives are all reachable.
   if (p === "/api/browse") {
-    const target = url.searchParams.get("path") || "/media";
+    const target = url.searchParams.get("path");
+    if (!target || target === "roots") {
+      const roots = BROWSE_ROOTS.filter((r) => {
+        try {
+          return statSync(r).isDirectory();
+        } catch {
+          return false;
+        }
+      }).map((r) => ({ name: r, path: r }));
+      return json(res, { path: "", parent: null, roots: true, entries: roots });
+    }
     let entries;
     try {
       entries = readdirSync(target, { withFileTypes: true })
@@ -331,8 +343,14 @@ async function handle(req, res) {
     } catch (e) {
       return json(res, { error: "Ordner nicht lesbar: " + String(e.message || e) }, 400);
     }
-    const parent = target !== "/" ? normalize(join(target, "..")) : null;
+    // going above a browse root returns to the root chooser
+    const atRoot = BROWSE_ROOTS.some((r) => normalize(r) === normalize(target));
+    const parent = atRoot ? "roots" : target !== "/" ? normalize(join(target, "..")) : "roots";
     return json(res, { path: target, parent, entries });
+  }
+  // Auto-detect media library folders across all mounted drives.
+  if (p === "/api/detect") {
+    return json(res, { found: detectLibraries() });
   }
 
   // ── scan ──

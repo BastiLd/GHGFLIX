@@ -94,26 +94,92 @@ function toast(msg) {
 }
 
 // ── layout ──────────────────────────────────────────────────────────────────
+/** GHGFlix wordmark (GHG white + Flix red + red zigzag), like the desktop app. */
+const wordmark = (fontSize = 26) => `
+  <div class="wordmark">
+    <div class="wm" style="font-size:${fontSize}px"><span class="ghg">GHG</span><span class="flix">Flix</span></div>
+    <svg viewBox="0 0 120 12" preserveAspectRatio="none" style="height:${Math.round(fontSize * 0.3)}px;width:${Math.round(fontSize * 3)}px;margin-top:${Math.round(fontSize * 0.22)}px" fill="none" aria-hidden="true">
+      <polyline points="2,9 14,3 26,9 38,3 50,9 62,3 74,9 86,3 98,9 110,3 118,7" stroke="#e50914" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </div>`;
+
+const NAV = [
+  { id: "home", hash: "#/", label: "Start", ic: "🏠" },
+  { id: "movies", hash: "#/movies", label: "Filme", ic: "🎬" },
+  { id: "shows", hash: "#/shows", label: "Serien", ic: "📺" },
+  { id: "settings", hash: "#/settings", label: "Einstellungen", ic: "⚙️" },
+];
+
+let lastCounts = { shows: null, movies: null };
+
 function shell(active, inner) {
+  const pName = localStorage.getItem("ghgflix.profileName") || "Profil";
   app.innerHTML = `
-    <div class="topbar">
-      <span class="brand" onclick="location.hash='#/'">GHGFlix</span>
-      <div class="nav">
-        <button class="${active === "home" ? "active" : ""}" onclick="location.hash='#/'">Start</button>
-        <button class="${active === "shows" ? "active" : ""}" onclick="location.hash='#/shows'">Serien</button>
-        <button class="${active === "movies" ? "active" : ""}" onclick="location.hash='#/movies'">Filme</button>
+    <div class="frame">
+      <aside class="sidebar">
+        <div class="logo">${wordmark(26)}</div>
+        <nav>
+          ${NAV.map((n) => `
+            <button class="navitem ${active === n.id ? "active" : ""}" onclick="location.hash='${n.hash}'">
+              <span class="ic">${n.ic}</span><span class="lbl">${n.label}</span>
+              ${n.id === "movies" && lastCounts.movies != null ? `<span class="count">${lastCounts.movies}</span>` : ""}
+              ${n.id === "shows" && lastCounts.shows != null ? `<span class="count">${lastCounts.shows}</span>` : ""}
+            </button>`).join("")}
+        </nav>
+        <button class="profilebtn" onclick="localStorage.removeItem('ghgflix.profile');location.reload()">
+          <span class="ava">${esc((pName[0] || "P").toUpperCase())}</span>
+          <span><span class="pn">${esc(pName)}</span><br><span class="ps">Profil wechseln</span></span>
+        </button>
+      </aside>
+      <div class="main">
+        <div class="topbar">
+          <div class="searchwrap">
+            <span class="si">🔍</span>
+            <input class="search" id="topsearch" placeholder="Suchen …" value="${esc(active === "search" ? currentQuery : "")}">
+          </div>
+          <div class="spacer"></div>
+          <button class="iconbtn" id="rescanTop" title="Bibliothek scannen">↻</button>
+        </div>
+        <div class="content"><div class="page">${inner}</div></div>
       </div>
-      <div class="spacer"></div>
-      <button class="iconbtn" title="Profil wechseln" onclick="localStorage.removeItem('ghgflix.profile');location.reload()">👤</button>
-      <button class="iconbtn ${active === "settings" ? "active" : ""}" title="Einstellungen" onclick="location.hash='#/settings'">⚙️</button>
-    </div>
-    <div class="page">${inner}</div>`;
+    </div>`;
+  const search = $("#topsearch");
+  search.oninput = () => runSearch(search.value);
+  $("#rescanTop").onclick = async () => { await api("/api/scan", { method: "POST" }); toast("Scan gestartet …"); };
+}
+
+let currentQuery = "";
+let searchTimer;
+function runSearch(q) {
+  currentQuery = q;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(async () => {
+    if (!q.trim()) { if (location.hash.startsWith("#/search")) location.hash = "#/"; return; }
+    const lib = await getLibrary();
+    const ql = q.toLowerCase();
+    const shows = lib.shows.filter((s) => s.title.toLowerCase().includes(ql));
+    const movies = lib.movies.filter((m) => m.title.toLowerCase().includes(ql));
+    const box = $("#searchResults");
+    const html = `
+      ${shows.length ? `<div class="section-title">Serien</div><div class="grid">${shows.map((s) => posterCard("show", s)).join("")}</div>` : ""}
+      ${movies.length ? `<div class="section-title">Filme</div><div class="grid">${movies.map((m) => posterCard("movie", m)).join("")}</div>` : ""}
+      ${!shows.length && !movies.length ? '<div class="empty">Nichts gefunden</div>' : ""}`;
+    if (box) box.innerHTML = html;
+    else { if (!location.hash.startsWith("#/search")) history.replaceState(null, "", "#/search"); renderSearchPage(q, html); }
+  }, 180);
+}
+function renderSearchPage(q, html) {
+  shell("search", `<div class="section-title">Suche: „${esc(q)}“</div><div id="searchResults">${html}</div>`);
+  const s = $("#topsearch");
+  s.focus();
+  s.setSelectionRange(q.length, q.length);
 }
 
 const posterCard = (kind, x) => `
   <a class="card" href="#/${kind}/${x.id}">
-    ${x.poster ? `<img class="poster" loading="lazy" src="${img(x.poster)}">` : `<div class="poster" style="display:grid;place-items:center;color:var(--muted);font-size:12px;padding:8px;text-align:center">${esc(x.title)}</div>`}
-    <div class="t">${esc(x.title)}${x.year ? ` (${x.year})` : ""}</div>
+    ${x.poster ? `<img class="poster" loading="lazy" src="${img(x.poster)}">` : `<div class="poster ph">${esc(x.title)}</div>`}
+    <div class="t">${esc(x.title)}</div>
+    ${x.year ? `<div class="st">${x.year}</div>` : ""}
   </a>`;
 
 // ── views ───────────────────────────────────────────────────────────────────
@@ -121,8 +187,8 @@ async function viewLogin() {
   const ping = await api("/api/ping").catch(() => null);
   if (!ping?.auth || store.token) return viewProfiles();
   app.innerHTML = `
-    <div class="center-screen"><div style="width:min(360px,92vw)">
-      <div class="brand" style="font-size:34px;text-align:center;margin-bottom:24px">GHGFlix</div>
+    <div class="center-screen"><div style="width:min(380px,92vw)">
+      <div style="display:flex;justify-content:center;margin-bottom:28px">${wordmark(40)}</div>
       <div class="panel"><h3>Anmelden</h3><div class="desc">Server: ${esc(ping.name)}</div>
         <div class="field"><label>Passwort</label><input id="pw" type="password" autofocus></div>
         <button class="btn" id="go" style="width:100%;justify-content:center">Anmelden</button>
@@ -138,63 +204,94 @@ async function viewLogin() {
 
 async function viewProfiles() {
   const profiles = await api("/api/profiles");
-  if (store.profile && profiles.some((p) => p.id === store.profile)) return viewHome();
+  if (store.profile && profiles.some((p) => p.id === store.profile)) {
+    const me = profiles.find((p) => p.id === store.profile);
+    if (me) localStorage.setItem("ghgflix.profileName", me.name);
+    return viewHome();
+  }
+  // only one profile? skip the picker (single-user convenience) and honor
+  // whatever route the user actually navigated to (settings, a detail page, …)
+  if (profiles.length === 1) {
+    store.profile = profiles[0].id;
+    localStorage.setItem("ghgflix.profileName", profiles[0].name);
+    return route();
+  }
   app.innerHTML = `
     <div class="center-screen"><div>
-      <div class="brand" style="font-size:34px;text-align:center;margin-bottom:8px">GHGFlix</div>
-      <p style="text-align:center;color:var(--muted);margin-bottom:24px">Wer schaut?</p>
+      <div style="display:flex;justify-content:center;margin-bottom:12px">${wordmark(40)}</div>
+      <p style="text-align:center;color:var(--muted);margin-bottom:28px;margin-top:14px">Wer schaut?</p>
       <div class="profile-grid">
-        ${profiles.map((p) => `<button class="pf" data-id="${p.id}"><span class="ava">${esc(p.name[0].toUpperCase())}</span><span>${esc(p.name)}</span></button>`).join("")}
-        <button class="pf" id="addpf"><span class="ava" style="background:var(--surface)">+</span><span>Neu</span></button>
+        ${profiles.map((p) => `<button class="pf" data-id="${p.id}" data-name="${esc(p.name)}"><span class="ava">${esc(p.name[0].toUpperCase())}</span><span>${esc(p.name)}</span></button>`).join("")}
+        <button class="pf" id="addpf"><span class="ava" style="background:var(--surface2)">+</span><span>Neu</span></button>
       </div>
     </div></div>`;
-  app.querySelectorAll(".pf[data-id]").forEach((b) => (b.onclick = () => { store.profile = +b.dataset.id; viewHome(); }));
+  const pick = (id, name) => { store.profile = id; localStorage.setItem("ghgflix.profileName", name); viewHome(); };
+  app.querySelectorAll(".pf[data-id]").forEach((b) => (b.onclick = () => pick(+b.dataset.id, b.dataset.name)));
   $("#addpf").onclick = async () => {
     const name = prompt("Name des Profils?");
     if (!name) return;
     const r = await api("/api/profiles", { method: "POST", body: { name } });
-    if (r.id) { store.profile = r.id; viewHome(); } else toast(r.error || "Fehler");
+    if (r.id) pick(r.id, name); else toast(r.error || "Fehler");
   };
 }
 
 let libraryCache = null;
 const getLibrary = async (force) => (libraryCache = !force && libraryCache ? libraryCache : await api("/api/library"));
 
+const contCard = (c) => {
+  const href = c.mediaType === "movie" ? `#/play/movie/${c.refId}` : `#/play/episode/${c.refId}`;
+  const pic = c.still ? img(c.still, "w300") : c.mBackdrop || c.sBackdrop ? img(c.mBackdrop || c.sBackdrop, "w300") : thumbUrl(c.mediaType, c.refId);
+  const sub = c.mediaType === "episode" ? `S${String(c.season).padStart(2, "0")}E${String(c.episode).padStart(2, "0")} · ${fmtTime(c.duration - c.position)} übrig` : `${fmtTime(c.duration - c.position)} übrig`;
+  return `<a class="ccard" href="${href}"><img loading="lazy" src="${pic}"><div class="play-badge"><span>▶</span></div><div class="bar"><i style="width:${Math.round((c.position / c.duration) * 100)}%"></i></div><div class="t">${esc(c.title)}</div><div class="s">${sub}</div></a>`;
+};
+
 async function viewHome() {
   const [lib, cont] = await Promise.all([getLibrary(), api("/api/continue")]);
-  const contRow = cont.length
-    ? `<h2 class="row-title">Weiterschauen</h2><div class="hrow">${cont
-        .map((c) => {
-          const href = c.mediaType === "movie" ? `#/play/movie/${c.refId}` : `#/play/episode/${c.refId}`;
-          const pic = c.still ? img(c.still, "w300") : c.mBackdrop || c.sBackdrop ? img(c.mBackdrop || c.sBackdrop, "w300") : thumbUrl(c.mediaType, c.refId);
-          const sub = c.mediaType === "episode" ? `S${String(c.season).padStart(2, "0")}E${String(c.episode).padStart(2, "0")} · ${fmtTime(c.duration - c.position)} übrig` : `${fmtTime(c.duration - c.position)} übrig`;
-          return `<a class="ccard" href="${href}"><img loading="lazy" src="${pic}"><div class="bar"><i style="width:${Math.round((c.position / c.duration) * 100)}%"></i></div><div class="t">${esc(c.title)}</div><div class="s">${sub}</div></a>`;
-        })
-        .join("")}</div>`
+  lastCounts = { shows: lib.shows.length, movies: lib.movies.length };
+  const empty = lib.shows.length === 0 && lib.movies.length === 0;
+
+  // hero: newest item with a backdrop (like the desktop app's rotating hero)
+  const heroPool = [
+    ...lib.movies.filter((m) => m.backdrop).map((m) => ({ ...m, kind: "movie" })),
+    ...lib.shows.filter((s) => s.backdrop).map((s) => ({ ...s, kind: "show" })),
+  ].sort((a, b) => b.added_at - a.added_at);
+  const hero = heroPool[0];
+  const heroHtml = hero
+    ? `<a class="herobox" href="#/${hero.kind}/${hero.id}">
+        <img src="${img(hero.backdrop, "w1280")}">
+        <div class="grad"></div>
+        <div class="info">
+          <h1>${esc(hero.title)}</h1>
+          <div class="meta">${hero.year ?? ""}${hero.rating ? ` · ★ ${hero.rating.toFixed(1)}` : ""}${hero.genres ? ` · ${esc(hero.genres)}` : ""}</div>
+          <p>${esc(hero.overview ?? "")}</p>
+        </div>
+      </a>`
     : "";
-  const newest = [...lib.movies].sort((a, b) => b.added_at - a.added_at).slice(0, 15);
+
+  const newest = [...lib.movies, ...lib.shows.map((s) => ({ ...s, _show: true }))].sort((a, b) => b.added_at - a.added_at).slice(0, 16);
   shell(
     "home",
-    `${contRow}
-     <h2 class="row-title">Serien</h2><div class="hrow">${lib.shows.map((s) => posterCard("show", s)).join("") || '<div class="empty">Noch keine Serien gefunden</div>'}</div>
-     <h2 class="row-title">Filme</h2><div class="hrow">${lib.movies.map((x) => posterCard("movie", x)).join("") || '<div class="empty">Noch keine Filme gefunden</div>'}</div>
-     ${newest.length ? `<h2 class="row-title">Neu dazugekommen</h2><div class="hrow">${newest.map((x) => posterCard("movie", x)).join("")}</div>` : ""}`,
+    empty
+      ? `<div class="empty">Noch nichts in der Bibliothek.<br><br>Geh zu <b>⚙️ Einstellungen → Bibliotheken</b> und füge deine Film- und Serienordner hinzu (oder lass sie automatisch erkennen).<br><br><a class="btn" href="#/settings">Zu den Einstellungen</a></div>`
+      : `${heroHtml}
+     ${cont.length ? `<div class="section-title">Weiterschauen</div><div class="hrow">${cont.map(contCard).join("")}</div>` : ""}
+     ${lib.shows.length ? `<div class="section-title">Serien</div><div class="hrow">${lib.shows.map((s) => posterCard("show", s)).join("")}</div>` : ""}
+     ${lib.movies.length ? `<div class="section-title">Filme</div><div class="hrow">${lib.movies.map((x) => posterCard("movie", x)).join("")}</div>` : ""}
+     ${newest.length ? `<div class="section-title">Neu dazugekommen</div><div class="hrow">${newest.map((x) => posterCard(x._show ? "show" : "movie", x)).join("")}</div>` : ""}`,
   );
 }
 
 async function viewGrid(kind) {
   const lib = await getLibrary();
+  lastCounts = { shows: lib.shows.length, movies: lib.movies.length };
   const items = kind === "shows" ? lib.shows : lib.movies;
   const linkKind = kind === "shows" ? "show" : "movie";
+  const title = kind === "shows" ? "Serien" : "Filme";
   shell(
     kind,
-    `<input class="search" id="q" placeholder="Suchen …">
-     <div class="grid" id="grid">${items.map((x) => posterCard(linkKind, x)).join("") || '<div class="empty">Nichts gefunden — läuft der Scan noch?</div>'}</div>`,
+    `<div class="section-title">${title} <span style="color:var(--muted);font-weight:400;font-size:14px">${items.length}</span></div>
+     <div class="grid">${items.map((x) => posterCard(linkKind, x)).join("") || '<div class="empty">Nichts gefunden — läuft der Scan noch? (Einstellungen → Bibliotheken)</div>'}</div>`,
   );
-  $("#q").oninput = () => {
-    const q = $("#q").value.toLowerCase();
-    $("#grid").innerHTML = items.filter((x) => x.title.toLowerCase().includes(q)).map((x) => posterCard(linkKind, x)).join("");
-  };
 }
 
 async function viewShow(id, params) {
@@ -217,7 +314,7 @@ async function viewShow(id, params) {
     const cur = seasons.find((s) => s.season === season);
     shell(
       "shows",
-      `<div class="hero">${show.backdrop ? `<img src="${img(show.backdrop, "w780")}">` : ""}<div class="fade"></div></div>
+      `<div class="detail-hero">${show.backdrop ? `<img src="${img(show.backdrop, "w1280")}">` : ""}<div class="grad"></div><button class="backbtn" onclick="history.length>1?history.back():location.hash='#/shows'">← Zurück</button></div>
        <div class="detail">
         <h1>${esc(show.title)}</h1>
         <div class="meta">${show.year ?? ""} · ${seasons.length} Staffeln · ${flat.length} Folgen${show.rating ? ` · ★ ${show.rating.toFixed(1)}` : ""}${show.genres ? ` · ${esc(show.genres)}` : ""}</div>
@@ -251,7 +348,7 @@ async function viewMovie(id) {
   const p = prog.find((x) => x.mediaType === "movie" && x.refId === +id);
   shell(
     "movies",
-    `<div class="hero">${mv.backdrop ? `<img src="${img(mv.backdrop, "w780")}">` : ""}<div class="fade"></div></div>
+    `<div class="detail-hero">${mv.backdrop ? `<img src="${img(mv.backdrop, "w1280")}">` : ""}<div class="grad"></div><button class="backbtn" onclick="history.length>1?history.back():location.hash='#/movies'">← Zurück</button></div>
      <div class="detail">
       <h1>${esc(mv.title)}</h1>
       <div class="meta">${mv.year ?? ""}${mv.rating ? ` · ★ ${mv.rating.toFixed(1)}` : ""}${mv.genres ? ` · ${esc(mv.genres)}` : ""}${mv.duration ? ` · ${Math.round(mv.duration / 60)} Min.` : ""}</div>
@@ -417,27 +514,82 @@ async function openBrowseModal(onPick) {
   document.body.appendChild(overlay);
 
   const render = async (path) => {
-    const data = await api(`/api/browse?path=${encodeURIComponent(path)}`);
-    if (data.error) { toast(data.error); if (path !== "/media") render("/media"); return; }
+    const data = await api(`/api/browse?path=${encodeURIComponent(path || "roots")}`);
+    if (data.error) { toast(data.error); render("roots"); return; }
+    const isRoots = data.roots;
     overlay.innerHTML = `
       <div class="modalbox">
-        <div class="modalhead"><h3>Ordner wählen</h3><button class="iconbtn" id="mclose">✕</button></div>
-        <div class="breadcrumb">${esc(data.path)}</div>
+        <div class="modalhead"><h3>${isRoots ? "Platte / Laufwerk wählen" : "Ordner wählen"}</h3><button class="iconbtn" id="mclose">✕</button></div>
+        <div class="breadcrumb">${isRoots ? "Alle eingebundenen Laufwerke" : esc(data.path)}</div>
         <div class="browse-list">
-          ${data.parent ? `<button class="browse-item up" data-p="${esc(data.parent)}">‹ .. (übergeordneter Ordner)</button>` : ""}
-          ${data.entries.map((e) => `<button class="browse-item" data-p="${esc(e.path)}">📁 ${esc(e.name)}</button>`).join("") || '<div class="hint" style="padding:8px 4px">Keine Unterordner hier</div>'}
+          ${!isRoots && data.parent ? `<button class="browse-item up" data-p="${esc(data.parent)}">‹ .. (zurück)</button>` : ""}
+          ${data.entries.map((e) => `<button class="browse-item" data-p="${esc(e.path)}">${isRoots ? "💽" : "📁"} ${esc(e.name)}</button>`).join("") || '<div class="hint" style="padding:8px 4px">Keine Unterordner hier</div>'}
         </div>
+        ${isRoots ? '<p class="hint">Öffne die Platte, auf der deine Filme/Serien liegen, und navigiere in den passenden Ordner.</p>' : `
         <div class="btnrow" style="margin-top:14px">
-          <button class="btn" id="pickShow">Diesen Ordner als Serien-Bibliothek</button>
-          <button class="btn ghost" id="pickMovie">Als Film-Bibliothek</button>
-        </div>
+          <button class="btn" id="pickShow">📺 Als Serien-Ordner</button>
+          <button class="btn ghost" id="pickMovie">🎬 Als Film-Ordner</button>
+        </div>`}
       </div>`;
     overlay.querySelectorAll(".browse-item").forEach((b) => (b.onclick = () => render(b.dataset.p)));
     $("#mclose", overlay).onclick = () => overlay.remove();
-    $("#pickShow", overlay).onclick = () => { onPick(data.path, "show"); overlay.remove(); };
-    $("#pickMovie", overlay).onclick = () => { onPick(data.path, "movie"); overlay.remove(); };
+    if (!isRoots) {
+      $("#pickShow", overlay).onclick = () => { onPick(data.path, "show"); overlay.remove(); };
+      $("#pickMovie", overlay).onclick = () => { onPick(data.path, "movie"); overlay.remove(); };
+    }
   };
-  await render("/media");
+  await render("roots");
+}
+
+/** Auto-detection modal: scans all drives and offers found folders to add. */
+async function openDetectModal(onDone) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modalbox"><div class="modalhead"><h3>Automatische Erkennung</h3><button class="iconbtn" id="mclose">✕</button></div><div class="spinner-center"><div class="spin"></div></div><p class="hint" style="text-align:center">Durchsuche alle Laufwerke …</p></div>`;
+  document.body.appendChild(overlay);
+  $("#mclose", overlay).onclick = () => overlay.remove();
+
+  const data = await api("/api/detect").catch(() => ({ found: [] }));
+  const found = data.found || [];
+  const box = overlay.querySelector(".modalbox");
+  if (!found.length) {
+    box.innerHTML = `<div class="modalhead"><h3>Automatische Erkennung</h3><button class="iconbtn" id="mclose2">✕</button></div><div class="empty">Keine Medienordner gefunden.<br><br>Nutze „Ordner hinzufügen“, um manuell einen Ordner zu wählen.</div>`;
+    $("#mclose2", overlay).onclick = () => overlay.remove();
+    return;
+  }
+  box.innerHTML = `
+    <div class="modalhead"><h3>${found.length} Ordner gefunden</h3><button class="iconbtn" id="mclose3">✕</button></div>
+    <p class="hint" style="margin-top:0">Häkchen setzen und übernehmen — Typ (Serien/Filme) kannst du je Ordner ändern.</p>
+    <div style="max-height:46vh;overflow-y:auto;margin:12px 0">
+      ${found.map((f, i) => `
+        <div class="detect-item">
+          <input type="checkbox" class="dchk" data-i="${i}" checked style="width:20px;height:20px;accent-color:var(--red)">
+          <div class="grow"><b>${esc(f.name)}</b><div class="dp">${esc(f.path)}</div></div>
+          <select class="dkind" data-i="${i}" style="background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:6px 8px;color:var(--text)">
+            <option value="show" ${f.kind === "show" ? "selected" : ""}>Serien</option>
+            <option value="movie" ${f.kind === "movie" ? "selected" : ""}>Filme</option>
+          </select>
+        </div>`).join("")}
+    </div>
+    <button class="btn" id="applyDetect" style="width:100%;justify-content:center">Ausgewählte übernehmen</button>`;
+  $("#mclose3", overlay).onclick = () => overlay.remove();
+  $("#applyDetect", overlay).onclick = async () => {
+    const picks = [...overlay.querySelectorAll(".dchk")].filter((c) => c.checked).map((c) => {
+      const i = +c.dataset.i;
+      const kind = overlay.querySelector(`.dkind[data-i="${i}"]`).value;
+      return { path: found[i].path, kind };
+    });
+    let ok = 0;
+    for (const p of picks) {
+      const r = await api("/api/libraries", { method: "POST", body: p });
+      if (!r.error) ok++;
+    }
+    overlay.remove();
+    toast(`${ok} Bibliothek(en) hinzugefügt — Scan läuft …`);
+    libraryCache = null;
+    onDone();
+  };
 }
 
 async function viewSettings() {
@@ -447,27 +599,27 @@ async function viewSettings() {
   const c = conn.load();
   shell(
     "settings",
-    `<h2 class="row-title">Einstellungen</h2>
+    `<div class="section-title">Einstellungen</div>
 
-     <div class="panel"><h3>Bibliotheken (beliebig viele Ordner/Platten)</h3>
-      <div class="desc">${scan.shows} Serien · ${scan.episodes} Folgen · ${scan.movies} Filme ${scan.running ? "· Scan läuft …" : ""}
-        <span class="tag ${scan.tmdb ? "ok" : "bad"}">TMDb ${scan.tmdb ? "aktiv" : "kein Key"}</span></div>
+     <div class="panel"><h3>Bibliotheken <span class="tag ${scan.tmdb ? "ok" : "bad"}">TMDb ${scan.tmdb ? "aktiv" : "kein Key"}</span></h3>
+      <div class="desc">${scan.shows} Serien · ${scan.episodes} Folgen · ${scan.movies} Filme ${scan.running ? "· <b>Scan läuft …</b>" : ""}</div>
       <div id="libList">${libs
         .map(
           (l) => `
-        <div class="field" style="display:flex;gap:8px;align-items:center">
-          <span class="tag ${l.kind === "show" ? "ok" : ""}">${l.kind === "show" ? "Serien" : "Filme"}</span>
-          <span style="flex:1;font-size:13px;color:var(--muted);word-break:break-all">${esc(l.path)}</span>
-          <button class="iconbtn" data-libdel="${l.id}">🗑</button>
+        <div class="libitem">
+          <span class="tag ${l.kind === "show" ? "ok" : ""}">${l.kind === "show" ? "📺 Serien" : "🎬 Filme"}</span>
+          <span class="lp">${esc(l.path)}</span>
+          <button class="iconbtn" data-libdel="${l.id}" title="Entfernen">🗑</button>
         </div>`,
         )
-        .join("") || '<div class="hint" style="margin:8px 0">Noch keine Bibliothek hinzugefügt — Ordner wählen, um loszulegen.</div>'}</div>
+        .join("") || '<div class="hint" style="margin:8px 0">Noch keine Bibliothek. Klick auf <b>Automatisch erkennen</b> — das durchsucht alle Laufwerke.</div>'}</div>
       <div class="btnrow">
+        <button class="btn" id="detectLib">✨ Automatisch erkennen</button>
         <button class="btn ghost" id="addLib">+ Ordner hinzufügen</button>
-        <button class="btn ghost" id="rescan">Jetzt neu scannen</button>
+        <button class="btn ghost" id="rescan">↻ Neu scannen</button>
       </div>
       <div class="field" style="margin-top:14px"><label>TMDb API-Key (für Poster & Beschreibungen)</label><input id="tmdb" placeholder="${s.tmdb_key_set ? "•••••• (gesetzt)" : "z.B. 1ab2c3…"}"></div>
-      <p class="hint">Mehrere Festplatten? Einfach jede im docker-compose als eigene Zeile unter <code>/media/…</code> mounten (siehe README) — hier siehst du dann alle und wählst pro Ordner, ob es Serien oder Filme sind.</p>
+      <p class="hint">Mehrere Platten werden automatisch mitgesucht (alles, was im Container unter <code>/media</code>, <code>/DATA</code> oder <code>/mnt</code> eingebunden ist). „Automatisch erkennen“ findet Film-/Serienordner von selbst; mit „Ordner hinzufügen“ klickst du dich manuell durch alle Laufwerke.</p>
      </div>
 
      <div class="panel"><h3>Verbindungen (Lokal / Domain / Tailscale)</h3>
@@ -504,6 +656,7 @@ async function viewSettings() {
   );
 
   $("#rescan").onclick = async () => { await api("/api/scan", { method: "POST" }); toast("Scan gestartet"); libraryCache = null; };
+  $("#detectLib").onclick = () => openDetectModal(() => viewSettings());
   $("#addLib").onclick = () =>
     openBrowseModal(async (path, kind) => {
       const r = await api("/api/libraries", { method: "POST", body: { path, kind } });

@@ -9,32 +9,30 @@ Docker-Container auf dem ZimaBoard/ZimaCube und streamt an Browser, Handy
 1. ZimaOS öffnen → **App Store** → oben rechts **„+“** → **Install a customized app**
 2. Auf **Import** (Docker Compose) klicken
 3. Den kompletten Inhalt von [`docker-compose.yml`](docker-compose.yml) einfügen
-4. **Nur den einen Medien-Pfad prüfen/anpassen** (linke Seite der ersten `volumes:`-Zeile, `/DATA`):
-   - Das ist bei ZimaOS normalerweise der **gesamte Speicherpool** — also
-     automatisch **alle deine Platten in einem**, egal wie viele es sind.
-   - Hast du zusätzlich eine Platte, die *nicht* im Pool steckt (z. B. eine
-     lose angeschlossene externe Platte), häng einfach eine weitere
-     `volumes:`-Zeile an (Beispiel steht als Kommentar in der Datei).
-5. **Install** drücken. Fertig!
+4. **Install** drücken — nichts anpassen nötig. Es werden automatisch **alle
+   Platten** read-only eingebunden (`/DATA`-Speicherpool + externe Platten
+   unter `/media`).
 
 Danach im Browser öffnen: **`http://<zimaboard-ip>:8484`**
 
 ### Bibliotheken einrichten (mehrere Ordner/Platten — ohne Docker-Bearbeiten)
 
-Welche Unterordner Serien und welche Filme sind, entscheidest du **in der
+Welche Ordner Serien und welche Filme sind, entscheidest du **in der
 GHGFlix-Weboberfläche**, nicht im docker-compose:
 
-1. **⚙️ Einstellungen → Bibliotheken → „+ Ordner hinzufügen“**
-2. Im Ordner-Browser durchklicken (auch über mehrere Platten hinweg, die
-   alle unter dem einen `/DATA`-Mount sichtbar sind)
-3. Pro Ordner auswählen: **„Als Serien-Bibliothek“** oder **„Als
-   Film-Bibliothek“** — beliebig oft wiederholen, für jede Platte/jeden
-   Ordner einzeln
-4. Der Server scannt automatisch im Hintergrund; Fortschritt siehst du direkt
-   im Bibliotheken-Panel
+- **Am einfachsten:** ⚙️ Einstellungen → Bibliotheken → **„✨ Automatisch
+  erkennen“**. Das durchsucht **alle** eingebundenen Platten und schlägt
+  gefundene Film-/Serienordner vor (mit erkanntem Typ) — Häkchen setzen,
+  übernehmen, fertig.
+- **Manuell:** **„+ Ordner hinzufügen“** öffnet einen Ordner-Browser. Oben
+  wählst du zuerst die **Platte/das Laufwerk** (alle eingebundenen Platten
+  erscheinen dort), navigierst in den Ordner und wählst **„📺 Als
+  Serien-Ordner“** oder **„🎬 Als Film-Ordner“**. Beliebig oft, für jede
+  Platte/jeden Ordner.
 
-Ordner wieder entfernen (🗑-Knopf) nimmt nur den Eintrag aus GHGFlix raus —
-deine Dateien auf der Platte bleiben unangetastet.
+Der Server scannt automatisch im Hintergrund; Fortschritt siehst du direkt im
+Bibliotheken-Panel. Ordner wieder entfernen (🗑) nimmt nur den Eintrag aus
+GHGFlix raus — deine Dateien auf der Platte bleiben unangetastet.
 
 Beim ersten Start scannt der Server die Bibliothek. TMDb-Key (für Poster und
 Beschreibungen — derselbe Key wie in der PC-App) entweder in der Compose-Datei
@@ -60,6 +58,18 @@ ein, und im Modus **„Automatisch“** wird immer die erste erreichbare gewähl
 2. Adresse eintragen: `https://flix.deinedomain.de`
 3. **Wichtig:** In den Server-Einstellungen ein Passwort setzen
    (`GHGFLIX_PASSWORD` oder Web-UI → Einstellungen → Server)!
+
+## App-Icon in ZimaOS
+
+Für das **„Icon URL“**-Feld beim Installieren in ZimaOS kannst du das
+mitgelieferte GHGFlix-Logo verwenden:
+
+```
+https://raw.githubusercontent.com/BastiLd/GHGFLIX/main/server/web/icon.svg
+```
+
+Oder — sobald der Container läuft — die Adresse des Servers selbst:
+`http://<zimaboard-ip>:8484/icon.svg`
 
 ## 3. Handy
 
@@ -99,6 +109,7 @@ Neuinstallation mit derselben Compose-Datei. Die Datenbank bleibt im
 | Variable | Standard | Bedeutung |
 |---|---|---|
 | `PORT` | `8484` | HTTP-Port |
+| `BROWSE_ROOTS` | `/media,/DATA,/mnt` | Welche Mountpunkte der Ordner-Browser + Auto-Erkennung durchsuchen |
 | `SHOWS_DIRS` / `MOVIES_DIRS` | – | Nur für den allerersten Start (zero-config): wird beim ersten Hochfahren einmalig als Bibliothek übernommen, falls der Pfad existiert. Danach verwaltest du alles in **Einstellungen → Bibliotheken**. |
 | `DATA_DIR` | `/data` | Datenbank + Bild-Cache |
 | `TMDB_API_KEY` | – | TMDb-Key für Metadaten |

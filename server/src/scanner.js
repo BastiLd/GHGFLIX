@@ -19,6 +19,78 @@ function listDir(dir) {
   }
 }
 
+// The roots the folder browser + auto-detection start from. Every host drive
+// mounted into the container under /media (see docker-compose) shows up here,
+// so multiple disks are all reachable. Extra roots via BROWSE_ROOTS.
+export const BROWSE_ROOTS = (process.env.BROWSE_ROOTS || "/media,/DATA,/mnt")
+  .split(/[;,]/)
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const MOVIE_WORDS = /\b(movies?|filme?|film|cinema|kino|spielfilme?)\b/i;
+const SHOW_WORDS = /\b(series|serien?|tv[- ]?shows?|shows?|tv|staffeln?|episodes?|folgen)\b/i;
+const SEASON_WORDS = /^(staffel|season|series|s)[ ._]?\d{1,2}$|^(specials?|extras?)$/i;
+
+/** Does this directory (one level down) look like it holds episodes? */
+function looksLikeShowRoot(dir) {
+  for (const e of listDir(dir).slice(0, 40)) {
+    if (!e.isDirectory()) continue;
+    const sub = join(dir, e.name);
+    // "Show/Season 1/*SxxEyy*" or "Show/*SxxEyy*"
+    for (const f of listDir(sub).slice(0, 30)) {
+      if (f.isFile() && isVideo(f.name) && parseEpisode(f.name)?.episode != null) return true;
+      if (f.isDirectory() && (SEASON_WORDS.test(f.name) || parseSeasonFolder(f.name) != null)) return true;
+    }
+  }
+  return false;
+}
+
+/** Does this directory directly hold movie files (or "Movie (year)" folders)?
+ *  minHits=1 when the folder name already screams "movies", 2 for pure
+ *  content-based guesses (so a single stray video doesn't become a library). */
+function looksLikeMovieRoot(dir, minHits = 2) {
+  let hits = 0;
+  for (const e of listDir(dir).slice(0, 60)) {
+    if (e.isFile() && isVideo(e.name)) hits++;
+    else if (e.isDirectory() && /\((19|20)\d{2}\)/.test(e.name)) hits++;
+    if (hits >= minHits) return true;
+  }
+  return false;
+}
+
+/** Auto-detect media library folders across all mounted drives — mirrors the
+ *  desktop app's "Automatische Erkennung". Returns {path, kind, name} guesses,
+ *  skipping anything already registered and de-nesting overlaps. */
+export function detectLibraries() {
+  const existing = new Set(listLibraries().map((l) => l.path.replace(/\\/g, "/").replace(/\/+$/, "")));
+  const found = [];
+  const seen = new Set();
+  const add = (path, kind) => {
+    const norm = path.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (seen.has(norm) || existing.has(norm)) return;
+    // skip if an ancestor was already picked (avoid nested duplicates)
+    if ([...seen].some((p) => norm.startsWith(p + "/"))) return;
+    seen.add(norm);
+    found.push({ path: norm, kind, name: norm.split("/").pop() || norm });
+  };
+
+  const walk = (dir, depth) => {
+    if (depth > 3) return;
+    for (const e of listDir(dir)) {
+      if (!e.isDirectory() || e.name.startsWith(".")) continue;
+      const p = join(dir, e.name);
+      // by name first (strongest signal — one file is enough), then by content
+      if (MOVIE_WORDS.test(e.name) && looksLikeMovieRoot(p, 1)) add(p, "movie");
+      else if (SHOW_WORDS.test(e.name) && looksLikeShowRoot(p)) add(p, "show");
+      else if (looksLikeShowRoot(p)) add(p, "show");
+      else if (looksLikeMovieRoot(p, 2)) add(p, "movie");
+      else walk(p, depth + 1); // descend into container/pool folders
+    }
+  };
+  for (const root of BROWSE_ROOTS) walk(root, 0);
+  return found;
+}
+
 /** Collect every video under a show root as {path, season, episode, epTitle}. */
 function collectShowFiles(root) {
   const out = [];

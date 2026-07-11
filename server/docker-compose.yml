@@ -1,16 +1,14 @@
 # ============================================================================
 # GHGFlix Server für ZimaOS — einfach kopieren & einfügen!
 # ZimaOS: App Store → oben rechts "+" → "Install a customized app" →
-#         "Import" → diese Datei einfügen → NUR den einen Medien-Pfad
-#         anpassen → Install.  Danach: http://<zimaboard-ip>:8484 öffnen.
+#         "Import" → diese Datei einfügen → Install (nichts anpassen nötig).
+#         Danach: http://<zimaboard-ip>:8484 öffnen.
 #
-# MEHRERE PLATTEN? Musst du NICHT hier eintragen! Eine Zeile reicht (z.B.
-# /DATA deckt bei ZimaOS normalerweise schon alle Platten im Speicherpool
-# ab). Welche Unterordner davon Serien bzw. Filme sind, wählst du bequem
-# in der GHGFlix-Weboberfläche unter Einstellungen → Bibliotheken per
-# Ordner-Browser aus (klicken statt Pfade tippen, beliebig viele Ordner).
-# Hast du zusätzlich separate/externe Platten, die NICHT im Pool stecken,
-# häng einfach eine weitere volumes-Zeile an (Beispiele unten im Kommentar).
+# MEHRERE PLATTEN werden automatisch alle eingebunden (/DATA-Pool + externe
+# Platten unter /media). In der GHGFlix-Weboberfläche unter Einstellungen →
+# Bibliotheken auf "Automatisch erkennen" klicken — findet Film-/Serienordner
+# auf ALLEN Platten von selbst. Oder per "Ordner hinzufügen" durch alle
+# Laufwerke klicken (klicken statt Pfade tippen).
 #
 # WICHTIG: In ZimaOS KEINE Volume-Zeile leer lassen (leere "Source" führt zu
 # "field Source must not be empty"). Es werden ausschließlich echte Pfade
@@ -27,13 +25,15 @@ services:
     ports:
       - "8484:8484"
     volumes:
-      # ⚠️ NUR diesen linken Pfad an deinen ZimaOS-Speicherpool anpassen.
-      #    (In ZimaOS unter "Files" nachsehen — meist /DATA). Rechte Seite
-      #    immer so lassen, das ist der Ordner, den der Browser in der
-      #    GHGFlix-Weboberfläche durchsucht.
-      - /DATA:/media:ro
-      # Zusätzliche, separate Platte (nicht im Pool)? Einfach dazuhängen:
-      # - /mnt/externe-platte:/media/extern1:ro
+      # ALLE Platten werden eingebunden, damit du in der Weboberfläche
+      # (Einstellungen → Bibliotheken → Automatisch erkennen) jede findest:
+      #  • /DATA  = ZimaOS-Speicherpool (alle gepoolten Platten in einem)
+      #  • /media = extern/USB angeschlossene Platten
+      # Beide read-only. Normalerweise musst du hier GAR NICHTS ändern.
+      - /DATA:/DATA:ro
+      - /media:/media:ro
+      # Weitere Sonder-Mountpunkte? Einfach dazuhängen, z.B.:
+      # - /mnt/nas:/mnt/nas:ro
       # Datenbank + Bild-Cache (echter Host-Pfad statt benanntem Volume):
       - /DATA/AppData/ghgflix/data:/data
     environment:
