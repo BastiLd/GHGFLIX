@@ -7,14 +7,14 @@ import { randomBytes } from "node:crypto";
 import { join, normalize, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb, getSetting, setSetting, settingOr, listLibraries, addLibrary, removeLibrary } from "./db.js";
-import { scanLibrary, scanState, removeLibraryContent, detectLibraries, BROWSE_ROOTS } from "./scanner.js";
+import { scanLibrary, scanState, removeLibraryContent, detectLibraries, BROWSE_ROOTS, primaryRoot, isSystemDir } from "./scanner.js";
 import { canDirectPlay, ffprobe, serveFile, serveThumb, serveTranscode } from "./stream.js";
 import { cachedImage, tmdbEnabled } from "./tmdb.js";
 import * as supabase from "./supabase.js";
 
 const PORT = parseInt(process.env.PORT || "8484", 10);
 const WEB_DIR = join(fileURLToPath(new URL(".", import.meta.url)), "..", "web");
-const VERSION = "1.0.0";
+const VERSION = "1.2.0";
 
 const db = openDb();
 
@@ -318,35 +318,28 @@ async function handle(req, res) {
     if (lib) removeLibraryContent(lib.path, lib.kind);
     return json(res, { ok: true });
   }
-  // Browse the container's filesystem so folders can be picked by clicking
-  // instead of typing paths blind — mirrors the desktop app's folder picker.
-  // With no path it lists the mounted drive roots (every disk mounted under
-  // /media shows up), so multiple drives are all reachable.
+  // Browse the container-visible filesystem so folders can be picked by
+  // clicking instead of typing paths blind — mirrors the desktop app's
+  // folder picker. With the whole host mounted at /host, this lets the user
+  // navigate their ENTIRE ZimaOS and find media wherever it really lives.
+  // System folders (proc, sys, AppData, …) are hidden.
   if (p === "/api/browse") {
-    const target = url.searchParams.get("path");
-    if (!target || target === "roots") {
-      const roots = BROWSE_ROOTS.filter((r) => {
-        try {
-          return statSync(r).isDirectory();
-        } catch {
-          return false;
-        }
-      }).map((r) => ({ name: r, path: r }));
-      return json(res, { path: "", parent: null, roots: true, entries: roots });
-    }
+    const root = primaryRoot();
+    let target = url.searchParams.get("path");
+    if (!target || target === "roots") target = root; // start at the real root
     let entries;
     try {
       entries = readdirSync(target, { withFileTypes: true })
-        .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+        .filter((e) => e.isDirectory() && !isSystemDir(e.name))
         .map((e) => ({ name: e.name, path: join(target, e.name) }))
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .sort((a, b) => a.name.localeCompare(b.name, "de"));
     } catch (e) {
       return json(res, { error: "Ordner nicht lesbar: " + String(e.message || e) }, 400);
     }
-    // going above a browse root returns to the root chooser
-    const atRoot = BROWSE_ROOTS.some((r) => normalize(r) === normalize(target));
-    const parent = atRoot ? "roots" : target !== "/" ? normalize(join(target, "..")) : "roots";
-    return json(res, { path: target, parent, entries });
+    // never navigate above the browse root
+    const atRoot = normalize(target) === normalize(root);
+    const parent = atRoot ? null : normalize(join(target, ".."));
+    return json(res, { path: target, root, parent, entries });
   }
   // Auto-detect media library folders across all mounted drives.
   if (p === "/api/detect") {

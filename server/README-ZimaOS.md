@@ -34,25 +34,17 @@ Der Server scannt automatisch im Hintergrund; Fortschritt siehst du direkt im
 Bibliotheken-Panel. Ordner wieder entfernen (🗑) nimmt nur den Eintrag aus
 GHGFlix raus — deine Dateien auf der Platte bleiben unangetastet.
 
-### Wichtig: Platten müssen im Container sichtbar sein
+### Alle Platten sind automatisch sichtbar
 
-Der Server sieht nur, was du ihm als **Volume** eingebunden hast. Liegen deine
-Platten bei ZimaOS **nicht** unter `/DATA` oder `/media`, sondern an eigenen
-Pfaden (z. B. `/Toshiba/…`, `/Samsung/…`), musst du sie beim Installieren im
-**Speicher**-Bereich hinzufügen — links der ZimaOS-Pfad, rechts der
-Container-Pfad. Beispiel für drei Platten:
+Das gesamte ZimaOS-Dateisystem ist read-only unter `/host` eingebunden
+(`- /:/host:ro` in der Compose). Dadurch findest du im Ordner-Browser **jede**
+Platte und **jeden** Ordner — egal wo ZimaOS sie einhängt (`/DATA`, `/media`,
+SMB-Freigaben usw.), mit den **echten** Ordnernamen. Du musst keine Pfade
+raten und keine Platten einzeln mounten.
 
-| ZimaOS (Host) | Container |
-|---|---|
-| `/Toshiba/TO-MOONDOOM` | `/media/Toshiba` |
-| `/Samsung 3 Platte/SM3-MOONDOOM` | `/media/Samsung3` |
-| `/Samsung/SM-MOONDOOM` | `/media/Samsung` |
-| `/DATA/AppData/ghgflix/data` | `/data` |
-
-Danach findest du im Ordner-Browser (bzw. bei „Automatisch erkennen“) alle
-drei Platten unter `/media`. Am einfachsten: nimm die bereits fertig
-ausgefüllte `docker-compose.zimaos.yml` (falls für dich generiert) — da sind
-diese Mounts schon drin.
+- System-Ordner (`proc`, `sys`, App-Daten …) werden automatisch ausgeblendet.
+- „Automatisch erkennen“ durchsucht das Ganze und erkennt Film-/Serienordner
+  unabhängig vom Namen (`Movies`, `Filme`, `Series`, `Serien`, `TV Shows` …).
 
 Beim ersten Start scannt der Server die Bibliothek. TMDb-Key (für Poster und
 Beschreibungen — derselbe Key wie in der PC-App) entweder in der Compose-Datei
@@ -121,11 +113,20 @@ gestreamt (Direct Play, keine CPU-Last). Alles andere (MKV, HEVC/x265, …)
 wandelt ffmpeg live in H.264/AAC um — auf schwachen Boards ggf. in den
 Einstellungen des Players eine niedrigere Qualität wählen.
 
-## 6. Updates
+## 6. Updates (ohne Neuinstallation)
 
-Neue Version einspielen: ZimaOS → App → GHGFlix → *Check for updates* /
-Neuinstallation mit derselben Compose-Datei. Die Datenbank bleibt im
-`ghgflix-data`-Volume erhalten.
+Du musst **nicht** neu installieren. Neue Version so einspielen — die Daten
+(Bibliotheken, Gesehen-Stand) bleiben im `/DATA/AppData/ghgflix/data`-Ordner
+erhalten:
+
+- **ZimaOS App Store:** bei der GHGFlix-App auf **Update** / *Check for
+  updates* — ZimaOS zieht das neue `latest`-Image und startet den Container neu.
+- **Portainer / Docker:** Image neu ziehen und Container neu erstellen:
+  `docker compose pull && docker compose up -d`.
+
+Welche Version läuft, steht unten in **⚙️ Einstellungen** (bzw. unter
+`http://<ip>:8484/api/ping`). Passt die Version nicht zur neuesten, wurde das
+Image noch nicht neu gezogen.
 
 ## Alle Umgebungsvariablen
 

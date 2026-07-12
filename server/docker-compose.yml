@@ -4,15 +4,14 @@
 #         "Import" → diese Datei einfügen → Install (nichts anpassen nötig).
 #         Danach: http://<zimaboard-ip>:8484 öffnen.
 #
-# MEHRERE PLATTEN werden automatisch alle eingebunden (/DATA-Pool + externe
-# Platten unter /media). In der GHGFlix-Weboberfläche unter Einstellungen →
-# Bibliotheken auf "Automatisch erkennen" klicken — findet Film-/Serienordner
-# auf ALLEN Platten von selbst. Oder per "Ordner hinzufügen" durch alle
-# Laufwerke klicken (klicken statt Pfade tippen).
+# MEHRERE PLATTEN: Das GESAMTE ZimaOS-Dateisystem wird read-only unter /host
+# eingebunden. So findest du in der Weboberfläche (Einstellungen → Bibliotheken)
+# JEDE Platte und JEDEN Ordner — egal, wo ZimaOS sie einhängt (/DATA, /media,
+# Netzwerkfreigaben, …). Kein Raten von Pfaden mehr. "Automatisch erkennen"
+# durchsucht das Ganze und schlägt Film-/Serienordner vor.
 #
 # WICHTIG: In ZimaOS KEINE Volume-Zeile leer lassen (leere "Source" führt zu
-# "field Source must not be empty"). Es werden ausschließlich echte Pfade
-# benutzt — keine benannten Volumes (die ZimaOS nicht abbilden kann).
+# "field Source must not be empty").
 # ============================================================================
 services:
   ghgflix:
@@ -25,16 +24,9 @@ services:
     ports:
       - "8484:8484"
     volumes:
-      # ALLE Platten werden eingebunden, damit du in der Weboberfläche
-      # (Einstellungen → Bibliotheken → Automatisch erkennen) jede findest:
-      #  • /DATA  = ZimaOS-Speicherpool (alle gepoolten Platten in einem)
-      #  • /media = extern/USB angeschlossene Platten
-      # Beide read-only. Normalerweise musst du hier GAR NICHTS ändern.
-      - /DATA:/DATA:ro
-      - /media:/media:ro
-      # Weitere Sonder-Mountpunkte? Einfach dazuhängen, z.B.:
-      # - /mnt/nas:/mnt/nas:ro
-      # Datenbank + Bild-Cache (echter Host-Pfad statt benanntem Volume):
+      # Gesamtes ZimaOS read-only -> im Ordner-Browser findest du ALLES.
+      - /:/host:ro
+      # Datenbank + Bild-Cache (schreibbar, echter Host-Pfad):
       - /DATA/AppData/ghgflix/data:/data
     environment:
       # TMDb-Key für Poster/Beschreibungen (kann auch später in der

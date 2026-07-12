@@ -19,13 +19,38 @@ function listDir(dir) {
   }
 }
 
-// The roots the folder browser + auto-detection start from. Every host drive
-// mounted into the container under /media (see docker-compose) shows up here,
-// so multiple disks are all reachable. Extra roots via BROWSE_ROOTS.
-export const BROWSE_ROOTS = (process.env.BROWSE_ROOTS || "/media,/DATA,/mnt")
+// The roots the folder browser + auto-detection start from. When the whole
+// host filesystem is mounted read-only at /host (recommended — see
+// docker-compose), the user can browse EVERYTHING and pick their real media
+// folders wherever ZimaOS actually mounts them. Falls back to the common
+// mount points if /host isn't present.
+export const BROWSE_ROOTS = (process.env.BROWSE_ROOTS || "/host,/media,/DATA,/mnt")
   .split(/[;,]/)
   .map((s) => s.trim())
   .filter(Boolean);
+
+// System / noise directories never worth showing or scanning (so browsing the
+// host root or auto-detecting doesn't drown in /proc, /sys, app-data, …).
+const SKIP_DIRS = new Set([
+  "proc", "sys", "dev", "run", "boot", "tmp", "var", "etc", "usr", "bin", "sbin",
+  "lib", "lib64", "opt", "root", "srv", "snap", "lost+found", "node_modules",
+  "@eaDir", "$RECYCLE.BIN", "System Volume Information", "AppData", "appdata",
+  ".git", ".cache", ".Trash", "#recycle",
+]);
+const skip = (name) => SKIP_DIRS.has(name) || name.startsWith(".");
+export const isSystemDir = skip;
+/** The single best root to browse from: the whole-host mount if present,
+ *  else the first existing configured root. */
+export function primaryRoot() {
+  for (const r of BROWSE_ROOTS) {
+    try {
+      if (statSync(r).isDirectory()) return r;
+    } catch {
+      /* not mounted */
+    }
+  }
+  return "/";
+}
 
 const MOVIE_WORDS = /\b(movies?|filme?|film|cinema|kino|spielfilme?)\b/i;
 const SHOW_WORDS = /\b(series|serien?|tv[- ]?shows?|shows?|tv|staffeln?|episodes?|folgen)\b/i;
@@ -74,10 +99,12 @@ export function detectLibraries() {
     found.push({ path: norm, kind, name: norm.split("/").pop() || norm });
   };
 
+  let visited = 0;
   const walk = (dir, depth) => {
-    if (depth > 3) return;
+    if (depth > 5 || visited > 4000) return; // deep enough for /host/<drive>/<lib>, bounded
     for (const e of listDir(dir)) {
-      if (!e.isDirectory() || e.name.startsWith(".")) continue;
+      if (!e.isDirectory() || skip(e.name)) continue;
+      visited++;
       const p = join(dir, e.name);
       // by name first (strongest signal — one file is enough), then by content
       if (MOVIE_WORDS.test(e.name) && looksLikeMovieRoot(p, 1)) add(p, "movie");
@@ -87,7 +114,16 @@ export function detectLibraries() {
       else walk(p, depth + 1); // descend into container/pool folders
     }
   };
-  for (const root of BROWSE_ROOTS) walk(root, 0);
+  // de-dupe the roots (when /host is mounted, /media & /DATA live under it too)
+  const roots = BROWSE_ROOTS.filter((r, i, a) => a.indexOf(r) === i);
+  for (const root of roots) {
+    try {
+      if (!statSync(root).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    walk(root, 0);
+  }
   return found;
 }
 

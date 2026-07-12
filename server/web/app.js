@@ -529,31 +529,31 @@ async function openBrowseModal(onPick) {
   document.body.appendChild(overlay);
 
   const render = async (path) => {
-    const data = await api(`/api/browse?path=${encodeURIComponent(path || "roots")}`);
-    if (data.error) { toast(data.error); render("roots"); return; }
-    const isRoots = data.roots;
+    const data = await api(`/api/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`);
+    if (data.error) { toast(data.error); return; }
+    const atRoot = !data.parent;
+    // pretty breadcrumb relative to the browse root (/host stripped away)
+    const rel = data.root && data.path.startsWith(data.root) ? data.path.slice(data.root.length) || "/" : data.path;
     overlay.innerHTML = `
       <div class="modalbox">
-        <div class="modalhead"><h3>${isRoots ? "Platte / Laufwerk wählen" : "Ordner wählen"}</h3><button class="iconbtn" id="mclose">✕</button></div>
-        <div class="breadcrumb">${isRoots ? "Alle eingebundenen Laufwerke" : esc(data.path)}</div>
+        <div class="modalhead"><h3>Ordner wählen</h3><button class="iconbtn" id="mclose">✕</button></div>
+        <div class="breadcrumb">${esc(rel)}</div>
         <div class="browse-list">
-          ${!isRoots && data.parent ? `<button class="browse-item up" data-p="${esc(data.parent)}">‹ .. (zurück)</button>` : ""}
-          ${data.entries.map((e) => `<button class="browse-item" data-p="${esc(e.path)}">${svgIcon(isRoots ? "hdd" : "folder", 18)} ${esc(e.name)}</button>`).join("") || '<div class="hint" style="padding:8px 4px">Keine Unterordner hier</div>'}
+          ${!atRoot ? `<button class="browse-item up" data-p="${esc(data.parent)}">${svgIcon("folder", 18)} .. (zurück)</button>` : ""}
+          ${data.entries.map((e) => `<button class="browse-item" data-p="${esc(e.path)}">${svgIcon("folder", 18)} ${esc(e.name)}</button>`).join("") || '<div class="hint" style="padding:8px 4px">Keine Unterordner hier</div>'}
         </div>
-        ${isRoots ? '<p class="hint">Öffne die Platte, auf der deine Filme/Serien liegen, und navigiere in den passenden Ordner.</p>' : `
         <div class="btnrow" style="margin-top:14px">
           <button class="btn" id="pickShow">${svgIcon("tv", 16)} Als Serien-Ordner</button>
           <button class="btn ghost" id="pickMovie">${svgIcon("film", 16)} Als Film-Ordner</button>
-        </div>`}
+        </div>
+        <p class="hint">Navigiere in den Ordner, der direkt die Filme bzw. Serien enthält, und wähle unten den Typ.</p>
       </div>`;
     overlay.querySelectorAll(".browse-item").forEach((b) => (b.onclick = () => render(b.dataset.p)));
     $("#mclose", overlay).onclick = () => overlay.remove();
-    if (!isRoots) {
-      $("#pickShow", overlay).onclick = () => { onPick(data.path, "show"); overlay.remove(); };
-      $("#pickMovie", overlay).onclick = () => { onPick(data.path, "movie"); overlay.remove(); };
-    }
+    $("#pickShow", overlay).onclick = () => { onPick(data.path, "show"); overlay.remove(); };
+    $("#pickMovie", overlay).onclick = () => { onPick(data.path, "movie"); overlay.remove(); };
   };
-  await render("roots");
+  await render(null);
 }
 
 /** Auto-detection modal: scans all drives and offers found folders to add. */
@@ -611,10 +611,11 @@ async function viewSettings() {
   const s = await api("/api/settings");
   const scan = await api("/api/scan/status");
   const libs = await api("/api/libraries");
+  const ping = await api("/api/ping").catch(() => ({}));
   const c = conn.load();
   shell(
     "settings",
-    `<div class="section-title">Einstellungen</div>
+    `<div class="section-title">Einstellungen <span style="color:var(--muted);font-weight:400;font-size:13px">GHGFlix Server v${esc(ping.version || "?")}</span></div>
 
      <div class="panel"><h3>Bibliotheken <span class="tag ${scan.tmdb ? "ok" : "bad"}">TMDb ${scan.tmdb ? "aktiv" : "kein Key"}</span></h3>
       <div class="desc">${scan.shows} Serien · ${scan.episodes} Folgen · ${scan.movies} Filme ${scan.running ? "· <b>Scan läuft …</b>" : ""}</div>
