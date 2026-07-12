@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { setProperty } from "tauri-plugin-mpv-api";
+import { setProperty } from "./mpv";
 import { listShowEpisodes, listProgress } from "./api";
 import type { Episode } from "./types";
 

@@ -9,7 +9,11 @@ import { isVideo, parseEpisode, parseSeasonFolder, showTitleFromFile, parseMovie
 import { ffprobe } from "./stream.js";
 import * as tmdb from "./tmdb.js";
 
-export const scanState = { running: false, lastRun: 0, lastResult: "", shows: 0, movies: 0, episodes: 0 };
+export const scanState = {
+  running: false, lastRun: 0, lastResult: "", shows: 0, movies: 0, episodes: 0,
+  // live progress for the UI (desktop-style scan banner + mascot)
+  stage: "", message: "", current: 0, total: 0,
+};
 
 function listDir(dir) {
   try {
@@ -157,18 +161,26 @@ async function scanShows(db, now) {
 
       const title = cleanTitle(entry.name) || entry.name;
       const year = extractYear(entry.name);
-      let show = db.prepare("SELECT * FROM shows WHERE title = ?").get(title);
+      scanState.message = `Scanne Serie: ${title}`;
+      // remembered manual assignment for this folder? (identify in the UI)
+      const remembered = db.prepare("SELECT tmdb_id FROM identity_map WHERE folder=? AND kind='show'").get(showDir)?.tmdb_id ?? null;
+      let show = remembered
+        ? db.prepare("SELECT * FROM shows WHERE tmdb_id = ?").get(remembered)
+        : db.prepare("SELECT * FROM shows WHERE title = ?").get(title);
       if (!show) {
         const info = db
-          .prepare("INSERT INTO shows (title, year, added_at) VALUES (?, ?, ?)")
-          .run(title, year, now);
+          .prepare("INSERT INTO shows (title, year, added_at, folder) VALUES (?, ?, ?, ?)")
+          .run(title, year, now, showDir);
         show = { id: Number(info.lastInsertRowid), title, tmdb_id: null };
+      } else if (!show.folder) {
+        db.prepare("UPDATE shows SET folder=? WHERE id=?").run(showDir, show.id);
       }
       // TMDb enrich once per show
       if (!show.tmdb_id && tmdb.tmdbEnabled()) {
-        const hit = await tmdb.searchShow(title, year);
+        const hit = remembered ? { id: remembered } : await tmdb.searchShow(title, year);
         if (hit) {
           const det = await tmdb.showDetails(hit.id);
+          if (!det && remembered) { /* offline — try again next scan */ }
           db.prepare(
             "UPDATE shows SET tmdb_id=?, overview=?, poster=?, backdrop=?, genres=?, rating=?, year=COALESCE(year, ?) WHERE id=?",
           ).run(
@@ -227,6 +239,8 @@ async function scanMovies(db, now) {
         const fromFile = parseMovie(e.name);
         const pick = fromFolder && fromFolder.year ? fromFolder : fromFile.title.length >= 2 ? fromFile : fromFolder || fromFile;
         addFile.run(pick.title, pick.year, p, now);
+        const remembered = db.prepare("SELECT tmdb_id FROM identity_map WHERE folder=? AND kind='movie'").get(dir)?.tmdb_id ?? null;
+        if (remembered) db.prepare("UPDATE movies SET tmdb_id=COALESCE(tmdb_id, ?) WHERE path=?").run(remembered, p);
       }
     }
   };
@@ -347,11 +361,17 @@ export async function scanLibrary() {
     return;
   }
   scanState.running = true;
+  scanState.stage = "scan";
+  scanState.message = "Scanne Bibliothek…";
+  scanState.current = 0;
+  scanState.total = 0;
   const db = openDb();
   const now = Date.now();
   try {
     await scanShows(db, now);
+    scanState.message = "Scanne Filme…";
     await scanMovies(db, now);
+    scanState.message = "Lese Video-Infos…";
     pruneMissing(db);
     await probeMissing(db);
     applyPendingProgress(db);
@@ -366,6 +386,8 @@ export async function scanLibrary() {
   } finally {
     scanState.lastRun = Date.now();
     scanState.running = false;
+    scanState.message = "";
+    scanState.stage = "";
     if (rerunRequested) {
       rerunRequested = false;
       void scanLibrary();

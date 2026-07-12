@@ -1,6 +1,6 @@
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getVersion } from "@tauri-apps/api/app";
+import { getVersion, invoke, openDialog, openUrl, saveDialog, webDownload, webPickedFile } from "../lib/backend";
+import { IS_WEB } from "../lib/platform";
 import {
   BarChart3,
   Cloud,
@@ -47,7 +47,6 @@ import {
 import { comboFromEvent, comboHasKey, comboLabel } from "../lib/keys";
 import { useStore } from "../lib/store";
 import { applyAccent, loadAccent, useUiPrefs, type UiPrefs } from "../lib/uiPrefs";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { getSession, reinitSupabase, signOut } from "../lib/supabase";
 import { loadServerConfig, loginServer, saveServerConfig, startServerSync, syncOnce, testServer, type ServerConfig } from "../lib/serverSync";
 import { Button, InfoButton, Modal, Spinner, TextInput } from "../components/ui";
@@ -100,6 +99,77 @@ function KeyCapture({ value, onChange }: { value: string; onChange: (v: string) 
     >
       {capturing ? "Taste drücken …" : comboLabel(value)}
     </button>
+  );
+}
+
+/** Small "i" shown ONLY in the web app: explains what this feature does in the
+ *  desktop app and how (or why not) it works in the browser version. */
+function WebInfo({ children }: { children: ReactNode }) {
+  if (!IS_WEB) return null;
+  return (
+    <InfoButton>
+      <p className="font-bold text-ghg-red">Web-Version</p>
+      {children}
+    </InfoButton>
+  );
+}
+
+interface BrowseResult {
+  path: string;
+  root: string;
+  parent: string | null;
+  entries: { name: string; path: string }[];
+}
+
+/** Server-side folder browser (web only): media paths live on the SERVER, so a
+ *  native file dialog is useless here — this mirrors the desktop folder picker
+ *  but walks the server's mounted drives (/host, /media, /DATA, …). */
+function ServerFolderPicker({
+  title,
+  onPick,
+  onClose,
+}: {
+  title: string;
+  onPick: (path: string) => void;
+  onClose: () => void;
+}) {
+  const [res, setRes] = useState<BrowseResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const load = (path?: string) =>
+    invoke<BrowseResult>("browse_dirs", { path: path ?? null })
+      .then((r) => {
+        setRes(r);
+        setErr(null);
+      })
+      .catch((e) => setErr(String(e)));
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <Modal open onClose={onClose} title={title}>
+      <div className="space-y-3">
+        <p className="text-xs text-ghg-muted break-all">{res?.path ?? "…"}</p>
+        {err && <p className="text-sm text-ghg-red">{err}</p>}
+        <div className="max-h-72 overflow-y-auto border border-ghg-line rounded-lg divide-y divide-ghg-line">
+          {res?.parent && (
+            <button onClick={() => void load(res.parent ?? undefined)} className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2 font-semibold">
+              ‹ Zurück
+            </button>
+          )}
+          {(res?.entries ?? []).map((e) => (
+            <button key={e.path} onClick={() => void load(e.path)} className="w-full text-left px-3 py-2 text-sm hover:bg-ghg-surface2 truncate">
+              📁 {e.name}
+            </button>
+          ))}
+          {res && res.entries.length === 0 && <p className="px-3 py-2 text-sm text-ghg-muted">Keine Unterordner</p>}
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>Abbrechen</Button>
+          <Button onClick={() => res && onPick(res.path)}>Diesen Ordner wählen</Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -244,6 +314,7 @@ export default function Settings() {
   const [markerKey, setMarkerKey] = useState("k");
   const [email, setEmail] = useState<string | null>(null);
   const [detecting, setDetecting] = useState(false);
+  const [webPick, setWebPick] = useState<{ kind: "movie" | "tv" } | null>(null);
   const [showTheme, setShowTheme] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [autoScan, setAutoScan] = useState(true);
@@ -414,6 +485,11 @@ export default function Settings() {
   };
 
   const pickFolder = async (kind: "movie" | "tv") => {
+    if (IS_WEB) {
+      // server paths → server folder browser instead of a native dialog
+      setWebPick({ kind });
+      return;
+    }
     const dir = await openDialog({ directory: true, multiple: false });
     if (typeof dir === "string") {
       await addLibrary(dir, kind);
@@ -423,12 +499,15 @@ export default function Settings() {
   };
 
   const autoDetect = async () => {
-    const dir = await openDialog({ directory: true, multiple: false });
-    if (typeof dir !== "string") return;
+    let dir: string | string[] | null = "";
+    if (!IS_WEB) {
+      dir = await openDialog({ directory: true, multiple: false });
+      if (typeof dir !== "string") return;
+    }
     setDetecting(true);
     try {
       const before = libs.data?.length ?? 0;
-      const list = await detectLibraries(dir);
+      const list = await detectLibraries(typeof dir === "string" ? dir : "");
       qc.invalidateQueries({ queryKey: ["libraries"] });
       const added = list.length - before;
       toast(
@@ -501,6 +580,17 @@ export default function Settings() {
   };
 
   const doExport = async () => {
+    if (IS_WEB) {
+      // no server filesystem write — export straight into a browser download
+      try {
+        const data = await invoke<string>("export_json");
+        webDownload("ghgflix-daten.json", data, "application/json");
+        toast("Export heruntergeladen", "success");
+      } catch (e) {
+        toast(String(e), "error");
+      }
+      return;
+    }
     const path = await saveDialog({
       defaultPath: "ghgflix-daten.json",
       filters: [{ name: "JSON", extensions: ["json"] }],
@@ -518,7 +608,13 @@ export default function Settings() {
     const path = await openDialog({ multiple: false, filters: [{ name: "JSON", extensions: ["json"] }] });
     if (typeof path !== "string") return;
     try {
-      const n = await importData(path);
+      let n: number;
+      if (IS_WEB) {
+        const text = webPickedFile ? await webPickedFile.text() : "";
+        n = await invoke<number>("import_json", { data: text });
+      } else {
+        n = await importData(path);
+      }
       toast(`${n} Einträge übernommen`, "success");
     } catch (e) {
       toast(String(e), "error");
@@ -782,7 +878,20 @@ export default function Settings() {
             <div className="flex gap-4 flex-wrap mb-4">
               <PrefSelect k="audioLangPref" label="Audio-Sprache bevorzugen" options={[["en-de", "Englisch, dann Deutsch"], ["de-en", "Deutsch, dann Englisch"], ["file", "Datei-Standard"]]} />
               <PrefNumber k="subScale" label="Untertitel-Größe (×)" min={0.5} max={2} step={0.1} />
-              <PrefSelect k="pipSize" label="Bild-im-Bild-Größe" options={[["sm", "Klein"], ["md", "Mittel"], ["lg", "Groß"]]} />
+              <span className="inline-flex items-end gap-1">
+                <PrefSelect k="pipSize" label="Bild-im-Bild-Größe" options={[["sm", "Klein"], ["md", "Mittel"], ["lg", "Groß"]]} />
+                <WebInfo>
+                  <p>
+                    <b>Desktop-App:</b> Bild-im-Bild macht das GHGFlix-FENSTER klein und immer-im-Vordergrund — die Größe
+                    stellst du hier ein.
+                  </p>
+                  <p>
+                    <b>Hier (Browser):</b> es wird das echte Browser-Bild-im-Bild benutzt (wie bei YouTube). Dessen Größe
+                    bestimmt der Browser selbst — diese Einstellung hat hier keine Wirkung. Der Audio-Spur-Wechsel läuft
+                    serverseitig (kurzer Neustart des Streams).
+                  </p>
+                </WebInfo>
+              </span>
             </div>
             <div className="flex gap-4 flex-wrap mb-4">
               <PrefNumber k="seekSmall" label="Spulen kurz (Sek.)" min={2} max={60} />
@@ -914,6 +1023,18 @@ export default function Settings() {
             title="Automatische Intro-Erkennung (Audio)"
             desc="Vergleicht den Ton aufeinanderfolgender Folgen und findet die gemeinsame Sequenz = das Intro."
           >
+            <div className="mb-2">
+              <WebInfo>
+                <p>
+                  <b>Desktop-App:</b> analysiert den TON aufeinanderfolgender Folgen lokal mit ffmpeg und findet das Intro automatisch.
+                </p>
+                <p>
+                  <b>Hier (Server):</b> die Analyse läuft auf dem Server (ffmpeg ist im Container enthalten) und kann auf schwachen
+                  Boards (ZimaBoard) deutlich länger dauern. Bereits erkannte/manuell gesetzte Intro-Marken aus der Desktop-App
+                  werden über den Sync übernommen und funktionieren hier sofort.
+                </p>
+              </WebInfo>
+            </div>
             <div className="flex gap-4 flex-wrap mb-4">
               <label className="flex-1 min-w-40">
                 <span className="text-xs uppercase tracking-wide text-ghg-muted">Analyse-Fenster (Minuten ab Folgenstart)</span>
@@ -957,6 +1078,19 @@ export default function Settings() {
             </>
           }
         >
+          <div className="mb-2">
+            <WebInfo>
+              <p>
+                <b>Desktop-App:</b> diese Optionen steuern den eingebauten mpv-Player (Hardware-Dekodierung der Grafikkarte,
+                Renderer, Laufruhe).
+              </p>
+              <p>
+                <b>Hier (Browser):</b> es spielt der HTML5-Player des Browsers. Der Browser übernimmt die Hardware-Dekodierung
+                selbst; nicht direkt abspielbare Formate (MKV, HEVC …) wandelt der SERVER live per ffmpeg um. Diese Regler
+                haben im Browser deshalb keine Wirkung.
+              </p>
+            </WebInfo>
+          </div>
           <div className="flex gap-4 flex-wrap mb-4">
             <label className="flex-1 min-w-40">
               <span className="text-xs uppercase tracking-wide text-ghg-muted">Hardware-Dekodierung</span>
@@ -1177,6 +1311,18 @@ export default function Settings() {
           title="Externe Werkzeuge"
           desc="mpv (Wiedergabe), ffmpeg (Vorschau/Intro), ffprobe (Qualitäts-Erkennung). GHGFlix findet und repariert die Pfade automatisch – auch wenn ein Update sie verschiebt."
         >
+          <div className="mb-2">
+            <WebInfo>
+              <p>
+                <b>Desktop-App:</b> braucht mpv (Wiedergabe) und ffmpeg/ffprobe auf DEINEM PC — hier werden deren Pfade
+                geprüft und repariert.
+              </p>
+              <p>
+                <b>Hier (Server):</b> mpv gibt es im Browser nicht (es spielt der HTML5-Player), ffmpeg/ffprobe sind fest im
+                Docker-Container eingebaut. Der Status unten zeigt die Werkzeuge des SERVERS; manuelle Pfade sind nicht nötig.
+              </p>
+            </WebInfo>
+          </div>
           <div className="space-y-2 mb-4">
             <ToolRow name="mpv" status={tools?.mpv} />
             <ToolRow name="ffmpeg" status={tools?.ffmpeg} />
@@ -1210,7 +1356,28 @@ export default function Settings() {
         </Section>
       )}
 
-      {tab === "konto" && <ServerSyncSection />}
+      {tab === "konto" && !IS_WEB && <ServerSyncSection />}
+      {tab === "konto" && IS_WEB && (
+        <Section title="GHGFlix-Server (ZimaOS)" desc="Du bist gerade MIT dem Server verbunden.">
+          <div className="text-sm text-ghg-muted flex items-start gap-1.5">
+            <WebInfo>
+              <p>
+                <b>Desktop-App:</b> hier wird der Sync PC ↔ Server eingerichtet (Adresse, Passwort, Intervall).
+              </p>
+              <p>
+                <b>Hier:</b> diese Web-App läuft direkt AUF deinem Server — alles, was du hier siehst (Fortschritt, Meine
+                Liste, Zuordnungen), IST bereits der Server-Stand. Jedes Gerät, das sich verbindet (PC-App, Handy, Browser),
+                sieht automatisch denselben Stand. Ein extra Sync ist nicht nötig; den Supabase-Cloud-Sync stellst du unten ein.
+              </p>
+            </WebInfo>
+            <span>
+              Diese Oberfläche läuft direkt auf deinem GHGFlix-Server — PC-App, Handy und Browser teilen sich automatisch
+              denselben Stand (Gesehen, Weiterschauen, Meine Liste). In der PC-App richtest du den Abgleich unter
+              „Einstellungen → GHGFlix-Server“ ein.
+            </span>
+          </div>
+        </Section>
+      )}
 
       {tab === "konto" && (
         <Section
@@ -1284,6 +1451,22 @@ export default function Settings() {
       <p className="text-xs text-ghg-muted text-center mt-8">GHGFlix{version ? ` · v${version}` : ""} · Rot/Schwarz ZickZack Edition</p>
 
       <ThemeStore open={showTheme} onClose={() => setShowTheme(false)} />
+      {webPick && (
+        <ServerFolderPicker
+          title={webPick.kind === "tv" ? "Serien-Ordner auf dem Server wählen" : "Film-Ordner auf dem Server wählen"}
+          onClose={() => setWebPick(null)}
+          onPick={async (path) => {
+            setWebPick(null);
+            try {
+              await addLibrary(path, webPick.kind);
+              qc.invalidateQueries({ queryKey: ["libraries"] });
+              toast("Ordner hinzugefügt — Scan läuft", "success");
+            } catch (e) {
+              toast(String(e), "error");
+            }
+          }}
+        />
+      )}
 
       <Modal open={showShortcuts} onClose={() => setShowShortcuts(false)} title="Tastenkürzel (Player)">
         <div className="space-y-2 text-sm">

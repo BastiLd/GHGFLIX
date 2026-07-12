@@ -1,7 +1,7 @@
 import { ListVideo, Maximize2, Pause, Play, SkipForward, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { command, destroy, observeProperties, setProperty } from "tauri-plugin-mpv-api";
+import { command, destroy, observeProperties, setProperty } from "../lib/mpv";
 import { getEpisode, getMovie, setProgress } from "../lib/api";
 import { formatTime, seasonEpisodeLabel } from "../lib/format";
 import { applyMiniMargins, miniRect, playback, usePlayback } from "../lib/playback";

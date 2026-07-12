@@ -109,7 +109,40 @@ export function openDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_episodes_show ON episodes(show_id, season, episode);
     CREATE INDEX IF NOT EXISTS idx_progress_updated ON progress(updated_at);
+    -- desktop-app parity: remembered manual TMDb assignments (survive rebuilds)
+    CREATE TABLE IF NOT EXISTS identity_map (
+      folder TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('movie','show')),
+      tmdb_id INTEGER NOT NULL,
+      PRIMARY KEY (folder, kind)
+    );
+    -- per-season poster override (Plex-style artwork picker)
+    CREATE TABLE IF NOT EXISTS season_art (
+      show_id INTEGER NOT NULL,
+      season INTEGER NOT NULL,
+      path TEXT NOT NULL,
+      PRIMARY KEY (show_id, season)
+    );
   `);
+  // column migrations for desktop-app parity (safe to re-run)
+  const addCol = (table, ddl) => {
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`); } catch { /* exists */ }
+  };
+  addCol("shows", "cert TEXT");
+  addCol("shows", "status TEXT");
+  addCol("shows", "last_year INTEGER");
+  addCol("shows", "runtime INTEGER");
+  addCol("shows", "intro_start REAL");
+  addCol("shows", "intro_end REAL");
+  addCol("shows", "identified INTEGER NOT NULL DEFAULT 0");
+  addCol("shows", "folder TEXT");
+  addCol("movies", "cert TEXT");
+  addCol("movies", "runtime_min INTEGER");
+  addCol("movies", "identified INTEGER NOT NULL DEFAULT 0");
+  addCol("episodes", "air_date TEXT");
+  addCol("episodes", "runtime INTEGER");
+  addCol("episodes", "intro_start REAL");
+  addCol("episodes", "intro_end REAL");
   // default profile so everything works out of the box
   const n = db.prepare("SELECT COUNT(*) c FROM profiles").get().c;
   if (n === 0) {

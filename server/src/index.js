@@ -11,10 +11,17 @@ import { scanLibrary, scanState, removeLibraryContent, detectLibraries, BROWSE_R
 import { canDirectPlay, ffprobe, serveFile, serveThumb, serveTranscode } from "./stream.js";
 import { cachedImage, tmdbEnabled } from "./tmdb.js";
 import * as supabase from "./supabase.js";
+import { handleInvoke, makeThumb, thumbFile } from "./invoke.js";
+import { spawn } from "node:child_process";
 
 const PORT = parseInt(process.env.PORT || "8484", 10);
-const WEB_DIR = join(fileURLToPath(new URL(".", import.meta.url)), "..", "web");
-const VERSION = "1.2.0";
+const SERVER_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+// webapp/ = the REAL desktop UI built for the browser (vite build:web);
+// web/    = legacy fallback (icon, manifest) for files not in the build
+const WEBAPP_DIR = join(SERVER_ROOT, "webapp");
+const LEGACY_DIR = join(SERVER_ROOT, "web");
+const WEB_DIR = existsSync(join(WEBAPP_DIR, "index.html")) ? WEBAPP_DIR : LEGACY_DIR;
+const VERSION = "2.0.0";
 
 const db = openDb();
 
@@ -111,8 +118,12 @@ const STATIC_MIME = {
 };
 function serveStatic(res, urlPath) {
   let rel = urlPath === "/" ? "/index.html" : urlPath;
-  const file = normalize(join(WEB_DIR, rel));
-  if (!file.startsWith(WEB_DIR) || !existsSync(file) || !statSync(file).isFile()) {
+  let file = normalize(join(WEB_DIR, rel));
+  if ((!file.startsWith(WEB_DIR) || !existsSync(file) || !statSync(file).isFile()) && WEB_DIR !== LEGACY_DIR) {
+    const legacy = normalize(join(LEGACY_DIR, rel));
+    if (legacy.startsWith(LEGACY_DIR) && existsSync(legacy) && statSync(legacy).isFile()) file = legacy;
+  }
+  if ((!file.startsWith(WEB_DIR) && !file.startsWith(LEGACY_DIR)) || !existsSync(file) || !statSync(file).isFile()) {
     // SPA fallback
     const index = join(WEB_DIR, "index.html");
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -339,6 +350,41 @@ async function handle(req, res) {
     if (!row) return res.writeHead(404).end();
     const at = row.duration ? Math.min(row.duration * 0.25, 420) : 300;
     return serveThumb(res, row.path, Math.round(at));
+  }
+
+  // ── desktop-app command surface (the web UI runs the SAME React app as the
+  //    Windows app; src/lib/backend.ts routes every Tauri invoke() here) ──
+  if ((m = p.match(/^\/api\/invoke\/([a-z0-9_]+)$/)) && req.method === "POST") {
+    const args = await readBody(req);
+    try {
+      const result = await handleInvoke(m[1], args);
+      return json(res, { result: result === undefined ? null : result });
+    } catch (e) {
+      return json(res, { error: String(e?.message || e) }, 400);
+    }
+  }
+  // seek-preview thumbnail (generated + cached by the media_thumbnail command)
+  if (p === "/api/thumbfile") {
+    const path = url.searchParams.get("path") || "";
+    const t = parseInt(url.searchParams.get("t") || "0", 10) || 0;
+    const file = await makeThumb(path, t);
+    if (!file) return res.writeHead(404).end();
+    res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=604800" });
+    return createReadStream(file).pipe(res);
+  }
+  // embedded text subtitles → WebVTT (browsers can only render VTT)
+  if ((m = p.match(/^\/api\/subs\/(movie|episode)\/(\d+)\/(\d+)\.vtt$/))) {
+    const row = mediaRow(m[1], +m[2]);
+    if (!row) return res.writeHead(404).end();
+    const ff = spawn(process.env.FFMPEG_PATH || "ffmpeg", [
+      "-hide_banner", "-loglevel", "error",
+      "-i", row.path, "-map", `0:s:${+m[3]}?`, "-f", "webvtt", "pipe:1",
+    ]);
+    res.writeHead(200, { "Content-Type": "text/vtt; charset=utf-8", "Cache-Control": "public, max-age=86400" });
+    ff.stdout.pipe(res);
+    ff.on("error", () => res.end());
+    req.on("close", () => { try { ff.kill("SIGKILL"); } catch {} });
+    return;
   }
 
   // ── images (TMDb proxy + cache) ──

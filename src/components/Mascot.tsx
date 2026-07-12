@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../lib/backend";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { continueWatching, scanLibraries } from "../lib/api";

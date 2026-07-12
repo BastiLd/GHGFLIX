@@ -1,5 +1,4 @@
-import { getVersion } from "@tauri-apps/api/app";
-import { listen } from "@tauri-apps/api/event";
+import { getVersion, listen } from "../lib/backend";
 import clsx from "clsx";
 import { Film, Heart, House, RefreshCw, Search, Settings as SettingsIcon, Tv, User } from "lucide-react";
 import { useEffect, useRef, useState } from "react";

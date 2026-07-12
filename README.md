@@ -17,6 +17,7 @@ alles butterweich über den eingebauten mpv-Player ab.
 - **Nichts geht verloren**: Gesehen-Stand & Favoriten überleben sogar „Bibliothek neu aufbauen" (Verknüpfung über Dateipfad *und* TMDb), wöchentliches Auto-Backup, Export/Import als JSON
 - **Alles einstellbar**: ~60 Einstellungen — Kartengröße, Animationen, Startseiten-Reihen, Scroll-Verhalten, Kindersicherung (FSK), Akzentfarbe, Maskottchen u.v.m.
 - **Optional**: Supabase-Sync des Fortschritts zwischen mehreren PCs
+- **GHGFlix Server (ZimaOS/Docker)**: dieselbe Oberfläche 1:1 im Browser & am Handy — der Server streamt (Direct Play oder Live-Transcode), PC-App/Handy/Browser teilen sich automatisch den Stand. Siehe [`server/README-ZimaOS.md`](server/README-ZimaOS.md)
 
 ## 🚀 Installation (Nutzer)
 

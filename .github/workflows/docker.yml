@@ -7,7 +7,7 @@ name: Publish server image
 on:
   push:
     branches: [main, feature/zimaos-docker-server]
-    paths: ["server/**", ".github/workflows/docker.yml"]
+    paths: ["server/**", "src/**", "public/**", "index.html", "package.json", "vite.config.ts", ".github/workflows/docker.yml"]
   workflow_dispatch:
 
 jobs:
@@ -27,7 +27,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
-          context: server
+          context: .
+          file: server/Dockerfile
           push: true
           # amd64 for ZimaBoard/ZimaCube, arm64 for Pi & ARM-NAS
           platforms: linux/amd64,linux/arm64

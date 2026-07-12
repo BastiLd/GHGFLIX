@@ -1,6 +1,5 @@
-import { join, pictureDir } from "@tauri-apps/api/path";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow, join, LogicalSize, openDialog, pictureDir, webPickedFile } from "../lib/backend";
+import { IS_WEB } from "../lib/platform";
 import {
   ArrowLeft,
   AudioLines,
@@ -23,7 +22,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { command, destroy, getProperty, init, observeProperties, setProperty } from "tauri-plugin-mpv-api";
+import { command, destroy, getProperty, init, observeProperties, setProperty, srtToVtt, webTogglePip } from "../lib/mpv";
 import { episodeVersions, getEpisode, getMovie, getProgress, getSetting, listShowEpisodes, mediaThumbnail, movieVersions, revealInExplorer, setEpisodeIntro, setMediaDims, setProgress } from "../lib/api";
 import { openCtx } from "../lib/contextmenu";
 import { formatTime, quality as computeQuality, seasonEpisodeLabel } from "../lib/format";
@@ -412,6 +411,13 @@ export default function Player() {
   }, []);
 
   const togglePip = useCallback(async () => {
+    if (IS_WEB) {
+      // browser build: real Picture-in-Picture window via the browser API
+      const on = await webTogglePip();
+      pipRef.current = on;
+      setPip(on);
+      return;
+    }
     const w = getCurrentWindow();
     if (!pipRef.current) {
       if (fullscreen) {
@@ -925,7 +931,16 @@ export default function Player() {
   const addExternalSub = async () => {
     const file = await openDialog({ multiple: false, filters: [{ name: "Untertitel", extensions: ["srt", "ass", "ssa", "sub", "vtt"] }] });
     if (typeof file === "string") {
-      await command("sub-add", [file]).catch((e) => toast(String(e), "error"));
+      let url = file;
+      if (IS_WEB && webPickedFile && !/\.vtt$/i.test(webPickedFile.name)) {
+        // browsers only render WebVTT — convert SRT on the fly
+        try {
+          url = URL.createObjectURL(new Blob([srtToVtt(await webPickedFile.text())], { type: "text/vtt" }));
+        } catch {
+          /* fall through with the raw file */
+        }
+      }
+      await command("sub-add", [url]).catch((e) => toast(String(e), "error"));
       await loadTracks();
     }
   };

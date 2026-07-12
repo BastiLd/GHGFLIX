@@ -928,7 +928,11 @@ pub async fn repair_season_titles(
                 let _ = db::set_placement(&conn, &p, tmdb_id, season, *real);
             }
         }
-        // unmatched files: keep their old number when free, else next free slot
+        // unmatched files: keep their old number when free, else next free slot.
+        // Pin them with a placement too — otherwise the NEXT scan/rebuild re-derives
+        // the raw SxxEyy tag from the filename and silently re-collides them with
+        // whatever matched file already claimed that slot (the bug that let already
+        // "fixed" seasons quietly break again on every rescan).
         for (eid, _, old_num) in &eps {
             if assign.iter().any(|(a, _)| a == eid) {
                 continue;
@@ -948,6 +952,9 @@ pub async fn repair_season_titles(
                 n += 1;
             }
             conn.execute("UPDATE episodes SET episode=?2 WHERE id=?1", params![eid, n]).map_err(err)?;
+            for p in db::file_paths_of_episode(&conn, *eid).map_err(err)? {
+                let _ = db::set_placement(&conn, &p, tmdb_id, season, n);
+            }
         }
         let _ = db::set_all_episode_primaries(&conn);
     }

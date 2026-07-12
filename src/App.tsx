@@ -1,7 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect } from "react";
+import { getCurrentWindow, listen } from "./lib/backend";
+import { IS_WEB, setWebToken, webToken } from "./lib/platform";
+import { useEffect, useState } from "react";
+import { Wordmark } from "./components/Brand";
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ContextMenu } from "./components/ContextMenu";
 import { Layout } from "./components/Layout";
@@ -23,6 +24,75 @@ import Settings from "./pages/Settings";
 import Stats from "./pages/Stats";
 import ShowDetail from "./pages/ShowDetail";
 import Shows from "./pages/Shows";
+
+/** Web build only: if the server has a password (GHGFLIX_PASSWORD), gate the
+ *  whole UI behind a login — same look as the rest of the app. */
+function WebAuthGate({ children }: { children: React.ReactNode }) {
+  const [needed, setNeeded] = useState<boolean | null>(IS_WEB ? null : false);
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!IS_WEB) return;
+    fetch("/api/ping")
+      .then((r) => r.json())
+      .then((r) => setNeeded(!!r.auth && !webToken()))
+      .catch(() => setNeeded(false));
+    const onUnauthorized = () => setNeeded(true);
+    window.addEventListener("ghgflix:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("ghgflix:unauthorized", onUnauthorized);
+  }, []);
+
+  if (needed === null) return null;
+  if (!needed) return <>{children}</>;
+
+  const submit = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: pw }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok || !body.token) throw new Error(String(body.error ?? "Falsches Passwort"));
+      setWebToken(body.token);
+      window.location.reload();
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="h-screen flex flex-col items-center justify-center gap-6 bg-ghg-bg">
+      <Wordmark size="lg" />
+      <div className="w-80 bg-ghg-surface border border-ghg-line rounded-2xl p-6 space-y-3">
+        <p className="font-bold">Server-Passwort</p>
+        <input
+          type="password"
+          value={pw}
+          autoFocus
+          onChange={(e) => setPw(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && void submit()}
+          className="w-full bg-ghg-bg2 border border-ghg-line rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-ghg-red"
+          placeholder="Passwort"
+        />
+        {err && <p className="text-xs text-ghg-red">{err}</p>}
+        <button
+          onClick={() => void submit()}
+          disabled={busy}
+          className="w-full py-2 rounded-lg bg-ghg-red hover:bg-ghg-red-bright transition font-semibold text-sm disabled:opacity-50"
+        >
+          Anmelden
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const qc = useQueryClient();
@@ -90,8 +160,10 @@ export default function App() {
     loadAccent();
   }, []);
 
-  // background sync with a GHGFlix server (ZimaOS box), if configured
+  // background sync with a GHGFlix server (ZimaOS box), if configured.
+  // In the web app WE ARE that server — syncing with ourselves is pointless.
   useEffect(() => {
+    if (IS_WEB) return;
     void loadServerConfig().then((cfg) => {
       if (cfg.enabled) startServerSync();
     });
@@ -112,6 +184,7 @@ export default function App() {
   const pageKey = prefs.pageTransition && prefs.animations ? location.pathname : "static";
 
   return (
+    <WebAuthGate>
     <div className="h-screen" onContextMenu={defaultMenu} data-pagekey={pageKey}>
       <Routes>
         <Route element={<Layout />}>
@@ -132,5 +205,6 @@ export default function App() {
       <MiniPlayer />
       <ContextMenu />
     </div>
+    </WebAuthGate>
   );
 }

@@ -57,6 +57,15 @@ body {
 #root {
   display: flex;
   flex-direction: column;
+  /* Web build (server/Docker): the HTML5 video renders in a fixed box BEHIND
+     the UI — same visual model as mpv behind the transparent Tauri window.
+     The app root must stack above the video box. */
+  position: relative;
+  z-index: 1;
+}
+
+#ghgflix-video-box {
+  z-index: 0;
 }
 
 /* ===== Scrollbars ===== */

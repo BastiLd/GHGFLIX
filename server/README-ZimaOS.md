@@ -1,8 +1,16 @@
 # GHGFlix Server auf ZimaOS installieren
 
-Dein eigener Plex/Jellyfin-Ersatz mit der GHGFlix-Oberfläche — läuft als
-Docker-Container auf dem ZimaBoard/ZimaCube und streamt an Browser, Handy
-(Expo-App oder PWA) und synchronisiert mit der PC-App.
+Dein eigener Plex/Jellyfin-Ersatz — läuft als Docker-Container auf dem
+ZimaBoard/ZimaCube und streamt an Browser, Handy (PWA/Expo) und synchronisiert
+mit der PC-App.
+
+**Ab v2.0 ist die Web-Oberfläche die ECHTE Desktop-App**: derselbe React-Code
+wie die Windows-App (Startseite, Suche, Meine Liste, Zuordnung/Erkennung,
+Artwork-Picker, Warteschlange, Mini-Player, alle ~60 Einstellungen). Statt mpv
+spielt im Browser ein HTML5-Player: MP4/H.264 läuft direkt (Direct Play), alles
+andere wandelt der Server live per ffmpeg um. Wo sich Browser und Desktop
+technisch unterscheiden, steht in den Einstellungen ein kleines ⓘ mit
+Erklärung. Update genügt (siehe unten) — keine Neuinstallation nötig.
 
 ## 1. Installation (copy & paste)
 

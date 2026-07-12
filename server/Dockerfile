@@ -1,18 +1,37 @@
-# GHGFlix Server — zero npm dependencies, so the build is just: copy + run.
+# ============================================================================
+# GHGFlix Server — now ships the REAL desktop UI (the same React app as the
+# Windows app), built for the browser. Multi-stage: build the frontend from
+# the repo root, then copy it next to the zero-dependency Node server.
+# Build context = repo ROOT:  docker build -f server/Dockerfile .
+# ============================================================================
+
+# ── Stage 1: build the web app (desktop UI → browser bundle) ──
+FROM node:24-alpine AS webbuild
+WORKDIR /build
+COPY package.json package-lock.json ./
+# tauri-cli/sharp are desktop-only devDependencies — drop them so the image
+# build stays small and works on every architecture
+RUN npm pkg delete "devDependencies.@tauri-apps/cli" "devDependencies.sharp" \
+ && npm install --no-audit --no-fund
+COPY index.html tsconfig.json tsconfig.node.json vite.config.ts ./
+COPY public ./public
+COPY src ./src
+RUN npx vite build --base ./ --outDir /out/webapp --emptyOutDir
+
+# ── Stage 2: the server (zero npm dependencies: copy + run) ──
 FROM node:24-alpine
 
 RUN apk add --no-cache ffmpeg tini
 
 WORKDIR /app
-COPY package.json ./
-COPY src ./src
-COPY web ./web
+COPY server/package.json ./
+COPY server/src ./src
+COPY server/web ./web
+COPY --from=webbuild /out/webapp ./webapp
 
 ENV NODE_ENV=production \
     PORT=8484 \
-    DATA_DIR=/data \
-    SHOWS_DIRS=/media/shows \
-    MOVIES_DIRS=/media/movies
+    DATA_DIR=/data
 
 VOLUME ["/data"]
 EXPOSE 8484
