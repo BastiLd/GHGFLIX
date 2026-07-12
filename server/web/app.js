@@ -519,10 +519,21 @@ async function viewMovie(id) {
 }
 
 // ── player ──────────────────────────────────────────────────────────────────
+// Mirrors the desktop player: intro skip (button/auto), next-episode countdown
+// with credits auto-skip, end screen, volume, speed, quality & audio track
+// menus, keyboard shortcuts. Preferences live in localStorage.
 let playerCleanup = null;
+
+const PPREFS_KEY = "ghgflix.player";
+const PPREFS_DEFAULT = { autoplayNext: true, skipCredits: true, introMode: "button", introSkip: 85, nextCountdownSec: 15, quality: "original", volume: 1, muted: false, rate: 1 };
+const pprefs = {
+  load() { try { return Object.assign({}, PPREFS_DEFAULT, JSON.parse(localStorage.getItem(PPREFS_KEY)) || {}); } catch { return { ...PPREFS_DEFAULT }; } },
+  save(p) { localStorage.setItem(PPREFS_KEY, JSON.stringify(p)); },
+};
 
 async function viewPlayer(type, id) {
   playerCleanup?.();
+  const P = pprefs.load();
   const [info, prog, detail] = await Promise.all([
     api(`/api/play/${type}/${id}`),
     api("/api/progress"),
@@ -530,20 +541,22 @@ async function viewPlayer(type, id) {
   ]);
   if (info.error) { toast("Nicht gefunden"); location.hash = "#/"; return; }
 
-  let title = "", subtitle = "", nextId = null, showId = null, season = null;
+  let title = "", subtitle = "", showId = null, season = null;
+  let nextEp = null, prevEp = null, epRow = null;
   if (type === "episode") {
-    // find the episode + its show for titles and the next-episode button
+    // find the episode + its show for titles, intro window and prev/next
     const lib = await getLibrary();
     for (const s of lib.shows) {
       const d = await api(`/api/shows/${s.id}`).catch(() => null);
       const flat = d?.seasons?.flatMap((x) => x.episodes) ?? [];
       const idx = flat.findIndex((e) => e.id === +id);
       if (idx >= 0) {
-        const e = flat[idx];
+        epRow = flat[idx];
         title = s.title;
-        season = e.season;
-        subtitle = `S${String(e.season).padStart(2, "0")}E${String(e.episode).padStart(2, "0")}${e.title ? " · " + e.title : ""}`;
-        nextId = flat[idx + 1]?.id ?? null;
+        season = epRow.season;
+        subtitle = `S${String(epRow.season).padStart(2, "0")}E${String(epRow.episode).padStart(2, "0")}${epRow.title ? " · " + epRow.title : ""}`;
+        nextEp = flat[idx + 1] ?? null;
+        prevEp = flat[idx - 1] ?? null;
         showId = s.id;
         break;
       }
@@ -552,15 +565,50 @@ async function viewPlayer(type, id) {
     title = detail?.title ?? "Film";
     subtitle = detail?.year ? String(detail.year) : "";
   }
+  const nextId = nextEp?.id ?? null;
+
+  // intro window: per-episode data from the DB (chapter detection / desktop
+  // fingerprint via sync) — otherwise the fixed default like the desktop app
+  const introWin =
+    epRow && epRow.intro_start != null && epRow.intro_end != null && epRow.intro_end > epRow.intro_start + 2
+      ? { start: epRow.intro_start, end: epRow.intro_end }
+      : type === "episode" && P.introSkip > 0
+        ? { start: 1, end: P.introSkip }
+        : null;
 
   const saved = prog.find((x) => x.mediaType === type && x.refId === +id);
   const resumeAt = saved && !saved.watched && saved.position > 30 && saved.position < (saved.duration || Infinity) * 0.95 ? saved.position : 0;
   const totalDuration = info.duration || saved?.duration || 0;
 
+  const nextLabel = nextEp ? `S${String(nextEp.season).padStart(2, "0")}E${String(nextEp.episode).padStart(2, "0")}${nextEp.title ? " · " + nextEp.title : ""}` : "";
+  const nextStill = nextEp ? (nextEp.still ? img(nextEp.still, "w300") : thumbUrl("episode", nextEp.id)) : null;
+
   app.innerHTML = `
     <div class="player">
       <video id="v" playsinline autoplay></video>
       <div class="pcenter" id="spin"><div class="spin"></div></div>
+      <button class="skipintro" id="skipIntro" style="display:none">Intro überspringen ⏭</button>
+      <div class="nextcard" id="nextCard" style="display:none">
+        <div class="nc-row">
+          ${nextStill ? `<img src="${nextStill}" alt="">` : ""}
+          <div class="nc-info">
+            <div class="nc-cd">Nächste Folge in <b id="nextCd">15</b>s</div>
+            <div class="nc-title">${esc(nextLabel)}</div>
+          </div>
+        </div>
+        <div class="nc-btns">
+          <button class="btn" id="nextNow">Jetzt</button>
+          <button class="btn ghost" id="nextCancel">Abbrechen</button>
+        </div>
+      </div>
+      <div class="endscreen" id="endScreen" style="display:none">
+        <div class="es-title">${esc(title)} — zu Ende</div>
+        <div class="btnrow">
+          <button class="btn ghost" id="esAgain">Nochmal ansehen</button>
+          ${nextId ? `<button class="btn" id="esNext">Nächste Folge</button>` : ""}
+          <button class="btn ghost" id="esBack">Zurück</button>
+        </div>
+      </div>
       <div class="pui" id="ui">
         <div class="top">
           <button class="pbtn" id="back" title="Zurück">←</button>
@@ -570,11 +618,24 @@ async function viewPlayer(type, id) {
         <div class="bottom">
           <div class="seek"><span id="cur">0:00</span><input type="range" id="bar" min="0" max="${Math.max(1, Math.floor(totalDuration))}" value="0" step="1"><span id="tot">${fmtTime(totalDuration)}</span></div>
           <div class="controls">
-            <button class="pbtn" id="rew">⏪ 10</button>
-            <button class="pbtn big" id="pp">⏸</button>
-            <button class="pbtn" id="fwd">10 ⏩</button>
-            ${nextId ? `<button class="pbtn" id="next" title="Nächste Folge">⏭</button>` : ""}
-            <button class="pbtn" id="fs" title="Vollbild">⛶</button>
+            <div class="cgroup left">
+              <button class="pbtn" id="mute" title="Stumm (M)">🔊</button>
+              <input type="range" id="vol" min="0" max="100" step="1" title="Lautstärke">
+            </div>
+            <div class="cgroup center">
+              ${prevEp ? `<button class="pbtn" id="prev" title="Vorherige Folge">⏮</button>` : ""}
+              <button class="pbtn" id="rew" title="10s zurück (←)">⏪ 10</button>
+              <button class="pbtn big" id="pp" title="Pause (Leertaste)">⏸</button>
+              <button class="pbtn" id="fwd" title="10s vor (→)">10 ⏩</button>
+              ${nextId ? `<button class="pbtn" id="next" title="Nächste Folge (N)">⏭</button>` : ""}
+            </div>
+            <div class="cgroup right">
+              <button class="pbtn" id="speed" title="Geschwindigkeit">1×</button>
+              ${(info.audioStreams?.length ?? 0) > 1 ? `<button class="pbtn" id="atrack" title="Audiospur">🗣</button>` : ""}
+              <button class="pbtn" id="qual" title="Qualität">HD</button>
+              <button class="pbtn" id="pset" title="Einstellungen">⚙</button>
+              <button class="pbtn" id="fs" title="Vollbild (F)">⛶</button>
+            </div>
           </div>
         </div>
       </div>
@@ -582,17 +643,28 @@ async function viewPlayer(type, id) {
 
   const v = $("#v"), ui = $("#ui"), bar = $("#bar");
   // transcode streams start at an offset — real position = offset + currentTime
-  let mode = info.direct ? "direct" : "transcode";
+  let mode = info.direct && P.quality === "original" ? "direct" : "transcode";
   let offset = 0;
   let ended = false;
+  let audioIndex = 0;
+  let quality = P.quality;
+  let introSkipped = false;
+  let nextCancelled = false;
+  let nextShownAt = 0; // pos() when the countdown card appeared (credits skip)
 
+  const tcUrl = (t) => `${info.transcodeUrl}&t=${Math.floor(t)}&q=${quality}&a=${audioIndex}`;
   const src = (t) => {
     if (mode === "direct") { offset = 0; v.src = info.directUrl; if (t > 0) v.addEventListener("loadedmetadata", () => (v.currentTime = t), { once: true }); }
-    else { offset = t; v.src = `${info.transcodeUrl}&t=${Math.floor(t)}`; }
+    else { offset = t; v.src = tcUrl(t); }
+    v.defaultPlaybackRate = P.rate; // survives src changes (loadstart resets playbackRate)
+    v.playbackRate = P.rate;
   };
   const pos = () => offset + (v.currentTime || 0);
+  const seekTo = (t) => { t = Math.max(0, t); if (mode === "direct") v.currentTime = t; else src(t); };
 
   src(resumeAt);
+  v.volume = P.volume;
+  v.muted = P.muted;
   v.onerror = () => {
     if (mode === "direct") { mode = "transcode"; toast("Direktwiedergabe klappt nicht — Transcoding …"); src(pos() || resumeAt); }
     else toast("Wiedergabefehler");
@@ -610,17 +682,69 @@ async function viewPlayer(type, id) {
   let hideTimer;
   const wake = () => {
     ui.classList.remove("hidden");
+    v.parentElement.classList.remove("nocursor");
     clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => !v.paused && ui.classList.add("hidden"), 3000);
+    hideTimer = setTimeout(() => { if (!v.paused) { ui.classList.add("hidden"); closeMenu(); v.parentElement.classList.add("nocursor"); } }, 3000);
   };
   wake();
   v.parentElement.onpointermove = wake;
   v.onclick = () => (ui.classList.contains("hidden") ? wake() : v.paused ? v.play() : v.pause());
+  v.ondblclick = () => toggleFs();
+
+  // ── popup menus (speed / quality / audio / settings) ──
+  const closeMenu = () => $(".pmenu")?.remove();
+  const openMenu = (anchor, items) => {
+    if ($(".pmenu")) { closeMenu(); return; }
+    const m = document.createElement("div");
+    m.className = "pmenu";
+    m.innerHTML = items.map((it, i) => it.header
+      ? `<div class="pm-head">${esc(it.header)}</div>`
+      : `<button class="pm-item ${it.active ? "active" : ""}" data-i="${i}">${it.active ? "✓ " : ""}${esc(it.label)}</button>`).join("");
+    v.parentElement.appendChild(m);
+    const r = anchor.getBoundingClientRect();
+    m.style.right = Math.max(8, window.innerWidth - r.right) + "px";
+    m.style.bottom = Math.max(8, window.innerHeight - r.top + 8) + "px";
+    m.querySelectorAll(".pm-item").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); closeMenu(); items[+b.dataset.i].onClick(); }));
+  };
+
+  const goNext = () => { if (nextId) location.hash = `#/play/episode/${nextId}`; };
+
+  // ── intro skip + next-episode countdown, driven by timeupdate ──
+  const skipBtn = $("#skipIntro"), nextCard = $("#nextCard");
+  const skipIntro = () => { if (!introWin) return; introSkipped = true; skipBtn.style.display = "none"; seekTo(introWin.end); toast("Intro übersprungen"); };
+  skipBtn.onclick = skipIntro;
+  $("#nextNow").onclick = goNext;
+  $("#nextCancel").onclick = () => { nextCancelled = true; nextCard.style.display = "none"; };
+
+  const tick = () => {
+    const p = pos();
+    const dur = totalDuration || v.duration || 0;
+
+    // intro
+    if (introWin && P.introMode !== "off" && !introSkipped) {
+      const inWin = p >= introWin.start && p < introWin.end - 1;
+      if (inWin && P.introMode === "auto" && p > 0.5) skipIntro();
+      else skipBtn.style.display = inWin ? "" : "none";
+    } else skipBtn.style.display = "none";
+
+    // next-episode countdown (end-credit skip)
+    if (type === "episode" && nextId && P.autoplayNext && !nextCancelled && dur > 0) {
+      const remaining = dur - p;
+      if (remaining <= P.nextCountdownSec && remaining > 0) {
+        if (nextCard.style.display === "none") { nextCard.style.display = ""; nextShownAt = p; }
+        // credits auto-skip: don't sit through the credits — jump after 5s
+        const cd = P.skipCredits ? Math.min(Math.ceil(remaining), Math.max(0, Math.ceil(5 - (p - nextShownAt)))) : Math.ceil(remaining);
+        $("#nextCd").textContent = String(Math.max(0, cd));
+        if (P.skipCredits && p - nextShownAt >= 5) { save(true); ended = true; goNext(); return; }
+      } else nextCard.style.display = "none";
+    }
+  };
 
   v.ontimeupdate = () => {
     if (!bar.dragging) bar.value = Math.floor(pos());
     $("#cur").textContent = fmtTime(pos());
     if (!totalDuration && v.duration) { bar.max = Math.floor(v.duration); $("#tot").textContent = fmtTime(v.duration); }
+    tick();
   };
   v.onplay = () => { $("#pp").textContent = "⏸"; wake(); };
   v.onpause = () => { $("#pp").textContent = "▶"; wake(); };
@@ -629,22 +753,101 @@ async function viewPlayer(type, id) {
   v.onended = () => {
     ended = true;
     save(true);
-    if (nextId) location.hash = `#/play/episode/${nextId}`;
-    else goBack();
+    if (type === "episode" && nextId && P.autoplayNext && !nextCancelled) return goNext();
+    if (type === "movie" || !nextId) $("#endScreen").style.display = "";
+    else $("#endScreen").style.display = "";
   };
 
+  $("#esAgain")?.addEventListener("click", () => { $("#endScreen").style.display = "none"; ended = false; seekTo(0); v.play(); });
+  $("#esNext")?.addEventListener("click", goNext);
+  $("#esBack")?.addEventListener("click", () => goBack());
+
   bar.oninput = () => { bar.dragging = true; $("#cur").textContent = fmtTime(+bar.value); };
-  bar.onchange = () => {
-    bar.dragging = false;
-    const t = +bar.value;
-    if (mode === "direct") v.currentTime = t;
-    else src(t);
-  };
+  bar.onchange = () => { bar.dragging = false; seekTo(+bar.value); };
   $("#pp").onclick = () => (v.paused ? v.play() : v.pause());
-  $("#rew").onclick = () => (mode === "direct" ? (v.currentTime -= 10) : src(Math.max(0, pos() - 10)));
-  $("#fwd").onclick = () => (mode === "direct" ? (v.currentTime += 10) : src(pos() + 10));
-  $("#fs").onclick = () => (document.fullscreenElement ? document.exitFullscreen() : v.parentElement.requestFullscreen?.().catch(() => {}));
-  if (nextId) $("#next").onclick = () => (location.hash = `#/play/episode/${nextId}`);
+  $("#rew").onclick = () => seekTo(pos() - 10);
+  $("#fwd").onclick = () => seekTo(pos() + 10);
+  const toggleFs = () => (document.fullscreenElement ? document.exitFullscreen() : v.parentElement.requestFullscreen?.().catch(() => {}));
+  $("#fs").onclick = toggleFs;
+  if (nextId) $("#next").onclick = goNext;
+  if (prevEp) $("#prev").onclick = () => (location.hash = `#/play/episode/${prevEp.id}`);
+
+  // volume
+  const vol = $("#vol"), muteBtn = $("#mute");
+  const volUi = () => { vol.value = Math.round((v.muted ? 0 : v.volume) * 100); muteBtn.textContent = v.muted || v.volume === 0 ? "🔇" : v.volume < 0.5 ? "🔉" : "🔊"; };
+  volUi();
+  vol.oninput = () => { v.volume = +vol.value / 100; v.muted = v.volume === 0; P.volume = v.volume; P.muted = v.muted; pprefs.save(P); volUi(); };
+  muteBtn.onclick = () => { v.muted = !v.muted; P.muted = v.muted; pprefs.save(P); volUi(); };
+  const volStep = (d) => { v.muted = false; v.volume = Math.min(1, Math.max(0, v.volume + d)); P.volume = v.volume; P.muted = false; pprefs.save(P); volUi(); wake(); };
+
+  // speed
+  const speedBtn = $("#speed");
+  speedBtn.textContent = P.rate === 1 ? "1×" : `${P.rate}×`;
+  speedBtn.onclick = () => openMenu(speedBtn, [
+    { header: "Geschwindigkeit" },
+    ...[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((r) => ({
+      label: `${r}×`, active: P.rate === r,
+      onClick: () => { P.rate = r; pprefs.save(P); v.defaultPlaybackRate = r; v.playbackRate = r; speedBtn.textContent = r === 1 ? "1×" : `${r}×`; },
+    })),
+  ]);
+
+  // quality (forces transcode for anything but "original"+direct-capable)
+  const QLABEL = { original: "Original", high: "1080p", medium: "720p", low: "480p" };
+  const qualBtn = $("#qual");
+  qualBtn.textContent = quality === "original" ? "HD" : QLABEL[quality];
+  qualBtn.onclick = () => openMenu(qualBtn, [
+    { header: "Qualität" },
+    ...Object.keys(QLABEL).map((k) => ({
+      label: QLABEL[k] + (k === "original" && info.direct ? " (Direkt)" : ""), active: quality === k,
+      onClick: () => {
+        const t = pos();
+        quality = k; P.quality = k; pprefs.save(P);
+        mode = k === "original" && info.direct && audioIndex === 0 ? "direct" : "transcode";
+        qualBtn.textContent = k === "original" ? "HD" : QLABEL[k];
+        src(t);
+      },
+    })),
+  ]);
+
+  // audio track (transcode-only — the browser can't switch embedded tracks)
+  const atrackBtn = $("#atrack");
+  if (atrackBtn) atrackBtn.onclick = () => openMenu(atrackBtn, [
+    { header: "Audiospur" },
+    ...info.audioStreams.map((a, i) => ({
+      label: [a.lang, a.title, a.codec?.toUpperCase()].filter(Boolean).join(" · ") || `Audio ${i + 1}`,
+      active: audioIndex === i,
+      onClick: () => { const t = pos(); audioIndex = i; mode = "transcode"; src(t); },
+    })),
+  ]);
+
+  // player settings (autoplay / credits / intro)
+  const psetBtn = $("#pset");
+  psetBtn.onclick = () => openMenu(psetBtn, [
+    { header: "Wiedergabe" },
+    { label: "Autoplay nächste Folge", active: P.autoplayNext, onClick: () => { P.autoplayNext = !P.autoplayNext; pprefs.save(P); toast(P.autoplayNext ? "Autoplay an" : "Autoplay aus"); } },
+    { label: "Abspann überspringen", active: P.skipCredits, onClick: () => { P.skipCredits = !P.skipCredits; pprefs.save(P); toast(P.skipCredits ? "Abspann wird übersprungen" : "Abspann läuft durch"); } },
+    { header: "Intro" },
+    { label: "Skip-Button zeigen", active: P.introMode === "button", onClick: () => { P.introMode = "button"; pprefs.save(P); } },
+    { label: "Automatisch überspringen", active: P.introMode === "auto", onClick: () => { P.introMode = "auto"; pprefs.save(P); } },
+    { label: "Aus", active: P.introMode === "off", onClick: () => { P.introMode = "off"; pprefs.save(P); } },
+  ]);
+
+  // keyboard shortcuts, like the desktop app
+  const onKey = (e) => {
+    if (e.target.tagName === "INPUT" && e.target.type !== "range") return;
+    const k = e.key.toLowerCase();
+    if (k === " " || k === "k") { e.preventDefault(); v.paused ? v.play() : v.pause(); }
+    else if (k === "arrowleft" || k === "j") { e.preventDefault(); seekTo(pos() - 10); wake(); }
+    else if (k === "arrowright" || k === "l") { e.preventDefault(); seekTo(pos() + 10); wake(); }
+    else if (k === "arrowup") { e.preventDefault(); volStep(0.05); }
+    else if (k === "arrowdown") { e.preventDefault(); volStep(-0.05); }
+    else if (k === "m") { v.muted = !v.muted; P.muted = v.muted; pprefs.save(P); volUi(); wake(); }
+    else if (k === "f") toggleFs();
+    else if (k === "n" && nextId) goNext();
+    else if (k === "s" && skipBtn.style.display !== "none") skipIntro();
+    else if (k === "escape" && !document.fullscreenElement) goBack();
+  };
+  window.addEventListener("keydown", onKey);
 
   // Back = to the detail page WITH the right season; X = same target (the web
   // player has no mini mode — both leave, back keeps history natural).
@@ -655,6 +858,8 @@ async function viewPlayer(type, id) {
 
   playerCleanup = () => {
     clearInterval(saveTimer);
+    window.removeEventListener("keydown", onKey);
+    closeMenu();
     if (!ended) save();
     v.pause();
     v.removeAttribute("src");

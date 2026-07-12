@@ -106,7 +106,9 @@ export function serveTranscode(req, res, row, { start = 0, quality = "original",
   const q = QUALITY[quality] ?? QUALITY.original;
   const copyVideo = row.vcodec === "h264" && !q;
 
-  const args = ["-hide_banner", "-loglevel", "error"];
+  // -fflags +genpts: rebuild missing/broken timestamps (MKV/TS sources) so
+  // audio and video share one clean clock instead of drifting apart.
+  const args = ["-hide_banner", "-loglevel", "error", "-fflags", "+genpts"];
   if (start > 0) args.push("-ss", String(start));
   args.push("-i", row.path, "-map", "0:v:0", "-map", `0:a:${audioIndex}?`);
 
@@ -117,6 +119,11 @@ export function serveTranscode(req, res, row, { start = 0, quality = "original",
     if (q) args.push("-vf", `scale=-2:min(${q.height}\\,ih)`, "-maxrate", q.maxrate, "-bufsize", q.maxrate);
   }
   args.push("-c:a", "aac", "-ac", "2", "-b:a", "160k");
+  // A/V-Sync: lock the audio to the video clock. aresample=async stretches or
+  // pads tiny gaps sample-accurately instead of letting the offset accumulate
+  // (the "audio runs ahead / lags behind after a few minutes" bug).
+  args.push("-af", "aresample=async=1:min_hard_comp=0.100:first_pts=0");
+  args.push("-avoid_negative_ts", "make_zero", "-max_muxing_queue_size", "2048");
   args.push("-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1");
 
   const ff = spawn(FFMPEG, args);
