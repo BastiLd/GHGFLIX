@@ -233,6 +233,58 @@ async function handle(req, res) {
       .all(profileId);
     return json(res, rows);
   }
+  // "Zuletzt gesehen" — most recent progress rows (watched or in-progress)
+  if (p === "/api/history") {
+    const rows = db
+      .prepare(
+        `SELECT pr.media_type mediaType, pr.ref_id refId, pr.updated_at updatedAt,
+                COALESCE(mv.title, sh.title) title, e.season, e.episode,
+                COALESCE(mv.poster, sh.poster) poster, e.show_id showId, e.still still,
+                mv.backdrop mBackdrop, sh.backdrop sBackdrop
+         FROM progress pr
+         LEFT JOIN movies mv ON pr.media_type='movie' AND mv.id=pr.ref_id
+         LEFT JOIN episodes e ON pr.media_type='episode' AND e.id=pr.ref_id
+         LEFT JOIN shows sh ON sh.id=e.show_id
+         WHERE pr.profile_id=? AND COALESCE(mv.id, e.id) IS NOT NULL
+         ORDER BY pr.updated_at DESC LIMIT 20`,
+      )
+      .all(profileId);
+    return json(res, rows);
+  }
+
+  // ── favorites / Meine Liste ──
+  if (p === "/api/favorites" && req.method === "GET") {
+    return json(res, db.prepare("SELECT media_type mediaType, ref_id refId, added_at addedAt FROM favorites WHERE profile_id = ? ORDER BY added_at DESC").all(profileId));
+  }
+  if (p === "/api/favorites" && req.method === "POST") {
+    const b = await readBody(req);
+    if (!["movie", "show"].includes(b.mediaType) || !b.refId) return json(res, { error: "bad payload" }, 400);
+    const existing = db.prepare("SELECT 1 FROM favorites WHERE profile_id=? AND media_type=? AND ref_id=?").get(profileId, b.mediaType, b.refId);
+    if (existing) {
+      db.prepare("DELETE FROM favorites WHERE profile_id=? AND media_type=? AND ref_id=?").run(profileId, b.mediaType, b.refId);
+      return json(res, { favorite: false });
+    }
+    db.prepare("INSERT INTO favorites (profile_id, media_type, ref_id, added_at) VALUES (?,?,?,?)").run(profileId, b.mediaType, b.refId, Date.now());
+    return json(res, { favorite: true });
+  }
+  // mark a whole movie/show (or single episode) watched / unwatched
+  if (p === "/api/watched" && req.method === "POST") {
+    const b = await readBody(req);
+    const now = Date.now();
+    const setOne = (mediaType, refId, dur) =>
+      db.prepare(
+        `INSERT INTO progress (profile_id, media_type, ref_id, position, duration, watched, updated_at) VALUES (?,?,?,0,?,?,?)
+         ON CONFLICT(profile_id, media_type, ref_id) DO UPDATE SET watched=excluded.watched, position=0, updated_at=excluded.updated_at`,
+      ).run(profileId, mediaType, refId, dur ?? 0, b.watched ? 1 : 0, now);
+    if (b.mediaType === "movie") setOne("movie", b.refId, 0);
+    else if (b.mediaType === "episode") setOne("episode", b.refId, 0);
+    else if (b.mediaType === "show") {
+      for (const e of db.prepare("SELECT id, duration FROM episodes WHERE show_id = ?").all(b.refId)) setOne("episode", e.id, e.duration);
+    } else if (b.mediaType === "season") {
+      for (const e of db.prepare("SELECT id, duration FROM episodes WHERE show_id = ? AND season = ?").all(b.refId, b.season)) setOne("episode", e.id, e.duration);
+    } else return json(res, { error: "bad payload" }, 400);
+    return json(res, { ok: true });
+  }
 
   // ── sync (desktop app + phone, TMDb-keyed) ──
   if (p === "/api/sync/progress" && req.method === "GET") {

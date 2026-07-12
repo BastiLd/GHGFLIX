@@ -90,6 +90,14 @@ export function openDb() {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+    -- "Meine Liste" / favorites (Netflix-style, per profile)
+    CREATE TABLE IF NOT EXISTS favorites (
+      profile_id INTEGER NOT NULL,
+      media_type TEXT NOT NULL CHECK (media_type IN ('movie','show')),
+      ref_id INTEGER NOT NULL,
+      added_at INTEGER NOT NULL,
+      PRIMARY KEY (profile_id, media_type, ref_id)
+    );
     -- media folders the scanner walks, managed from the web UI (Einstellungen
     -- → Bibliotheken) — any number of them, e.g. one per drive
     CREATE TABLE IF NOT EXISTS libraries (

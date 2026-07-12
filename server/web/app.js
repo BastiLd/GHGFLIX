@@ -15,6 +15,10 @@ const ICONS = {
   settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
   hdd: '<line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" x2="6.01" y1="16" y2="16"/><line x1="10" x2="10.01" y1="16" y2="16"/>',
   folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
   sparkles: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z"/>',
@@ -122,6 +126,7 @@ const NAV = [
   { id: "home", hash: "#/", label: "Start", icon: "home" },
   { id: "movies", hash: "#/movies", label: "Filme", icon: "film" },
   { id: "shows", hash: "#/shows", label: "Serien", icon: "tv" },
+  { id: "list", hash: "#/list", label: "Meine Liste", icon: "heart" },
   { id: "settings", hash: "#/settings", label: "Einstellungen", icon: "settings" },
 ];
 
@@ -190,12 +195,45 @@ function renderSearchPage(q, html) {
   s.setSelectionRange(q.length, q.length);
 }
 
-const posterCard = (kind, x) => `
+// ── shared library state (progress + favorites), loaded once, refreshable ────
+let progressCache = null; // Map "type:refId" -> {position,duration,watched}
+let favCache = null; // Set "type:refId"
+async function loadUserState(force) {
+  if (!force && progressCache && favCache) return;
+  const [prog, favs] = await Promise.all([api("/api/progress"), api("/api/favorites").catch(() => [])]);
+  progressCache = new Map(prog.map((p) => [`${p.mediaType}:${p.refId}`, p]));
+  favCache = new Set(favs.map((f) => `${f.mediaType}:${f.refId}`));
+}
+const isFav = (kind, id) => favCache?.has(`${kind}:${id}`);
+async function toggleFav(kind, id) {
+  const r = await api("/api/favorites", { method: "POST", body: { mediaType: kind, refId: id } });
+  if (r.favorite) favCache.add(`${kind}:${id}`);
+  else favCache.delete(`${kind}:${id}`);
+  return r.favorite;
+}
+/** Fraction watched of a movie (for the progress bar on movie cards). */
+function movieProgress(id) {
+  const p = progressCache?.get(`movie:${id}`);
+  if (!p || p.watched || !p.duration || p.position < 30) return 0;
+  return Math.min(1, p.position / p.duration);
+}
+const isNew = (x) => Date.now() - (x.added_at || 0) < 7 * 864e5;
+
+const posterCard = (kind, x) => {
+  const watched = kind === "movie" && progressCache?.get(`movie:${x.id}`)?.watched;
+  const pct = kind === "movie" ? movieProgress(x.id) : 0;
+  return `
   <a class="card" href="#/${kind}/${x.id}">
-    ${x.poster ? `<img class="poster" loading="lazy" src="${img(x.poster)}">` : `<div class="poster ph">${esc(x.title)}</div>`}
+    <div class="poster-wrap">
+      ${x.poster ? `<img class="poster" loading="lazy" src="${img(x.poster)}">` : `<div class="poster ph">${esc(x.title)}</div>`}
+      ${watched ? `<span class="badge-watched">${svgIcon("check", 13)}</span>` : ""}
+      ${isNew(x) ? `<span class="badge-new">NEU</span>` : ""}
+      ${pct > 0 ? `<div class="card-prog"><i style="width:${Math.round(pct * 100)}%"></i></div>` : ""}
+    </div>
     <div class="t">${esc(x.title)}</div>
     ${x.year ? `<div class="st">${x.year}</div>` : ""}
   </a>`;
+};
 
 // ── views ───────────────────────────────────────────────────────────────────
 async function viewLogin() {
@@ -260,82 +298,169 @@ const contCard = (c) => {
   return `<a class="ccard" href="${href}"><img loading="lazy" src="${pic}"><div class="play-badge"><span>▶</span></div><div class="bar"><i style="width:${Math.round((c.position / c.duration) * 100)}%"></i></div><div class="t">${esc(c.title)}</div><div class="s">${sub}</div></a>`;
 };
 
+const parseGenres = (g) => (g ? String(g).split(/[,;]/).map((s) => s.trim()).filter(Boolean) : []);
+const row = (title, cards) => (cards.trim() ? `<div class="section-title">${esc(title)}</div><div class="hrow">${cards}</div>` : "");
+const grid = (title, cards) => (cards.trim() ? `<div class="section-title">${esc(title)}</div><div class="grid">${cards}</div>` : "");
+
 async function viewHome() {
-  const [lib, cont] = await Promise.all([getLibrary(), api("/api/continue")]);
+  const [lib] = await Promise.all([getLibrary(), loadUserState()]);
+  const [cont, history] = await Promise.all([api("/api/continue"), api("/api/history").catch(() => [])]);
   lastCounts = { shows: lib.shows.length, movies: lib.movies.length };
   const empty = lib.shows.length === 0 && lib.movies.length === 0;
+  const allItems = [...lib.movies.map((m) => ({ ...m, kind: "movie" })), ...lib.shows.map((s) => ({ ...s, kind: "show" }))];
 
-  // hero: newest item with a backdrop (like the desktop app's rotating hero)
-  const heroPool = [
-    ...lib.movies.filter((m) => m.backdrop).map((m) => ({ ...m, kind: "movie" })),
-    ...lib.shows.filter((s) => s.backdrop).map((s) => ({ ...s, kind: "show" })),
-  ].sort((a, b) => b.added_at - a.added_at);
-  const hero = heroPool[0];
+  // hero — newest item with a backdrop (desktop-style)
+  const hero = allItems.filter((x) => x.backdrop).sort((a, b) => b.added_at - a.added_at)[0];
+  const heroFav = hero && isFav(hero.kind, hero.id);
   const heroHtml = hero
-    ? `<a class="herobox" href="#/${hero.kind}/${hero.id}">
+    ? `<div class="herobox">
         <img src="${img(hero.backdrop, "w1280")}">
         <div class="grad"></div>
         <div class="info">
           <h1>${esc(hero.title)}</h1>
           <div class="meta">${hero.year ?? ""}${hero.rating ? ` · ★ ${hero.rating.toFixed(1)}` : ""}${hero.genres ? ` · ${esc(hero.genres)}` : ""}</div>
           <p>${esc(hero.overview ?? "")}</p>
+          <div class="btnrow" style="margin-bottom:0">
+            <a class="btn" href="#/${hero.kind}/${hero.id}">${svgIcon("play", 16)} Ansehen</a>
+            <button class="btn ghost" id="heroFav">${svgIcon("heart", 16)} ${heroFav ? "In Meiner Liste" : "Meine Liste"}</button>
+          </div>
         </div>
-      </a>`
+      </div>`
     : "";
 
-  const newest = [...lib.movies, ...lib.shows.map((s) => ({ ...s, _show: true }))].sort((a, b) => b.added_at - a.added_at).slice(0, 16);
+  // my-list resolved
+  const favShows = lib.shows.filter((s) => isFav("show", s.id));
+  const favMovies = lib.movies.filter((m) => isFav("movie", m.id));
+  const newest = [...allItems].sort((a, b) => b.added_at - a.added_at).slice(0, 18);
+  const topRated = allItems.filter((x) => (x.rating ?? 0) >= 7).sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0)).slice(0, 18);
+
+  // genre rows (genres present on >=2 items, most common first)
+  const genreCount = {};
+  for (const x of allItems) for (const g of parseGenres(x.genres)) genreCount[g] = (genreCount[g] || 0) + 1;
+  const genres = Object.entries(genreCount).filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([g]) => g);
+  const genreRows = genres
+    .map((g) => row(g, allItems.filter((x) => parseGenres(x.genres).includes(g)).slice(0, 18).map((x) => posterCard(x.kind, x)).join("")))
+    .join("");
+
   shell(
     "home",
     empty
-      ? `<div class="empty">Noch nichts in der Bibliothek.<br><br>Geh zu <b>⚙️ Einstellungen → Bibliotheken</b> und füge deine Film- und Serienordner hinzu (oder lass sie automatisch erkennen).<br><br><a class="btn" href="#/settings">Zu den Einstellungen</a></div>`
+      ? `<div class="empty">Noch nichts in der Bibliothek.<br><br>Geh zu <b>Einstellungen → Bibliotheken</b> und füge deine Film- und Serienordner hinzu (oder „Automatisch erkennen“).<br><br><a class="btn" href="#/settings" style="display:inline-flex;margin-top:8px">Zu den Einstellungen</a></div>`
       : `${heroHtml}
-     ${cont.length ? `<div class="section-title">Weiterschauen</div><div class="hrow">${cont.map(contCard).join("")}</div>` : ""}
-     ${lib.shows.length ? `<div class="section-title">Serien</div><div class="hrow">${lib.shows.map((s) => posterCard("show", s)).join("")}</div>` : ""}
-     ${lib.movies.length ? `<div class="section-title">Filme</div><div class="hrow">${lib.movies.map((x) => posterCard("movie", x)).join("")}</div>` : ""}
-     ${newest.length ? `<div class="section-title">Neu dazugekommen</div><div class="hrow">${newest.map((x) => posterCard(x._show ? "show" : "movie", x)).join("")}</div>` : ""}`,
+     ${row("Weiterschauen", cont.map(contCard).join(""))}
+     ${row("Meine Liste", [...favShows.map((s) => posterCard("show", s)), ...favMovies.map((m) => posterCard("movie", m))].join(""))}
+     ${row("Neu dazugekommen", newest.map((x) => posterCard(x.kind, x)).join(""))}
+     ${row("Serien", lib.shows.map((s) => posterCard("show", s)).join(""))}
+     ${row("Filme", lib.movies.map((x) => posterCard("movie", x)).join(""))}
+     ${row("Top bewertet", topRated.map((x) => posterCard(x.kind, x)).join(""))}
+     ${genreRows}
+     ${row("Zuletzt gesehen", history.map((h) => contCard({ ...h, position: 0, duration: 1 })).join(""))}`,
   );
+  const hf = $("#heroFav");
+  if (hf) hf.onclick = async () => { await toggleFav(hero.kind, hero.id); viewHome(); };
 }
 
+/** Movies/Shows page with the desktop toolbar (filter, genre, sort, hide-watched). */
 async function viewGrid(kind) {
-  const lib = await getLibrary();
+  const [lib] = await Promise.all([getLibrary(), loadUserState()]);
   lastCounts = { shows: lib.shows.length, movies: lib.movies.length };
-  const items = kind === "shows" ? lib.shows : lib.movies;
   const linkKind = kind === "shows" ? "show" : "movie";
+  const items = kind === "shows" ? lib.shows : lib.movies;
   const title = kind === "shows" ? "Serien" : "Filme";
+  const allGenres = [...new Set(items.flatMap((x) => parseGenres(x.genres)))].sort();
+  const sortKey = `ghgflix.sort.${kind}`;
+  let sort = localStorage.getItem(sortKey) || "added";
+  let genre = "";
+  let q = "";
+  let hideWatched = localStorage.getItem(`ghgflix.hideWatched.${kind}`) === "1";
+
+  const render = () => {
+    let list = items.filter((x) => (!q || x.title.toLowerCase().includes(q)) && (!genre || parseGenres(x.genres).includes(genre)));
+    if (hideWatched && kind === "movies") list = list.filter((x) => !progressCache?.get(`movie:${x.id}`)?.watched);
+    const cmp = { added: (a, b) => b.added_at - a.added_at, title: (a, b) => a.title.localeCompare(b.title, "de"), year: (a, b) => (b.year ?? 0) - (a.year ?? 0), yearOld: (a, b) => (a.year ?? 9999) - (b.year ?? 9999), rating: (a, b) => (b.rating ?? 0) - (a.rating ?? 0) };
+    list = [...list].sort(cmp[sort] || cmp.added);
+    $("#gridBody").innerHTML = list.map((x) => posterCard(linkKind, x)).join("") || '<div class="empty">Nichts gefunden.</div>';
+  };
+
   shell(
     kind,
-    `<div class="section-title">${title} <span style="color:var(--muted);font-weight:400;font-size:14px">${items.length}</span></div>
-     <div class="grid">${items.map((x) => posterCard(linkKind, x)).join("") || '<div class="empty">Nichts gefunden — läuft der Scan noch? (Einstellungen → Bibliotheken)</div>'}</div>`,
+    `<div class="grid-toolbar">
+       <div class="section-title" style="margin:0">${title} <span style="color:var(--muted);font-weight:400;font-size:14px">${items.length}</span></div>
+       <div class="tb-controls">
+         <input class="tb" id="tbq" placeholder="Filtern …">
+         <select class="tb" id="tbgenre"><option value="">Alle Genres</option>${allGenres.map((g) => `<option>${esc(g)}</option>`).join("")}</select>
+         ${kind === "movies" ? `<label class="tb-check"><input type="checkbox" id="tbwatched" ${hideWatched ? "checked" : ""}> Gesehene ausblenden</label>` : ""}
+         <select class="tb" id="tbsort">
+           <option value="added">Zuletzt hinzugefügt</option>
+           <option value="title">Titel A–Z</option>
+           <option value="year">Jahr (neueste)</option>
+           <option value="yearOld">Jahr (älteste)</option>
+           <option value="rating">Bewertung</option>
+         </select>
+       </div>
+     </div>
+     <div class="grid" id="gridBody"></div>`,
+  );
+  $("#tbsort").value = sort;
+  $("#tbq").oninput = () => { q = $("#tbq").value.toLowerCase(); render(); };
+  $("#tbgenre").onchange = () => { genre = $("#tbgenre").value; render(); };
+  $("#tbsort").onchange = () => { sort = $("#tbsort").value; localStorage.setItem(sortKey, sort); render(); };
+  const tw = $("#tbwatched");
+  if (tw) tw.onchange = () => { hideWatched = tw.checked; localStorage.setItem(`ghgflix.hideWatched.${kind}`, hideWatched ? "1" : "0"); render(); };
+  render();
+}
+
+async function viewMyList() {
+  const [lib] = await Promise.all([getLibrary(), loadUserState(true)]);
+  const favShows = lib.shows.filter((s) => isFav("show", s.id));
+  const favMovies = lib.movies.filter((m) => isFav("movie", m.id));
+  shell(
+    "list",
+    (favShows.length || favMovies.length)
+      ? `${grid("Serien", favShows.map((s) => posterCard("show", s)).join(""))}
+         ${grid("Filme", favMovies.map((m) => posterCard("movie", m)).join(""))}`
+      : `<div class="empty">${svgIcon("heart", 40)}<br><br>Deine Liste ist leer.<br>Öffne einen Film oder eine Serie und tippe auf „Meine Liste“.</div>`,
   );
 }
 
+/** heart + "gesehen" action buttons shared by the detail pages. */
+const favBtn = (kind, id) => `<button class="btn ghost" id="favBtn">${svgIcon("heart", 16)} ${isFav(kind, id) ? "In Meiner Liste" : "Meine Liste"}</button>`;
+
 async function viewShow(id, params) {
-  const [data, prog] = await Promise.all([api(`/api/shows/${id}`), api("/api/progress")]);
+  const [data] = await Promise.all([api(`/api/shows/${id}`), loadUserState()]);
+  const prog = await api("/api/progress");
   const progMap = new Map(prog.filter((x) => x.mediaType === "episode").map((x) => [x.refId, x]));
   const { show, seasons } = data;
 
-  // season tab memory: URL param → last visited → first (the desktop-app fix, here too)
   const memKey = `ghgflix.season.${id}`;
   const want = parseInt(params.get("season") ?? sessionStorage.getItem(memKey) ?? "", 10);
   let season = seasons.some((s) => s.season === want) ? want : (seasons.find((s) => s.season > 0) ?? seasons[0])?.season ?? 1;
 
-  // next unwatched episode for the big button
   const flat = seasons.flatMap((s) => s.episodes);
-  const nextEp = flat.find((e) => { const p = progMap.get(e.id); return !p?.watched; }) ?? flat[0];
+  const nextEp = flat.find((e) => !progMap.get(e.id)?.watched) ?? flat[0];
   const resume = nextEp && progMap.get(nextEp.id);
+  const allWatched = flat.length > 0 && flat.every((e) => progMap.get(e.id)?.watched);
 
   const render = () => {
     sessionStorage.setItem(memKey, String(season));
     const cur = seasons.find((s) => s.season === season);
+    const seasonWatched = (cur?.episodes ?? []).length > 0 && cur.episodes.every((e) => progMap.get(e.id)?.watched);
     shell(
       "shows",
       `<div class="detail-hero">${show.backdrop ? `<img src="${img(show.backdrop, "w1280")}">` : ""}<div class="grad"></div><button class="backbtn" onclick="history.length>1?history.back():location.hash='#/shows'">← Zurück</button></div>
        <div class="detail">
         <h1>${esc(show.title)}</h1>
         <div class="meta">${show.year ?? ""} · ${seasons.length} Staffeln · ${flat.length} Folgen${show.rating ? ` · ★ ${show.rating.toFixed(1)}` : ""}${show.genres ? ` · ${esc(show.genres)}` : ""}</div>
-        <div class="btnrow">${nextEp ? `<a class="btn" href="#/play/episode/${nextEp.id}">▶ ${resume && !resume.watched && resume.position > 30 ? "Fortsetzen" : "Abspielen"} · S${String(nextEp.season).padStart(2, "0")}E${String(nextEp.episode).padStart(2, "0")}</a>` : ""}</div>
+        <div class="btnrow">
+          ${nextEp ? `<a class="btn" href="#/play/episode/${nextEp.id}">${svgIcon("play", 16)} ${resume && !resume.watched && resume.position > 30 ? "Fortsetzen" : "Abspielen"} · S${String(nextEp.season).padStart(2, "0")}E${String(nextEp.episode).padStart(2, "0")}</a>` : ""}
+          ${favBtn("show", show.id)}
+          <button class="btn ghost" id="watchShow">${svgIcon("check", 16)} ${allWatched ? "Als ungesehen" : "Alle gesehen"}</button>
+        </div>
         <p class="overview">${esc(show.overview ?? "")}</p>
         <div class="tabs">${seasons.map((s) => `<button data-s="${s.season}" class="${s.season === season ? "active" : ""}">${s.season === 0 ? "Specials" : "Staffel " + s.season}</button>`).join("")}</div>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+          <button class="btn ghost sm" id="watchSeason">${svgIcon("check", 14)} ${seasonWatched ? "Staffel ungesehen" : "Staffel gesehen"}</button>
+        </div>
         <div class="eplist">
           ${(cur?.episodes ?? [])
             .map((e) => {
@@ -354,23 +479,43 @@ async function viewShow(id, params) {
        </div>`,
     );
     app.querySelectorAll(".tabs button").forEach((b) => (b.onclick = () => { season = +b.dataset.s; render(); }));
+    $("#favBtn").onclick = async () => { await toggleFav("show", show.id); render(); };
+    $("#watchShow").onclick = async () => {
+      await api("/api/watched", { method: "POST", body: { mediaType: "show", refId: show.id, watched: !allWatched } });
+      progressCache = null; location.reload();
+    };
+    $("#watchSeason").onclick = async () => {
+      await api("/api/watched", { method: "POST", body: { mediaType: "season", refId: show.id, season, watched: !seasonWatched } });
+      progressCache = null; location.reload();
+    };
   };
   render();
 }
 
 async function viewMovie(id) {
-  const [mv, prog] = await Promise.all([api(`/api/movies/${id}`), api("/api/progress")]);
+  const [mv] = await Promise.all([api(`/api/movies/${id}`), loadUserState()]);
+  const prog = await api("/api/progress");
   const p = prog.find((x) => x.mediaType === "movie" && x.refId === +id);
+  const watched = !!p?.watched;
   shell(
     "movies",
     `<div class="detail-hero">${mv.backdrop ? `<img src="${img(mv.backdrop, "w1280")}">` : ""}<div class="grad"></div><button class="backbtn" onclick="history.length>1?history.back():location.hash='#/movies'">← Zurück</button></div>
      <div class="detail">
       <h1>${esc(mv.title)}</h1>
       <div class="meta">${mv.year ?? ""}${mv.rating ? ` · ★ ${mv.rating.toFixed(1)}` : ""}${mv.genres ? ` · ${esc(mv.genres)}` : ""}${mv.duration ? ` · ${Math.round(mv.duration / 60)} Min.` : ""}</div>
-      <div class="btnrow"><a class="btn" href="#/play/movie/${mv.id}">▶ ${p && !p.watched && p.position > 30 ? "Fortsetzen" : "Abspielen"}</a></div>
+      <div class="btnrow">
+        <a class="btn" href="#/play/movie/${mv.id}">${svgIcon("play", 16)} ${p && !p.watched && p.position > 30 ? "Fortsetzen" : "Abspielen"}</a>
+        ${favBtn("movie", mv.id)}
+        <button class="btn ghost" id="watchMovie">${svgIcon("check", 16)} ${watched ? "Als ungesehen" : "Als gesehen"}</button>
+      </div>
       <p class="overview">${esc(mv.overview ?? "")}</p>
      </div>`,
   );
+  $("#favBtn").onclick = async () => { const on = await toggleFav("movie", mv.id); toast(on ? "Zu Meiner Liste hinzugefügt" : "Aus Meiner Liste entfernt"); viewMovie(id); };
+  $("#watchMovie").onclick = async () => {
+    await api("/api/watched", { method: "POST", body: { mediaType: "movie", refId: mv.id, watched: !watched } });
+    progressCache = null; viewMovie(id);
+  };
 }
 
 // ── player ──────────────────────────────────────────────────────────────────
@@ -739,6 +884,7 @@ async function route() {
     if (seg.length === 0) return viewHome();
     if (seg[0] === "shows") return viewGrid("shows");
     if (seg[0] === "movies") return viewGrid("movies");
+    if (seg[0] === "list") return viewMyList();
     if (seg[0] === "show") return viewShow(seg[1], params);
     if (seg[0] === "movie") return viewMovie(seg[1]);
     if (seg[0] === "play") return viewPlayer(seg[1], seg[2]);
