@@ -101,9 +101,31 @@ const QUALITY = {
   original: null, // keep resolution, just convert the codec
 };
 
+// SRV-017: laufende Transcodes zählen/begrenzen — mehrere gleichzeitig
+// schauende Geräte (Desktop + TV + Handy) können ein schwaches NAS sonst
+// komplett auslasten. SRV-005: beim Container-Stopp alle sauber beenden.
+const activeFF = new Set();
+export const activeTranscodeCount = () => activeFF.size;
+export function killAllTranscodes() {
+  for (const p of activeFF) {
+    try {
+      p.kill("SIGKILL");
+    } catch {}
+  }
+  activeFF.clear();
+}
+
 /** Live transcode from `start` seconds → fragmented MP4 piped to the client.
  *  h264 video is stream-copied when only the audio/container is the problem. */
 export function serveTranscode(req, res, row, { start = 0, quality = "original", audioIndex = 0 } = {}) {
+  // SRV-017: Limit gleichzeitiger Transcodes (Setting/ENV TRANSCODE_MAX, Standard 3)
+  const maxFF = Math.max(1, parseInt(settingOr("transcode_max", "TRANSCODE_MAX", "3"), 10) || 3);
+  if (activeFF.size >= maxFF) {
+    res.writeHead(503, { "Content-Type": "application/json; charset=utf-8", "Retry-After": "10" });
+    res.end(JSON.stringify({ error: `Zu viele gleichzeitige Video-Umwandlungen (max. ${maxFF}). Kurz warten — oder TRANSCODE_MAX erhöhen.` }));
+    return;
+  }
+
   const q = QUALITY[quality] ?? QUALITY.original;
 
   // AV-01/AV-02 (Ton/Bild-Versatz nach Seek/Resume): input seeking (-ss before
@@ -140,6 +162,7 @@ export function serveTranscode(req, res, row, { start = 0, quality = "original",
   args.push("-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1");
 
   const ff = spawn(FFMPEG, args);
+  activeFF.add(ff);
   res.writeHead(200, {
     "Content-Type": "video/mp4",
     "Cache-Control": "no-store",
@@ -168,6 +191,7 @@ export function serveTranscode(req, res, row, { start = 0, quality = "original",
   };
   req.on("close", kill);
   ff.on("close", (code) => {
+    activeFF.delete(ff);
     if (code !== 0 && code !== null && errBuf.trim()) {
       console.error(`[transcode] ffmpeg exit ${code} bei "${row.path}" (t=${start}): ${errBuf.trim().slice(-500)}`);
     }

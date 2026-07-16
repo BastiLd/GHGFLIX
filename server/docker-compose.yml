@@ -38,6 +38,12 @@ services:
       GHGFLIX_PASSWORD: ""
       # Bibliothek automatisch neu scannen (Sekunden):
       SCAN_INTERVAL_SEC: "1800"
+      # Max. gleichzeitige Video-Umwandlungen (Schutz für schwache NAS-CPUs;
+      # weitere Geräte bekommen dann kurz "bitte warten"):
+      TRANSCODE_MAX: "3"
+      # Seek-genaues Transcoding (behebt Ton/Bild-Versatz nach Spulen).
+      # Nur auf sehr schwachen Boards auf "off" stellen:
+      TRANSCODE_ACCURATE_SEEK: "on"
       # Optional: Supabase-Sync (BRAUCHT den Service-Role-Key, nicht den
       # anon-Key). Am einfachsten über die Web-Einstellungen setzen
       # (Einstellungen → Konto & Sync → "Server-Sync mit Supabase"):

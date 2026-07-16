@@ -8,7 +8,7 @@ import { join, normalize, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb, getSetting, setSetting, settingOr, listLibraries, addLibrary, removeLibrary } from "./db.js";
 import { scanLibrary, scanState, removeLibraryContent, detectLibraries, BROWSE_ROOTS, primaryRoot, isSystemDir } from "./scanner.js";
-import { canDirectPlay, ffprobe, serveFile, serveThumb, serveTranscode } from "./stream.js";
+import { canDirectPlay, ffprobe, killAllTranscodes, serveFile, serveThumb, serveTranscode } from "./stream.js";
 import { cachedImage, tmdbEnabled } from "./tmdb.js";
 import * as supabase from "./supabase.js";
 import { handleInvoke, makeThumb, thumbFile } from "./invoke.js";
@@ -33,16 +33,36 @@ const SERVER_ID = getSetting("server_id");
 
 // ── auth ────────────────────────────────────────────────────────────────────
 // Optional: set GHGFLIX_PASSWORD (env or setting). Tokens survive restarts.
+// SEC-003: tokens expire after 180 days (verlorene/verkaufte Geräte behalten
+// keinen ewig gültigen Zugang). Altes Format (Array aus Strings) wird migriert.
 const password = () => settingOr("password", "GHGFLIX_PASSWORD", "");
-const tokens = new Set(JSON.parse(getSetting("auth_tokens") || "[]"));
-const saveTokens = () => setSetting("auth_tokens", JSON.stringify([...tokens].slice(-50)));
+const TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
+const tokens = new Map(); // token → createdAt (ms)
+try {
+  for (const t of JSON.parse(getSetting("auth_tokens") || "[]")) {
+    if (Array.isArray(t)) tokens.set(String(t[0]), Number(t[1]) || Date.now());
+    else tokens.set(String(t), Date.now());
+  }
+} catch {}
+const saveTokens = () => setSetting("auth_tokens", JSON.stringify([...tokens.entries()].slice(-50)));
 
 function authed(req, url) {
   if (!password()) return true;
   const h = req.headers.authorization || "";
   const t = h.startsWith("Bearer ") ? h.slice(7) : url.searchParams.get("token") || "";
-  return tokens.has(t);
+  const born = tokens.get(t);
+  if (born == null) return false;
+  if (Date.now() - born > TOKEN_TTL_MS) {
+    tokens.delete(t);
+    saveTokens();
+    return false;
+  }
+  return true;
 }
+
+// SEC-008/SRV-007: Brute-Force-Schutz für /api/login — nach 8 Fehlversuchen
+// von derselben IP 5 Minuten Sperre.
+const loginFails = new Map(); // ip → { n, until }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 const json = (res, data, status = 200) => {
@@ -154,6 +174,10 @@ async function handle(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*"); // desktop app + Expo dev
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  // SRV-034: Basis-Sicherheitsheader für die Web-Oberfläche
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "no-referrer");
   if (req.method === "OPTIONS") return res.writeHead(204).end();
 
   if (!p.startsWith("/api/")) return serveStatic(res, p);
@@ -171,11 +195,25 @@ async function handle(req, res) {
     });
   }
   if (p === "/api/login" && req.method === "POST") {
+    const ip = req.socket.remoteAddress || "?";
+    const rl = loginFails.get(ip);
+    if (rl && rl.until > Date.now()) {
+      return json(res, { error: "Zu viele Fehlversuche — bitte 5 Minuten warten" }, 429);
+    }
     const body = await readBody(req);
     if (!password()) return json(res, { token: null, auth: false });
-    if (body.password !== password()) return json(res, { error: "Falsches Passwort" }, 401);
+    if (body.password !== password()) {
+      const f = { n: (rl?.n ?? 0) + 1, until: 0 };
+      if (f.n >= 8) {
+        f.until = Date.now() + 5 * 60_000;
+        f.n = 0;
+      }
+      loginFails.set(ip, f);
+      return json(res, { error: "Falsches Passwort" }, 401);
+    }
+    loginFails.delete(ip);
     const t = randomBytes(24).toString("hex");
-    tokens.add(t);
+    tokens.set(t, Date.now());
     saveTokens();
     return json(res, { token: t });
   }
@@ -491,6 +529,13 @@ async function handle(req, res) {
     }
     return json(res, { ok: true });
   }
+  // SEC-004: "Alle Geräte abmelden" — invalidiert JEDES gespeicherte Token
+  // (verlorenes Handy / verkaufter TV-Stick), ohne das Passwort zu ändern.
+  if (p === "/api/logout_all" && req.method === "POST") {
+    tokens.clear();
+    saveTokens();
+    return json(res, { ok: true });
+  }
   if (p === "/api/supabase/import" && req.method === "POST") {
     try {
       const r = await supabase.importFromSupabase();
@@ -503,18 +548,42 @@ async function handle(req, res) {
   return json(res, { error: "not found" }, 404);
 }
 
-createServer((req, res) => {
+const server = createServer((req, res) => {
   handle(req, res).catch((e) => {
     console.error("[http]", req.url, e);
     if (!res.headersSent) json(res, { error: "server error" }, 500);
     else res.end();
   });
-}).listen(PORT, () => {
+});
+server.listen(PORT, () => {
   console.log(`GHGFlix Server v${VERSION} → http://0.0.0.0:${PORT}`);
 });
+
+// SRV-005: graceful shutdown — laufende ffmpeg-Prozesse sauber beenden, bevor
+// Docker den Container stoppt (Update mitten in einer Wiedergabe).
+const shutdown = (sig) => {
+  console.log(`[server] ${sig} — fahre herunter`);
+  try {
+    server.close();
+  } catch {}
+  killAllTranscodes();
+  setTimeout(() => process.exit(0), 400).unref();
+};
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 // initial scan + periodic rescan (default: every 30 min) + Supabase loop
 void scanLibrary();
 const every = Math.max(300, parseInt(process.env.SCAN_INTERVAL_SEC || "1800", 10)) * 1000;
 setInterval(() => void scanLibrary(), every).unref();
 supabase.startSupabaseLoop();
+
+// S-030: pending_progress nicht unbegrenzt wachsen lassen — Einträge, die nach
+// 180 Tagen immer noch keinem Medium zugeordnet werden konnten (Medien, die es
+// auf diesem Server schlicht nicht gibt), täglich aufräumen.
+setInterval(() => {
+  try {
+    const r = db.prepare("DELETE FROM pending_progress WHERE updated_at < ?").run(Date.now() - 180 * 24 * 3600 * 1000);
+    if (r.changes > 0) console.log(`[cleanup] ${r.changes} alte pending_progress-Einträge entfernt`);
+  } catch {}
+}, 24 * 3600 * 1000).unref();

@@ -1407,6 +1407,26 @@ export default function Settings() {
               „Einstellungen → GHGFlix-Server“ ein.
             </span>
           </div>
+          <div className="mt-4 flex items-center gap-3 flex-wrap">
+            <Button
+              variant="danger"
+              onClick={async () => {
+                if (!confirm("Wirklich ALLE angemeldeten Geräte (PC, Handy, TV, Browser) abmelden? Jedes Gerät muss sich danach neu mit dem Passwort anmelden.")) return;
+                try {
+                  await serverSettings("POST", "/api/logout_all");
+                  toast("Alle Geräte abgemeldet", "success");
+                  window.dispatchEvent(new CustomEvent("ghgflix:unauthorized"));
+                } catch (e) {
+                  toast(String(e), "error");
+                }
+              }}
+            >
+              Alle Geräte abmelden
+            </Button>
+            <span className="text-xs text-ghg-muted">
+              Für verlorene Handys / verkaufte TV-Sticks — Tokens laufen sonst nach 180 Tagen automatisch ab.
+            </span>
+          </div>
         </Section>
       )}
 
