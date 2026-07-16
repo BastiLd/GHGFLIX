@@ -48,6 +48,7 @@ import { comboFromEvent, comboHasKey, comboLabel } from "../lib/keys";
 import { useStore } from "../lib/store";
 import { applyAccent, loadAccent, useUiPrefs, type UiPrefs } from "../lib/uiPrefs";
 import { getSession, reinitSupabase, signOut } from "../lib/supabase";
+import { setTvModePref, tvModePref } from "../lib/tvMode";
 import { loadServerConfig, loginServer, saveServerConfig, startServerSync, syncOnce, testServer, type ServerConfig } from "../lib/serverSync";
 import { Button, InfoButton, Modal, Spinner, TextInput } from "../components/ui";
 import { ThemeStore } from "../components/ThemeStore";
@@ -732,6 +733,29 @@ export default function Settings() {
               <PrefToggle k="greeting" label="Begrüßung auf der Startseite" />
             </div>
           </Section>
+
+          {IS_WEB && (
+            <Section
+              title="TV-Modus (Fernbedienung)"
+              desc="Für Smart-TV-Browser: große Fokus-Rahmen und Navigation per Pfeiltasten/Fernbedienung. Wird auf TVs automatisch erkannt — hier lässt er sich erzwingen oder abschalten. Direktlink für den Fernseher: http://<server-ip>:8484/?tv=1"
+            >
+              <div className="flex gap-2 items-center flex-wrap">
+                <select
+                  defaultValue={tvModePref()}
+                  onChange={(e) => {
+                    setTvModePref(e.target.value as "on" | "off" | "auto");
+                    location.reload();
+                  }}
+                  className="bg-ghg-bg2 border border-ghg-line rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-ghg-red"
+                >
+                  <option value="auto">Automatisch (TV-Erkennung)</option>
+                  <option value="on">Immer an</option>
+                  <option value="off">Immer aus</option>
+                </select>
+                <span className="text-xs text-ghg-muted">Änderung lädt die Seite neu.</span>
+              </div>
+            </Section>
+          )}
 
           <Section
             title="Kindersicherung"

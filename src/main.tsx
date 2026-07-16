@@ -6,9 +6,11 @@ import App from "./App";
 import "./index.css";
 import { initSupabase, startSupabaseSync } from "./lib/supabase";
 import { initTheme } from "./lib/themes";
+import { initTvMode } from "./lib/tvMode";
 import { useStore } from "./lib/store";
 
 initTheme();
+initTvMode(); // TV-044: Fernbedienungs-Modus für Smart-TV-Browser
 
 const queryClient = new QueryClient({
   defaultOptions: {

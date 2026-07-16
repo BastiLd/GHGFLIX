@@ -248,3 +248,31 @@ body {
 @utility badge-pulse {
   animation: ghg-badge-pulse 2.4s ease-in-out infinite;
 }
+
+/* ── TV-Modus (TV-044/045/046/008/009): 10-Foot-UI für Smart-TV-Browser ──────
+   Aktiviert per body.tv-mode (User-Agent-Erkennung, Schalter in den
+   Einstellungen oder Link ?tv=1 — siehe src/lib/tvMode.ts). */
+body.tv-mode {
+  font-size: 115%; /* TV-008: größere Schrift für 3–4 m Sitzabstand */
+}
+body.tv-mode #root {
+  padding: 2.5vh 3vw; /* TV-009: Safe-Area gegen TV-Overscan */
+}
+/* TV-006: deutlich sichtbarer Fokus-Ring auf JEDEM interaktiven Element */
+body.tv-mode a:focus,
+body.tv-mode button:focus,
+body.tv-mode input:focus,
+body.tv-mode select:focus,
+body.tv-mode textarea:focus,
+body.tv-mode [tabindex]:focus {
+  outline: 3px solid #e50914 !important;
+  outline-offset: 3px;
+  border-radius: 8px;
+  z-index: 1;
+}
+body.tv-mode :focus {
+  scroll-margin: 90px; /* fokussierte Kachel nie am Bildschirmrand kleben lassen */
+}
+body.tv-mode ::-webkit-scrollbar {
+  display: none; /* TVs scrollen per Fokus, nicht per Maus */
+}
