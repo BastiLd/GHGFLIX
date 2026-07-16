@@ -80,9 +80,18 @@ async function buildMpvArgs(): Promise<string[]> {
   const vo = (await getSetting("video_output")) || "gpu-next"; // gpu-next | gpu | auto
   const perfMode = (await getSetting("perf_mode")) === "on";
   const smoothing = (await getSetting("playback_smoothing")) === "on";
+  // AV-14: a system-wide mpv.conf (from a separate mpv install) can silently
+  // override/collide with every argument below — isolate by default, allow
+  // power users to opt back in via the setting.
+  const userConfig = (await getSetting("mpv_user_config")) === "on";
   const p = uiPrefs();
 
   const args = [
+    ...(userConfig ? [] : ["--no-config"]),
+    // AV-13: pin A/V sync to the audio clock explicitly instead of relying on
+    // the mpv default (differs across builds/versions). The smoothing mode
+    // below intentionally overrides this with display-resample.
+    ...(smoothing ? [] : ["--video-sync=audio"]),
     `--sub-scale=${Math.min(2, Math.max(0.4, p.subScale || 1))}`,
     `--volume-max=${Math.min(150, Math.max(100, p.volumeMax || 100))}`,
     `--hwdec=${hwdec}`,

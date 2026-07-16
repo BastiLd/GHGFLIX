@@ -8,6 +8,8 @@ import {
   deleteProfile,
   getSession,
   listProfiles,
+  startSupabaseSync,
+  stopSupabaseSync,
   syncProgress,
   type SupaProfile,
 } from "../lib/supabase";
@@ -51,6 +53,11 @@ export default function Profiles() {
       } catch (e) {
         toast("Sync fehlgeschlagen: " + String(e), "error");
       }
+      // S-006: keep syncing in the background (60 s + on window focus) instead
+      // of only this one time at profile selection
+      startSupabaseSync(id);
+    } else {
+      stopSupabaseSync();
     }
     navigate("/");
   };

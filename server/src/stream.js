@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process";
 import { createReadStream, statSync } from "node:fs";
 import { extname } from "node:path";
+import { settingOr } from "./db.js";
 
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
 const FFPROBE = process.env.FFPROBE_PATH || "ffprobe";
@@ -104,11 +105,23 @@ const QUALITY = {
  *  h264 video is stream-copied when only the audio/container is the problem. */
 export function serveTranscode(req, res, row, { start = 0, quality = "original", audioIndex = 0 } = {}) {
   const q = QUALITY[quality] ?? QUALITY.original;
-  const copyVideo = row.vcodec === "h264" && !q;
+
+  // AV-01/AV-02 (Ton/Bild-Versatz nach Seek/Resume): input seeking (-ss before
+  // -i) combined with `-c:v copy` snaps the VIDEO to the previous keyframe —
+  // up to several seconds before `start`, depending on the source's GOP length
+  // — while the re-encoded AUDIO starts exactly at `start`. Result: an A/V
+  // offset after every seek/resume/audio-track switch during transcode
+  // playback ("manchmal", because it depends on the distance to the keyframe).
+  // Fix: only stream-copy when playing from 0 (files start on a keyframe);
+  // any real seek re-encodes the video so both tracks start sample-exact at
+  // `start`. Escape hatch for very weak NAS boards: setting/env
+  // TRANSCODE_ACCURATE_SEEK=off restores the old copy behaviour.
+  const accurateSeek = settingOr("transcode_accurate_seek", "TRANSCODE_ACCURATE_SEEK", "on") !== "off";
+  const copyVideo = row.vcodec === "h264" && !q && (start <= 0 || !accurateSeek);
 
   // -fflags +genpts: rebuild missing/broken timestamps (MKV/TS sources) so
   // audio and video share one clean clock instead of drifting apart.
-  const args = ["-hide_banner", "-loglevel", "error", "-fflags", "+genpts"];
+  const args = ["-hide_banner", "-loglevel", "warning", "-fflags", "+genpts"];
   if (start > 0) args.push("-ss", String(start));
   args.push("-i", row.path, "-map", "0:v:0", "-map", `0:a:${audioIndex}?`);
 
@@ -127,16 +140,39 @@ export function serveTranscode(req, res, row, { start = 0, quality = "original",
   args.push("-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1");
 
   const ff = spawn(FFMPEG, args);
-  res.writeHead(200, { "Content-Type": "video/mp4", "Cache-Control": "no-store" });
+  res.writeHead(200, {
+    "Content-Type": "video/mp4",
+    "Cache-Control": "no-store",
+    // AV-03: with accurate seek the stream really starts at `start`, so the
+    // client-side offset assumption (offsetRef = requested t) is now correct.
+    "X-GHG-Stream-Start": String(start),
+  });
   ff.stdout.pipe(res);
-  ff.stderr.on("data", () => {});
+  // AV-07: don't throw ffmpeg's stderr away — timestamp warnings like
+  // "Non-monotonous DTS" or "invalid pts" are direct evidence of A/V-sync
+  // trouble with a particular source file. Keep a small rolling buffer and
+  // log it when ffmpeg dies or complains.
+  let errBuf = "";
+  let warned = false;
+  ff.stderr.on("data", (d) => {
+    errBuf = (errBuf + d.toString()).slice(-4096);
+    if (!warned && /non-monotonous dts|invalid pts|invalid dts|timestamps are unset/i.test(errBuf)) {
+      warned = true;
+      console.warn(`[transcode] Timestamp-Warnung bei "${row.path}" (t=${start}): ${errBuf.trim().split("\n").pop()}`);
+    }
+  });
   const kill = () => {
     try {
       ff.kill("SIGKILL");
     } catch {}
   };
   req.on("close", kill);
-  ff.on("close", () => res.end());
+  ff.on("close", (code) => {
+    if (code !== 0 && code !== null && errBuf.trim()) {
+      console.error(`[transcode] ffmpeg exit ${code} bei "${row.path}" (t=${start}): ${errBuf.trim().slice(-500)}`);
+    }
+    res.end();
+  });
   ff.on("error", () => {
     if (!res.headersSent) res.writeHead(500);
     res.end();

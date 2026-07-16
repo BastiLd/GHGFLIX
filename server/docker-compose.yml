@@ -39,6 +39,10 @@ services:
       # Bibliothek automatisch neu scannen (Sekunden):
       SCAN_INTERVAL_SEC: "1800"
       # Optional: Supabase-Sync (BRAUCHT den Service-Role-Key, nicht den
-      # anon-Key). Am einfachsten über die Web-Einstellungen setzen:
+      # anon-Key). Am einfachsten über die Web-Einstellungen setzen
+      # (Einstellungen → Konto & Sync → "Server-Sync mit Supabase"):
       SUPABASE_URL: ""
       SUPABASE_SERVICE_KEY: ""
+      # Optional: nur Profile EINES Supabase-Kontos syncen (Auth-User-ID) —
+      # nur nötig, wenn sich mehrere Konten ein Supabase-Projekt teilen:
+      SUPABASE_USER_ID: ""

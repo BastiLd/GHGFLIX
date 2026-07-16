@@ -109,10 +109,19 @@ http://<zimaboard-ip>:8484/icon.svg
 - **PC-App:** In der GHGFlix-Windows-App unter *Einstellungen → GHGFlix-Server*
   die Server-Adresse eintragen und Sync aktivieren — der Fortschritt gleicht
   sich automatisch in beide Richtungen ab (auch die Staffel-/Folgen-Position).
-- **Supabase (optional):** Unter *⚙️ Einstellungen → Supabase-Sync* URL +
-  Service-Role-Key eintragen. „Senden“ und „Empfangen“ sind **einzeln**
-  schaltbar, und mit **„Alles aus Supabase importieren“** holst du deine
-  bestehenden Cloud-Daten einmalig komplett auf den Server.
+- **Supabase (optional):** Unter *⚙️ Einstellungen → Konto & Sync →
+  „Server-Sync mit Supabase (Cloud-Relay)“* die Project-URL + den
+  **Service-Role-Key** eintragen (Supabase → *Project Settings → API Keys →
+  service_role* — beginnt mit `eyJ…` oder `sb_secret_…`).
+  **Achtung, zwei verschiedene Keys:** Der *Anon-Key* aus dem Abschnitt
+  darunter ist nur für den Browser-Login gedacht — für den Server-Sync reicht
+  er NICHT (der Server hat keine Nutzer-Session und scheitert an Row Level
+  Security). „Senden“ und „Empfangen“ sind **einzeln** schaltbar; nach dem
+  Speichern eines neuen Keys startet automatisch ein Erst-Import, zusätzlich
+  gibt es **„Jetzt aus der Cloud importieren“**. Der Status („Verbunden /
+  Fehler seit …“) steht direkt über dem Formular. Alternativ per
+  docker-compose: `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` (+ optional
+  `SUPABASE_USER_ID`, wenn sich mehrere Konten ein Projekt teilen).
 
 ## 5. Transcoding
 

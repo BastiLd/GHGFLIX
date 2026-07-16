@@ -549,7 +549,10 @@ function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, n
   useKeepAwake();
   const [info, setInfo] = useState(null);
   const [resume, setResume] = useState(0);
-  const offsetRef = useRef(0); // transcode: stream starts at this position
+  // AV-20: transcode stream starts at this position. Requires the server's
+  // accurate-seek fix (server/src/stream.js) — the stream then really starts
+  // at the requested t, so offset == requested position holds.
+  const offsetRef = useRef(0);
   const modeRef = useRef("direct");
   const [uiVisible, setUiVisible] = useState(true);
 

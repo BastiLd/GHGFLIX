@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getVersion, invoke, openDialog, openUrl, saveDialog, webDownload, webPickedFile } from "../lib/backend";
-import { IS_WEB } from "../lib/platform";
+import { IS_WEB, webToken } from "../lib/platform";
 import {
   BarChart3,
   Cloud,
@@ -333,6 +333,7 @@ export default function Settings() {
   const [videoOutput, setVideoOutput] = useState("gpu-next");
   const [perfMode, setPerfMode] = useState(false);
   const [smoothing, setSmoothing] = useState(false);
+  const [mpvUserConfig, setMpvUserConfig] = useState(false);
   const [autoMatch, setAutoMatch] = useState(true);
   const [version, setVersion] = useState("");
   const [tools, setTools] = useState<ToolsReport | null>(null);
@@ -404,6 +405,7 @@ export default function Settings() {
       setVideoOutput((await getSetting("video_output")) || "gpu-next");
       setPerfMode((await getSetting("perf_mode")) === "on");
       setSmoothing((await getSetting("playback_smoothing")) === "on");
+      setMpvUserConfig((await getSetting("mpv_user_config")) === "on");
       setAutoMatch((await getSetting("auto_match")) !== "off");
       const session = await getSession();
       setEmail(session?.user?.email ?? null);
@@ -435,6 +437,7 @@ export default function Settings() {
     await setSetting("video_output", videoOutput);
     await setSetting("perf_mode", perfMode ? "on" : "off");
     await setSetting("playback_smoothing", smoothing ? "on" : "off");
+    await setSetting("mpv_user_config", mpvUserConfig ? "on" : "off");
     toast("Leistungs-Einstellungen gespeichert – beim nächsten Start einer Wiedergabe aktiv", "success");
   };
 
@@ -1113,9 +1116,13 @@ export default function Settings() {
             <input type="checkbox" checked={perfMode} onChange={(e) => setPerfMode(e.target.checked)} className="w-4 h-4 accent-ghg-red" />
             <span className="text-sm">Leistungsmodus für schwächere PCs (minimal weniger Bildqualität, deutlich flüssiger)</span>
           </label>
-          <label className="flex items-center gap-3 mb-4 cursor-pointer">
+          <label className="flex items-center gap-3 mb-3 cursor-pointer">
             <input type="checkbox" checked={smoothing} onChange={(e) => setSmoothing(e.target.checked)} className="w-4 h-4 accent-ghg-red" />
             <span className="text-sm">Laufruhe-Modus (synchronisiert Bilder mit dem Monitor – nur bei Mikro-Rucklern aktivieren)</span>
+          </label>
+          <label className="flex items-center gap-3 mb-4 cursor-pointer">
+            <input type="checkbox" checked={mpvUserConfig} onChange={(e) => setMpvUserConfig(e.target.checked)} className="w-4 h-4 accent-ghg-red" />
+            <span className="text-sm">Eigene mpv.conf zulassen (Experten — kann Bild/Ton-Einstellungen der App überschreiben)</span>
           </label>
           <Button onClick={savePerformance}>Speichern</Button>
         </Section>
@@ -1379,10 +1386,16 @@ export default function Settings() {
         </Section>
       )}
 
+      {tab === "konto" && IS_WEB && <SupabaseServerSection />}
+
       {tab === "konto" && (
         <Section
           title="Konto & Sync (Supabase)"
-          desc="Optional: Anmelden, damit Profile und Fortschritt zwischen mehreren PCs synchronisiert werden."
+          desc={
+            IS_WEB
+              ? "Login mit dem ANON-Key für Cloud-Profile in diesem Browser. Der dauerhafte Server↔Cloud-Abgleich läuft über den Abschnitt oben (Service-Role-Key) — das sind zwei verschiedene Keys."
+              : "Optional: Anmelden, damit Profile und Fortschritt zwischen mehreren PCs synchronisiert werden."
+          }
           info={
             <>
               <p className="font-semibold text-ghg-text">Wo finde ich URL und Key?</p>
@@ -1499,6 +1512,210 @@ export default function Settings() {
         </div>
       </Modal>
     </div>
+  );
+}
+
+// ─── Supabase server relay (web/IS_WEB only) ─────────────────────────────────
+// S-001: the server's own Supabase sync (server/src/supabase.js) reads the
+// SERVICE-ROLE key from the setting `supabase_key` — a different key (and a
+// different setting) than the anon key the shared section below saves. This
+// form talks to GET/POST /api/settings + POST /api/supabase/import, which were
+// fully implemented server-side but unreachable from the UI until now.
+
+interface ServerSupabaseSettings {
+  supabase_configured: boolean;
+  supabase_url: string;
+  supabase_key_set: boolean;
+  supabase_user_id: string;
+  supabase_push: boolean;
+  supabase_pull: boolean;
+  supabase_status?: {
+    configured: boolean;
+    lastSyncAt: number;
+    lastPushed: number;
+    lastPulled: number;
+    lastError: string | null;
+    lastErrorAt: number;
+  };
+}
+
+async function serverSettings<T>(method: "GET" | "POST", path = "/api/settings", body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: {
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(webToken() ? { Authorization: `Bearer ${webToken()}` } : {}),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(String((j as { error?: string })?.error ?? `Serverfehler (${res.status})`));
+  return j as T;
+}
+
+function SupabaseServerSection() {
+  const toast = useStore((s) => s.toast);
+  const [st, setSt] = useState<ServerSupabaseSettings | null>(null);
+  const [url, setUrl] = useState("");
+  const [key, setKey] = useState("");
+  const [userId, setUserId] = useState("");
+  const [push, setPush] = useState(true);
+  const [pull, setPull] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = async () => {
+    const s = await serverSettings<ServerSupabaseSettings>("GET");
+    setSt(s);
+    setUrl(s.supabase_url || "");
+    setUserId(s.supabase_user_id || "");
+    setPush(s.supabase_push);
+    setPull(s.supabase_pull);
+  };
+  useEffect(() => {
+    void refresh().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // S-019: catch swapped / wrong-type values before they silently break the sync
+  const urlWrong = !!url.trim() && !/^https:\/\/[a-z0-9-]+\.supabase\.(co|in)\b/i.test(url.trim());
+  const urlIsKey = /^(eyJ|sb_)/.test(url.trim());
+  const keyIsUrl = /^https?:\/\//i.test(key.trim());
+  const keyIsPublishable = /^sb_publishable_/.test(key.trim());
+
+  const save = async () => {
+    if (urlWrong || keyIsUrl || keyIsPublishable) return toast("Bitte zuerst die markierten Felder korrigieren", "error");
+    setBusy(true);
+    try {
+      const body: Record<string, string> = {
+        supabase_url: url.trim(),
+        supabase_user_id: userId.trim(),
+        supabase_push: push ? "on" : "off",
+        supabase_pull: pull ? "on" : "off",
+      };
+      const newKey = key.trim();
+      if (newKey) body.supabase_key = newKey; // never overwrite an existing key with ""
+      await serverSettings("POST", "/api/settings", body);
+      setKey("");
+      await refresh();
+      toast("Supabase-Sync gespeichert", "success");
+      // S-003: right after a key is saved, import existing cloud data instead
+      // of waiting for the next 60-s background tick
+      if (newKey) await importNow(true);
+    } catch (e) {
+      toast(String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const importNow = async (auto = false) => {
+    setBusy(true);
+    try {
+      const r = await serverSettings<{ ok?: boolean; pulled?: number; error?: string }>("POST", "/api/supabase/import");
+      await refresh();
+      toast(`Import fertig — ${r.pulled ?? 0} Einträge übernommen`, "success");
+    } catch (e) {
+      toast((auto ? "Automatischer Import fehlgeschlagen: " : "Import fehlgeschlagen: ") + String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // S-005: plain-language status line
+  const s = st?.supabase_status;
+  const statusText = !st
+    ? "Status wird geladen …"
+    : !st.supabase_configured
+      ? "Nicht konfiguriert — URL und Service-Role-Key eintragen."
+      : s?.lastError
+        ? `Fehler seit ${s.lastErrorAt ? new Date(s.lastErrorAt).toLocaleString("de-DE") : "kurzem"}: ${s.lastError}`
+        : s?.lastSyncAt
+          ? `Verbunden — letzter Abgleich ${new Date(s.lastSyncAt).toLocaleTimeString("de-DE")} (${s.lastPushed} gesendet, ${s.lastPulled} empfangen)`
+          : "Konfiguriert — erster Abgleich läuft in Kürze (max. 60 s).";
+  const statusColor = !st || !st.supabase_configured ? "text-ghg-muted" : s?.lastError ? "text-ghg-red" : "text-emerald-500";
+
+  return (
+    <Section
+      title="Server-Sync mit Supabase (Cloud-Relay)"
+      desc="Der Server gleicht den Fortschritt ALLER Geräte alle 60 Sekunden mit Supabase ab — dafür braucht er den Service-Role-Key (nicht den Anon-Key aus dem Abschnitt darunter)."
+      info={
+        <>
+          <p className="font-semibold text-ghg-text">Wo finde ich den Service-Role-Key?</p>
+          <p>
+            Supabase-Projekt → <span className="text-ghg-red">Project Settings → API Keys</span> →{" "}
+            <span className="text-ghg-red">service_role</span> (bzw. „secret key“, beginnt mit{" "}
+            <span className="text-ghg-text">eyJ…</span> oder <span className="text-ghg-text">sb_secret_…</span>).
+          </p>
+          <p>
+            Der Anon-Key reicht hier NICHT: Der Server hat keine Nutzer-Session und würde an den
+            Row-Level-Security-Regeln scheitern.
+          </p>
+        </>
+      }
+    >
+      <p className={`text-sm mb-4 ${statusColor}`}>● {statusText}</p>
+
+      <label className="block mb-1">
+        <span className="text-xs uppercase tracking-wide text-ghg-muted">Project URL</span>
+        <TextInput value={url} onChange={setUrl} placeholder="https://abcdefgh.supabase.co" />
+      </label>
+      {(urlWrong || urlIsKey) && (
+        <p className="text-xs text-ghg-red mb-2">
+          {urlIsKey
+            ? "Das sieht nach einem Key aus, nicht nach der URL. Die URL beginnt mit https:// und endet auf .supabase.co"
+            : "Die URL sollte so aussehen: https://abcdefgh.supabase.co"}
+        </p>
+      )}
+
+      <label className="block mb-1 mt-3">
+        <span className="text-xs uppercase tracking-wide text-ghg-muted">
+          Service Role Key {st?.supabase_key_set ? "· bereits gesetzt (leer lassen = behalten)" : ""}
+        </span>
+        <TextInput
+          value={key}
+          onChange={setKey}
+          placeholder={st?.supabase_key_set ? "••••••••  (gesetzt)" : "eyJ… oder sb_secret_…"}
+          type="password"
+        />
+      </label>
+      {(keyIsUrl || keyIsPublishable) && (
+        <p className="text-xs text-ghg-red mb-2">
+          {keyIsUrl
+            ? "Das ist die URL, nicht der Key — bitte Felder tauschen."
+            : "Das ist der öffentliche (publishable/anon) Key. Hier wird der service_role/secret Key gebraucht."}
+        </p>
+      )}
+      <p className="text-xs text-ghg-red mb-3">
+        ⚠ Diesen Key niemals weitergeben oder in Apps/Browsern einbauen — er umgeht alle Zugriffsbeschränkungen deines
+        Supabase-Projekts. Er bleibt ausschließlich auf dem Server gespeichert.
+      </p>
+
+      <label className="block mb-3 max-w-md">
+        <span className="text-xs uppercase tracking-wide text-ghg-muted">User-ID (optional)</span>
+        <TextInput value={userId} onChange={setUserId} placeholder="Supabase Auth User-ID — nur nötig, wenn sich mehrere Konten ein Projekt teilen" />
+      </label>
+
+      <div className="flex gap-6 mb-4">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={push} onChange={(e) => setPush(e.target.checked)} className="w-4 h-4 accent-ghg-red" />
+          <span className="text-sm">Senden (Server → Cloud)</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={pull} onChange={(e) => setPull(e.target.checked)} className="w-4 h-4 accent-ghg-red" />
+          <span className="text-sm">Empfangen (Cloud → Server)</span>
+        </label>
+      </div>
+
+      <div className="flex gap-2 items-center flex-wrap">
+        <Button onClick={save} disabled={busy}>
+          Speichern
+        </Button>
+        <Button variant="ghost" onClick={() => void importNow()} disabled={busy || !st?.supabase_configured}>
+          Jetzt aus der Cloud importieren
+        </Button>
+        {busy && <Spinner />}
+      </div>
+    </Section>
   );
 }
 

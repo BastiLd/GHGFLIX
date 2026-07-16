@@ -5,10 +5,22 @@ import { openDb, settingOr, getSetting } from "./db.js";
 
 const url = () => (settingOr("supabase_url", "SUPABASE_URL", "") || "").replace(/\/$/, "");
 const key = () => settingOr("supabase_key", "SUPABASE_SERVICE_KEY", "");
+// Optional: limit the pull to ONE Supabase account's profiles (S-010). With a
+// service-role key RLS is bypassed, so without this filter a project shared by
+// several accounts would leak foreign profiles into this server.
+const userId = () => settingOr("supabase_user_id", "SUPABASE_USER_ID", "");
 
 export const supabaseConfigured = () => !!(url() && key());
 export const pushEnabled = () => supabaseConfigured() && getSetting("supabase_push") !== "off";
 export const pullEnabled = () => supabaseConfigured() && getSetting("supabase_pull") !== "off";
+
+// Sync status for the UI (SRV-014/S-005): surfaced via GET /api/settings so the
+// web settings page can show "verbunden / Fehler seit …" instead of the error
+// being visible only in the Docker logs.
+const status = { lastSyncAt: 0, lastPushed: 0, lastPulled: 0, lastError: null, lastErrorAt: 0 };
+export function supabaseStatus() {
+  return { configured: supabaseConfigured(), ...status };
+}
 
 async function rest(path, { method = "GET", body, params } = {}) {
   const u = new URL(`${url()}/rest/v1/${path}`);
@@ -59,7 +71,9 @@ function tmdbCoords(db, mediaType, refId) {
 export async function pullFromSupabase() {
   if (!pullEnabled()) return { pulled: 0 };
   const db = openDb();
-  const profiles = await rest("profiles", { params: { select: "*" } });
+  const profileParams = { select: "*" };
+  if (userId()) profileParams.user_id = `eq.${userId()}`; // S-010
+  const profiles = await rest("profiles", { params: profileParams });
   const since = parseInt(getSetting("supabase_last_pull") ?? "0", 10);
   let pulled = 0;
   for (const sb of profiles) {
@@ -82,6 +96,9 @@ export async function pullFromSupabase() {
   const { applyPendingProgress } = await import("./scanner.js");
   applyPendingProgress(db);
   db.prepare("INSERT INTO settings (key, value) VALUES ('supabase_last_pull', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(Date.now()));
+  status.lastSyncAt = Date.now();
+  status.lastPulled = pulled;
+  status.lastError = null;
   return { pulled };
 }
 
@@ -116,6 +133,9 @@ export async function pushToSupabase() {
     await rest("watch_progress?on_conflict=profile_id,media_type,tmdb_id,season,episode", { method: "POST", body: payload });
   }
   db.prepare("INSERT INTO settings (key, value) VALUES ('supabase_last_push', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(Date.now()));
+  status.lastSyncAt = Date.now();
+  status.lastPushed = payload.length;
+  status.lastError = null;
   return { pushed: payload.length };
 }
 
@@ -139,9 +159,16 @@ export function startSupabaseLoop() {
     try {
       if (pullEnabled()) await pullFromSupabase();
       if (pushEnabled()) await pushToSupabase();
+      status.lastError = null;
+      status.lastErrorAt = 0;
     } catch (e) {
-      console.error("[supabase]", String(e).slice(0, 300));
+      if (!status.lastError) status.lastErrorAt = Date.now(); // "Fehler seit …"
+      status.lastError = String(e).slice(0, 300);
+      console.error("[supabase]", status.lastError);
     }
   };
+  // first tick shortly after boot so freshly configured servers sync without
+  // waiting a full interval (S-003), then every 60 s
+  setTimeout(tick, 5_000).unref();
   setInterval(tick, 60_000).unref();
 }

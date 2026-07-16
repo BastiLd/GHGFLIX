@@ -21,7 +21,7 @@ const SERVER_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const WEBAPP_DIR = join(SERVER_ROOT, "webapp");
 const LEGACY_DIR = join(SERVER_ROOT, "web");
 const WEB_DIR = existsSync(join(WEBAPP_DIR, "index.html")) ? WEBAPP_DIR : LEGACY_DIR;
-const VERSION = "2.0.0";
+const VERSION = "2.1.0";
 
 const db = openDb();
 
@@ -78,7 +78,7 @@ function progressAsTmdb(profileId, since = 0) {
     .all(profileId, since);
 }
 
-function upsertTmdbProgress(profileId, rows) {
+async function upsertTmdbProgress(profileId, rows) {
   let applied = 0;
   for (const r of rows) {
     if (!r || !r.tmdbId || !["movie", "episode"].includes(r.mediaType)) continue;
@@ -101,8 +101,11 @@ function upsertTmdbProgress(profileId, rows) {
     );
     applied++;
   }
-  // resolve immediately for known media
-  import("./scanner.js").then((m) => m.applyPendingProgress(db));
+  // resolve immediately for known media — awaited so the HTTP response only
+  // returns once the rows are actually visible in `progress` (S-011: the old
+  // fire-and-forget version raced against the client's next pull)
+  const { applyPendingProgress } = await import("./scanner.js");
+  applyPendingProgress(db);
   return applied;
 }
 
@@ -304,7 +307,7 @@ async function handle(req, res) {
   }
   if (p === "/api/sync/progress" && req.method === "POST") {
     const b = await readBody(req);
-    const applied = upsertTmdbProgress(profileId, Array.isArray(b.rows) ? b.rows : []);
+    const applied = await upsertTmdbProgress(profileId, Array.isArray(b.rows) ? b.rows : []);
     return json(res, { ok: true, applied });
   }
 
@@ -452,20 +455,33 @@ async function handle(req, res) {
   if (p === "/api/scan/status") return json(res, { ...scanState, tmdb: tmdbEnabled() });
 
   // ── settings (server-side) ──
+  // SEC-002: the service-role key is NEVER echoed back — only `supabase_key_set`,
+  // mirroring the existing tmdb_key_set pattern.
   if (p === "/api/settings" && req.method === "GET") {
     return json(res, {
       server_name: getSetting("server_name") || "GHGFlix",
       tmdb_key_set: tmdbEnabled(),
       password_set: !!password(),
       supabase_configured: supabase.supabaseConfigured(),
+      supabase_url: settingOr("supabase_url", "SUPABASE_URL", ""),
+      supabase_key_set: !!settingOr("supabase_key", "SUPABASE_SERVICE_KEY", ""),
+      supabase_user_id: settingOr("supabase_user_id", "SUPABASE_USER_ID", ""),
       supabase_push: getSetting("supabase_push") !== "off",
       supabase_pull: getSetting("supabase_pull") !== "off",
+      supabase_status: supabase.supabaseStatus(),
     });
   }
   if (p === "/api/settings" && req.method === "POST") {
     const b = await readBody(req);
-    const allowed = ["server_name", "tmdb_key", "tmdb_lang", "password", "supabase_url", "supabase_key", "supabase_push", "supabase_pull"];
-    for (const k of allowed) if (k in b) setSetting(k, String(b[k]));
+    const allowed = ["server_name", "tmdb_key", "tmdb_lang", "password", "supabase_url", "supabase_key", "supabase_user_id", "supabase_push", "supabase_pull"];
+    for (const k of allowed) {
+      if (!(k in b)) continue;
+      // S-021: an empty value DELETES the row so a docker-compose env var
+      // (SUPABASE_SERVICE_KEY, …) becomes visible again instead of being
+      // masked by an empty-string setting.
+      if (String(b[k]) === "") db.prepare("DELETE FROM settings WHERE key = ?").run(k);
+      else setSetting(k, String(b[k]));
+    }
     return json(res, { ok: true });
   }
   if (p === "/api/supabase/import" && req.method === "POST") {

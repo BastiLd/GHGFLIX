@@ -180,6 +180,9 @@ async function startStream(at: number, forceTranscode = false) {
   if (!v || !info) return;
   const wasPaused = v.paused && v.currentTime > 0;
   S.transcoding = forceTranscode || !info.direct;
+  // AV-03/AV-12: assumes the transcode stream starts EXACTLY at `at`. That is
+  // guaranteed since the accurate-seek fix in server/src/stream.js (video is
+  // re-encoded on seek instead of keyframe-snapped stream-copy).
   S.offset = S.transcoding ? at : 0;
   v.src = streamUrl(at);
   v.playbackRate = S.speed;
