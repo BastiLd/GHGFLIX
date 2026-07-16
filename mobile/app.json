@@ -2,7 +2,7 @@
   "expo": {
     "name": "GHGFlix",
     "slug": "ghgflix",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "default",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0b0b0f",
@@ -11,6 +11,7 @@
     },
     "ios": {
       "supportsTablet": true,
+      "buildNumber": "1.1.0",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
@@ -19,7 +20,8 @@
     },
     "android": {
       "usesCleartextTraffic": true,
-      "package": "com.bastild.ghgflix"
+      "package": "com.bastild.ghgflix",
+      "versionCode": 2
     }
   }
 }

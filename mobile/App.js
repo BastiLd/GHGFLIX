@@ -62,7 +62,7 @@ async function ping(base, ms = 3500) {
 async function resolveBase(conn) {
   const candidates = conn.mode === "manual" && conn.manualUrl ? [conn.manualUrl] : conn.list.map((e) => e.url);
   for (const url of candidates.filter(Boolean)) {
-    const base = url.replace(/\/$/, "");
+    const base = normUrl(url);
     if (await ping(base)) return base;
   }
   return null;
@@ -75,6 +75,16 @@ const fmtTime = (s) => {
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`;
 };
 const se = (s, e) => `S${String(s).padStart(2, "0")}E${String(e).padStart(2, "0")}`;
+
+// MOB-034: Nutzer vergessen beim Eintippen oft das "http://" — automatisch
+// ergänzen und Slash am Ende entfernen, statt still an einer kaputten URL
+// zu scheitern.
+const normUrl = (u) => {
+  u = (u || "").trim();
+  if (!u) return "";
+  if (!/^https?:\/\//i.test(u)) u = "http://" + u;
+  return u.replace(/\/$/, "");
+};
 
 export default function App() {
   const [conn, setConn] = useState(null);
@@ -180,16 +190,37 @@ function ConnectScreen({ conn, onSave }) {
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState("");
 
+  // MOB-008: konkrete Fehlermeldung statt pauschalem "Nicht erreichbar" —
+  // Timeout, falscher Dienst und Netzwerkfehler sind unterschiedliche Probleme
+  // mit unterschiedlichen Lösungen.
   const test = async (url) => {
     setMsg("Teste …");
-    const j = await ping(url);
-    setMsg(j ? `✓ Verbunden: ${j.name}${j.auth ? " (Passwort nötig)" : ""}` : "✗ Nicht erreichbar");
+    url = normUrl(url);
+    if (!url) return setMsg("✗ Keine Adresse eingetragen");
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 4000);
+      const res = await fetch(`${url}/api/ping`, { signal: ctrl.signal });
+      clearTimeout(t);
+      const j = await res.json().catch(() => null);
+      if (j && j.app === "ghgflix-server") setMsg(`✓ Verbunden: ${j.name}${j.auth ? " (Passwort nötig)" : ""}`);
+      else setMsg(`✗ Adresse antwortet (HTTP ${res.status}), ist aber kein GHGFlix-Server — Port 8484 vergessen?`);
+    } catch (e) {
+      setMsg(
+        String(e && (e.name || e)).includes("Abort")
+          ? "✗ Zeitüberschreitung — IP/Port prüfen. Gleiches WLAN? Tailscale an?"
+          : `✗ Nicht erreichbar — ${String((e && e.message) || e)}`,
+      );
+    }
   };
 
   const save = async () => {
+    const cleanList = list.map((e) => ({ ...e, url: normUrl(e.url) })).filter((e) => e.url);
+    const cleanManual = normUrl(manualUrl);
     let token = conn.token;
     if (password) {
-      const url = (mode === "manual" ? manualUrl : list[0]?.url || "").replace(/\/$/, "");
+      const url = mode === "manual" ? cleanManual : cleanList[0]?.url || "";
+      if (!url) return setMsg("✗ Zuerst eine Server-Adresse eintragen");
       try {
         const r = await fetch(`${url}/api/login`, {
           method: "POST",
@@ -199,10 +230,10 @@ function ConnectScreen({ conn, onSave }) {
         if (r.token) token = r.token;
         else return setMsg("✗ Falsches Passwort");
       } catch {
-        return setMsg("✗ Server nicht erreichbar");
+        return setMsg("✗ Server nicht erreichbar — zuerst „Test“ bei der Adresse drücken");
       }
     }
-    onSave({ mode, manualUrl: manualUrl.trim(), list: list.filter((e) => e.url.trim()), token });
+    onSave({ mode, manualUrl: cleanManual, list: cleanList, token });
   };
 
   return (
@@ -308,15 +339,28 @@ function ProfileScreen({ api, onPick }) {
 function HomeScreen({ api, img, push, openSettings }) {
   const [lib, setLib] = useState(null);
   const [cont, setCont] = useState([]);
+  const [favs, setFavs] = useState([]); // MOB-041: "Meine Liste" (server-API /api/favorites)
   const [q, setQ] = useState("");
 
   const load = useCallback(() => {
     api("/api/library").then(setLib).catch(() => setLib({ shows: [], movies: [] }));
     api("/api/continue").then(setCont).catch(() => {});
+    api("/api/favorites").then((f) => setFavs(Array.isArray(f) ? f : [])).catch(() => {});
   }, [api]);
   useEffect(load, [load]);
 
   const filt = (arr) => (q ? arr.filter((x) => x.title.toLowerCase().includes(q.toLowerCase())) : arr);
+
+  const favItems = useMemo(() => {
+    if (!lib) return [];
+    return favs
+      .map((f) =>
+        f.mediaType === "show"
+          ? { ...(lib.shows.find((s) => s.id === f.refId) || {}), _t: "show" }
+          : { ...(lib.movies.find((m) => m.id === f.refId) || {}), _t: "movie" },
+      )
+      .filter((x) => x.id);
+  }, [favs, lib]);
 
   if (!lib)
     return (
@@ -369,6 +413,17 @@ function HomeScreen({ api, img, push, openSettings }) {
         </>
       )}
 
+      {favItems.length > 0 && !q && (
+        <>
+          <Text style={st.rowTitle}>Meine Liste</Text>
+          <PosterRow
+            items={favItems}
+            img={img}
+            onPress={(x) => push(x._t === "show" ? { name: "show", id: x.id } : { name: "movie", id: x.id })}
+          />
+        </>
+      )}
+
       <Text style={st.rowTitle}>Serien</Text>
       <PosterRow items={filt(lib.shows)} img={img} onPress={(x) => push({ name: "show", id: x.id })} />
       <Text style={st.rowTitle}>Filme</Text>
@@ -408,12 +463,27 @@ const seasonMemory = {};
 function ShowScreen({ api, img, push, pop, id, initialSeason }) {
   const [data, setData] = useState(null);
   const [prog, setProg] = useState([]);
+  const [fav, setFav] = useState(false); // MOB-041
   const [season, setSeason] = useState(initialSeason ?? seasonMemory[id] ?? null);
 
   useEffect(() => {
     api(`/api/shows/${id}`).then(setData).catch(() => {});
     api("/api/progress").then(setProg).catch(() => {});
+    api("/api/favorites")
+      .then((f) => setFav(!!(Array.isArray(f) && f.find((x) => x.mediaType === "show" && x.refId === +id))))
+      .catch(() => {});
   }, [api, id]);
+
+  const toggleFav = () =>
+    api("/api/favorites", { method: "POST", body: { mediaType: "show", refId: +id } })
+      .then((r) => setFav(!!r.favorite))
+      .catch(() => {});
+
+  // MOB-042: Folge gedrückt halten = gesehen/ungesehen umschalten
+  const toggleWatched = (e, watched) =>
+    api("/api/watched", { method: "POST", body: { mediaType: "episode", refId: e.id, watched } })
+      .then(() => api("/api/progress").then(setProg))
+      .catch(() => {});
 
   const progMap = useMemo(() => new Map(prog.filter((x) => x.mediaType === "episode").map((x) => [x.refId, x])), [prog]);
 
@@ -453,7 +523,12 @@ function ShowScreen({ api, img, push, pop, id, initialSeason }) {
         <Text style={{ color: C.text, fontSize: 18 }}>←</Text>
       </Pressable>
       <View style={{ paddingHorizontal: 16 }}>
-        <Text style={st.h1}>{show.title}</Text>
+        <View style={[st.rowBetween, { alignItems: "flex-start" }]}>
+          <Text style={[st.h1, { flex: 1, paddingRight: 10 }]}>{show.title}</Text>
+          <Pressable onPress={toggleFav} hitSlop={10} style={{ marginTop: 10 }}>
+            <Text style={{ fontSize: 22, color: fav ? C.red : C.muted }}>{fav ? "♥" : "♡"}</Text>
+          </Pressable>
+        </View>
         <Text style={{ color: C.muted, fontSize: 12, marginBottom: 10 }}>
           {show.year ?? ""} · {seasons.length} Staffeln · {flat.length} Folgen{show.rating ? ` · ★ ${show.rating.toFixed(1)}` : ""}
         </Text>
@@ -481,11 +556,18 @@ function ShowScreen({ api, img, push, pop, id, initialSeason }) {
       />
 
       <View style={{ paddingHorizontal: 16, gap: 10 }}>
+        <Text style={{ color: C.muted, fontSize: 11 }}>Tipp: Folge gedrückt halten = als gesehen/ungesehen markieren</Text>
         {(seasons.find((s) => s.season === cur)?.episodes ?? []).map((e) => {
           const p = progMap.get(e.id);
           const pct = p && p.duration > 0 ? Math.min(100, (p.position / p.duration) * 100) : 0;
           return (
-            <Pressable key={e.id} onPress={() => playEp(e)} style={st.epRow}>
+            <Pressable
+              key={e.id}
+              onPress={() => playEp(e)}
+              onLongPress={() => toggleWatched(e, !p?.watched)}
+              delayLongPress={450}
+              style={st.epRow}
+            >
               <Image source={{ uri: e.still ? img(e.still, "w300") : undefined }} style={st.epImg} />
               <View style={{ flex: 1 }}>
                 <Text style={{ color: C.text, fontWeight: "600", fontSize: 13 }}>
@@ -513,9 +595,25 @@ function ShowScreen({ api, img, push, pop, id, initialSeason }) {
 
 function MovieScreen({ api, img, push, pop, id }) {
   const [mv, setMv] = useState(null);
+  const [fav, setFav] = useState(false); // MOB-041
+  const [watched, setWatched] = useState(false); // MOB-042
   useEffect(() => {
     api(`/api/movies/${id}`).then(setMv).catch(() => {});
+    api("/api/favorites")
+      .then((f) => setFav(!!(Array.isArray(f) && f.find((x) => x.mediaType === "movie" && x.refId === +id))))
+      .catch(() => {});
+    api("/api/progress")
+      .then((ps) => setWatched(!!(Array.isArray(ps) && ps.find((p) => p.mediaType === "movie" && p.refId === +id)?.watched)))
+      .catch(() => {});
   }, [api, id]);
+  const toggleFav = () =>
+    api("/api/favorites", { method: "POST", body: { mediaType: "movie", refId: +id } })
+      .then((r) => setFav(!!r.favorite))
+      .catch(() => {});
+  const toggleWatched = () =>
+    api("/api/watched", { method: "POST", body: { mediaType: "movie", refId: +id, watched: !watched } })
+      .then(() => setWatched(!watched))
+      .catch(() => {});
   if (!mv)
     return (
       <View style={st.center}>
@@ -529,15 +627,26 @@ function MovieScreen({ api, img, push, pop, id }) {
         <Text style={{ color: C.text, fontSize: 18 }}>←</Text>
       </Pressable>
       <View style={{ padding: 16 }}>
-        <Text style={st.h1}>{mv.title}</Text>
+        <View style={[st.rowBetween, { alignItems: "flex-start" }]}>
+          <Text style={[st.h1, { flex: 1, paddingRight: 10 }]}>{mv.title}</Text>
+          <Pressable onPress={toggleFav} hitSlop={10} style={{ marginTop: 10 }}>
+            <Text style={{ fontSize: 22, color: fav ? C.red : C.muted }}>{fav ? "♥" : "♡"}</Text>
+          </Pressable>
+        </View>
         <Text style={{ color: C.muted, fontSize: 12, marginBottom: 12 }}>
           {mv.year ?? ""}
           {mv.rating ? ` · ★ ${mv.rating.toFixed(1)}` : ""}
           {mv.duration ? ` · ${Math.round(mv.duration / 60)} Min.` : ""}
+          {watched ? " · ✓ gesehen" : ""}
         </Text>
-        <Pressable style={[st.btn, { alignSelf: "flex-start" }]} onPress={() => push({ name: "play", type: "movie", id: mv.id, title: mv.title, subtitle: mv.year ? String(mv.year) : "" })}>
-          <Text style={st.btnText}>▶ Abspielen</Text>
-        </Pressable>
+        <View style={{ flexDirection: "row", gap: 10 }}>
+          <Pressable style={st.btn} onPress={() => push({ name: "play", type: "movie", id: mv.id, title: mv.title, subtitle: mv.year ? String(mv.year) : "" })}>
+            <Text style={st.btnText}>▶ Abspielen</Text>
+          </Pressable>
+          <Pressable style={[st.btn, { backgroundColor: C.surface }]} onPress={toggleWatched}>
+            <Text style={st.btnText}>{watched ? "✓ Gesehen" : "Als gesehen markieren"}</Text>
+          </Pressable>
+        </View>
         {!!mv.overview && <Text style={{ color: "#c9c9d2", fontSize: 13, lineHeight: 19, marginTop: 14 }}>{mv.overview}</Text>}
       </View>
     </ScrollView>
