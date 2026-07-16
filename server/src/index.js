@@ -25,6 +25,12 @@ const VERSION = "2.1.0";
 
 const db = openDb();
 
+// ARCH-16: stable per-installation ID (random UUID, created once). Clients use
+// it to key their sync cursors (S-017) so switching between addresses
+// (LAN/Domain/Tailscale) of the SAME server doesn't create duplicate cursors.
+if (!getSetting("server_id")) setSetting("server_id", randomBytes(16).toString("hex"));
+const SERVER_ID = getSetting("server_id");
+
 // ── auth ────────────────────────────────────────────────────────────────────
 // Optional: set GHGFLIX_PASSWORD (env or setting). Tokens survive restarts.
 const password = () => settingOr("password", "GHGFLIX_PASSWORD", "");
@@ -159,6 +165,7 @@ async function handle(req, res) {
       app: "ghgflix-server",
       version: VERSION,
       name: getSetting("server_name") || "GHGFlix",
+      id: SERVER_ID, // ARCH-16 (stable installation ID for cursor keys, S-017)
       auth: !!password(),
       time: Date.now(),
     });

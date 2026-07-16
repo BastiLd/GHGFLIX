@@ -37,28 +37,41 @@ export async function saveServerConfig(cfg: ServerConfig): Promise<void> {
   activeBase = null; // re-resolve on next tick
 }
 
-async function ping(base: string, ms = 3500): Promise<boolean> {
+async function ping(base: string, ms = 3500): Promise<{ ok: boolean; id?: string }> {
   try {
     const res = await fetch(`${base.replace(/\/$/, "")}/api/ping`, { signal: AbortSignal.timeout(ms) });
     const j = await res.json();
-    return j?.app === "ghgflix-server";
+    return j?.app === "ghgflix-server" ? { ok: true, id: typeof j.id === "string" ? j.id : undefined } : { ok: false };
   } catch {
-    return false;
+    return { ok: false };
   }
 }
 
 let activeBase: string | null = null;
+// S-017/ARCH-16: stable installation ID of the active server (from /api/ping).
+// Cursors are keyed by this ID, so Lokal/Domain/Tailscale addresses of the SAME
+// box share ONE cursor instead of pulling everything once per address.
+let activeServerId: string | null = null;
 
 /** Resolve which server address to use right now (auto → first reachable). */
 export async function resolveServer(cfg: ServerConfig): Promise<string | null> {
-  if (activeBase && (await ping(activeBase, 2500))) return activeBase;
+  if (activeBase) {
+    const p = await ping(activeBase, 2500);
+    if (p.ok) {
+      activeServerId = p.id ?? activeServerId;
+      return activeBase;
+    }
+  }
   activeBase = null;
+  activeServerId = null;
   const candidates =
     cfg.mode === "manual" && cfg.manualUrl ? [cfg.manualUrl] : cfg.endpoints.map((e) => e.url).filter(Boolean);
   for (const url of candidates) {
     const base = url.replace(/\/$/, "");
-    if (await ping(base)) {
+    const p = await ping(base);
+    if (p.ok) {
       activeBase = base;
+      activeServerId = p.id ?? null;
       return base;
     }
   }
@@ -120,8 +133,22 @@ async function tmdbMap() {
   return mapCache;
 }
 
+// Cursor key: prefer the stable server ID (S-017); fall back to the URL for
+// older servers that don't send an `id` yet (pre-2.2 API compatibility).
 const cursorKey = (base: string, profileId: string, dir: "pull" | "push") =>
-  `ghgflix.serverSync.${dir}.${profileId}.${base}`;
+  `ghgflix.serverSync.${dir}.${profileId}.${activeServerId ?? base}`;
+
+/** One-time migration: move an existing URL-keyed cursor to the ID key so no
+ *  full re-pull happens after the update (ARCH-14 in miniature). */
+function migrateCursor(base: string, profileId: string, dir: "pull" | "push"): void {
+  if (!activeServerId) return;
+  const idKey = `ghgflix.serverSync.${dir}.${profileId}.${activeServerId}`;
+  const urlKey = `ghgflix.serverSync.${dir}.${profileId}.${base}`;
+  if (localStorage.getItem(idKey) == null && localStorage.getItem(urlKey) != null) {
+    localStorage.setItem(idKey, localStorage.getItem(urlKey)!);
+    localStorage.removeItem(urlKey);
+  }
+}
 
 /** One full sync round: push local changes, pull remote ones (LWW). */
 export async function syncOnce(): Promise<{ pushed: number; pulled: number } | null> {
@@ -133,6 +160,8 @@ export async function syncOnce(): Promise<{ pushed: number; pulled: number } | n
   const { profileId, profileName } = useStore.getState();
   const spid = await serverProfileId(base, cfg, profileName || "Standard");
   const withProfile = (p: string) => `${p}${p.includes("?") ? "&" : "?"}profile=${spid}`;
+  migrateCursor(base, profileId, "push");
+  migrateCursor(base, profileId, "pull");
 
   // ── push ──
   const lastPush = parseInt(localStorage.getItem(cursorKey(base, profileId, "push")) ?? "0", 10);
