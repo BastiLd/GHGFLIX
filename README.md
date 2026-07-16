@@ -32,6 +32,45 @@ alles butterweich über den eingebauten mpv-Player ab.
 > Werkzeug-Probleme? **Einstellungen → Werkzeuge** zeigt den Live-Status von mpv/ffmpeg/ffprobe und
 > repariert verschobene Pfade mit einem Klick.
 
+## 📱 Handy & 📺 Fernseher
+
+Voraussetzung ist der **GHGFlix-Server** (Docker/ZimaOS, siehe
+[`server/README-ZimaOS.md`](server/README-ZimaOS.md)) — er ist die zentrale
+Quelle für Fortschritt, Profile und „Meine Liste“ auf allen Geräten
+(Architektur: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)).
+
+- **Handy:** native Expo-App unter [`mobile/`](mobile/README.md) — oder einfach
+  `http://<server-ip>:8484` im Handy-Browser öffnen und „Zum Startbildschirm
+  hinzufügen“ (PWA).
+- **Fernseher:** TV-Browser öffnen → `http://<server-ip>:8484/?tv=1` — der
+  TV-Modus (Fokus-Rahmen, Pfeiltasten-Navigation) startet automatisch.
+  Alternativ APK-Sideload für Android TV / Fire TV: [`tv/README.md`](tv/README.md).
+
+Umsetzungsstand des großen Ausbau-Plans: [`PLAN_STATUS.md`](PLAN_STATUS.md).
+
+## 🩺 Fehlerbehebung
+
+**Sync funktioniert nicht?** (Reihenfolge prüfen)
+
+1. Docker-Server erreichbar? `http://<server-ip>:8484/api/ping` im Browser → muss JSON zeigen.
+2. Desktop: *Einstellungen → GHGFlix-Server* aktiviert + Adresse getestet + bei Passwort: angemeldet?
+3. Supabase-Cloud-Sync: in der **Server**-Weboberfläche unter *Konto & Sync →
+   „Server-Sync mit Supabase“* muss der **Service-Role-Key** stehen (der
+   Anon-Key aus dem Abschnitt darunter reicht NICHT — häufigster Fehler!).
+   Die Statuszeile dort zeigt „Verbunden“ oder den konkreten Fehler.
+4. Zwei Geräte zeigen Unterschiedliches? Bis zu 30–60 s warten (Sync-Intervall)
+   oder App-Fenster einmal in den Fokus holen (löst sofortigen Abgleich aus).
+
+**Ton und Bild nicht synchron?**
+
+1. Tritt es nur nach dem **Spulen/Fortsetzen** bei Browser-/Handy-Wiedergabe auf?
+   → Das war der Keyframe-Bug, seit Server v2.1 behoben. Server aktualisieren;
+   `TRANSCODE_ACCURATE_SEEK` muss „on“ sein (Standard).
+2. Desktop (mpv): *Einstellungen → Leistung* — Laufruhe-Modus testweise aus,
+   Hardware-Dekodierung auf „Automatisch (kompatibel)“ stellen.
+3. Driftet es langsam über Minuten? Quelldatei prüfen (variable Framerate) —
+   Server-Logs zeigen jetzt ffmpeg-Timestamp-Warnungen zur betroffenen Datei.
+
 ## 🛠️ Selbst bauen (Entwickler)
 
 Voraussetzungen: [Node.js LTS](https://nodejs.org), [Rust (MSVC)](https://rustup.rs), VS 2022 C++ Build Tools, mpv, ffmpeg.
