@@ -1,6 +1,11 @@
 # PLAN_STATUS — Umsetzungsstand des GHGFlix-Masterplans
 
-Referenz: [`GHGFlix_Masterplan.md`](GHGFlix_Masterplan.md) · Stand: 16.07.2026 · Branch: `fix/supabase-sync`
+Referenz: [`GHGFlix_Masterplan.md`](GHGFlix_Masterplan.md) · Stand: 16.07.2026 ·
+Branches: `fix/supabase-sync` → `feat/arch-consolidation` → `feat/mobile-v2` →
+`feat/tv-mode` → `feat/server-hardening` → `chore/docs-qa` (aufeinander aufbauend —
+`chore/docs-qa` enthält ALLES; zum Veröffentlichen in `main` bzw.
+`feature/zimaos-docker-server` mergen, damit der Docker-CI-Build anspringt).
+Gesamtbericht: [`BERICHT.md`](BERICHT.md)
 
 ## Entscheidungen (Abschnitt 3 des Plans — empfohlene Defaults verwendet, robert kann jederzeit ändern)
 
@@ -49,10 +54,67 @@ Referenz: [`GHGFlix_Masterplan.md`](GHGFlix_Masterplan.md) · Stand: 16.07.2026 
 | AV-20/AV-12 | ✅ | Mobile-/Web-Player-Offset-Annahme dokumentiert & durch Server-Fix korrekt |
 | AV-04/AV-24/AV-30 | ⏳ | **Manuelle Testmatrix (Seek-Tests mit Referenzclip) durch robert nötig** |
 
-## Offene Phasen
+## Phase 2 — Sync-Architektur ✅ (`feat/arch-consolidation`)
 
-- Phase 2 (ARCH-01…18): nicht begonnen
-- Phase 3 (MOB-001…045): nicht begonnen
-- Phase 4 (TV-001…055): nicht begonnen — Empfehlung: mit TV-044…048 (Browser-TV-Modus) starten
-- Phase 5 (SRV/SEC/PERF): nicht begonnen (außer SEC-002, SRV-014)
-- Phase 6 (QA/OPS/DOC): nicht begonnen (außer OPS-015 = diese Datei, DOC-002)
+| ID | Status | Notiz |
+|---|---|---|
+| ARCH-01/02/12 | ✅ | Zielbild entschieden + dokumentiert: Server = Source of Truth, Supabase = optionales Relay, Mobile/TV nur gegen Server ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) |
+| ARCH-05 | ✅ | Sync-Schlüssel-Konvention zentral dokumentiert (4 Code-Stellen benannt) |
+| ARCH-06 | ✅ | Mermaid-Architekturdiagramm |
+| ARCH-16 | ✅ | Stabile `server_id` (UUID) + Ausgabe in `/api/ping` |
+| S-017 | ✅ | Sync-Cursor an Server-ID gebunden, inkl. Migration alter URL-Cursor |
+| ARCH-03/04/17, S-009 | 📋 | Bewusst Backlog — Begründung in ARCHITECTURE.md |
+
+## Phase 3 — Mobile-App ✅ (`feat/mobile-v2`)
+
+| ID | Status | Notiz |
+|---|---|---|
+| MOB-008 | ✅ | Konkrete Verbindungsfehler (Timeout / falscher Dienst / Netzfehler) |
+| MOB-020 | ✅ | `versionCode` 2 / `buildNumber`, App-Version 1.1.0 |
+| MOB-033 | ✅ | Cleartext-Traffic begründet dokumentiert (README) |
+| MOB-034 | ✅ | URL-Autokorrektur (`http://` wird ergänzt) |
+| MOB-041 | ✅ | „Meine Liste“-Reihe + Herz-Toggle (Show & Film) |
+| MOB-042 | ✅ | Gesehen-Status: Long-Press auf Folgen, Button bei Filmen |
+| MOB-023 (APK) | 📋 | Anleitung fertig (mobile/README) — Build braucht kostenloses expo.dev-Konto |
+| MOB-003/004/005/006/011/012/013/014/018 u. a. | 📋 | Backlog (größere Features: Untertitel, Chromecast, QR-Pairing, …) |
+
+## Phase 4 — TV ✅ Teil A (`feat/tv-mode`)
+
+| ID | Status | Notiz |
+|---|---|---|
+| TV-044/045/046 | ✅ | Browser-TV-Modus: Auto-Erkennung, Pfeiltasten-2D-Navigation, Fokus-Ringe, 10-Foot-CSS, Overscan-Safe-Area (`src/lib/tvMode.ts`) |
+| TV-047 | ✅ | Direktlink `?tv=1` aktiviert den Modus dauerhaft |
+| TV-048 | ⏳ | Kompatibilitätsliste: bitte auf deinen echten TVs testen und in tv/README ergänzen |
+| TV-004/OPS-014 | ✅ | Sideload-Anleitung USB-Stick / Downloader / adb ([tv/README.md](tv/README.md)) |
+| TV-001…TV-043, TV-049…TV-055 | 📋 | **Native Android-TV-App = größtes offenes Stück** (eigenes `tv/`-Expo-Projekt mit D-Pad-Fokusführung; braucht echte Geräte zum Testen) |
+
+## Phase 5 — Server-Härtung ✅ Kern (`feat/server-hardening`)
+
+| ID | Status | Notiz |
+|---|---|---|
+| SEC-003 | ✅ | Token-Ablauf 180 Tage (altes Format migriert) |
+| SEC-004 | ✅ | `/api/logout_all` + „Alle Geräte abmelden“-Button (Web) |
+| SEC-008/SRV-007 | ✅ | Login-Sperre: 5 Min nach 8 Fehlversuchen pro IP |
+| SRV-005 | ✅ | Graceful Shutdown (SIGTERM beendet ffmpeg sauber) |
+| SRV-017 | ✅ | `TRANSCODE_MAX` (Standard 3) mit klarer 503-Meldung |
+| SRV-034 | ✅ | Security-Header (nosniff, X-Frame-Options, Referrer-Policy) |
+| S-030 | ✅ | Tägliche pending_progress-Aufräumroutine (180 Tage) |
+| SEC-001 | ⚠️ | **BITTE PRÜFEN: `GHGFLIX_PASSWORD` setzen!** |
+| SRV-001/024/025, SEC-010/012, PERF-* | 📋 | Backlog (Refactoring, API-Versionierung, Pagination, CSP, Lasttests) |
+
+## Phase 6 — Doku/QA/CI ✅ Kern (`chore/docs-qa`)
+
+| ID | Status | Notiz |
+|---|---|---|
+| DOC-001/007/008/011 | ✅ | README: Handy/TV, Troubleshooting Sync + Ton/Bild, PLAN_STATUS-Link |
+| DOC-002/S-035 | ✅ | Server-README Sync-Abschnitt (bereits Phase 1) |
+| DOC-004 | ✅ | tv/README.md |
+| DOC-005 | ✅ | Architektur-Diagramm |
+| QA-005 | ✅ | [docs/TEST_CHECKLIST.md](docs/TEST_CHECKLIST.md) |
+| QA-003/OPS-001 | ✅ | CI-Workflow `Checks` (tsc, Web-Build, Server-Syntax) |
+| QA-001/002 etc. | ⏳ | **Manuelle Tests durch robert** — Checkliste benutzen |
+| OPS-004/005/SRV-016 | ✅ | War schon da: Multi-Arch-Docker-Build (amd64+arm64) in CI |
+
+## Versionen
+
+Desktop-App **0.9.9** · Server **2.2.0** · Mobile **1.1.0** (versionCode 2)
