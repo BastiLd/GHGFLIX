@@ -134,6 +134,35 @@ function isAllowedImage(file) {
 }
 
 /**
+ * Wo liegt die Handy-/TV-App (APK)? Zuerst im DATEN-Ordner (überlebt jedes
+ * Server-Update, dort legt der Nutzer sie über ZimaOS → Files ab), sonst die
+ * im Image mitgelieferte. Gibt null zurück, wenn keine vorhanden ist.
+ */
+function apkPath() {
+  const candidates = [
+    join(process.env.DATA_DIR || "/data", "apk", "GHGFlix.apk"),
+    join(process.env.DATA_DIR || "/data", "apk", "ghgflix.apk"),
+    join(SERVER_ROOT, "apk", "GHGFlix.apk"),
+  ];
+  for (const f of candidates) {
+    try {
+      if (statSync(f).isFile()) return f;
+    } catch {
+      /* nicht da */
+    }
+  }
+  // beliebige .apk im Daten-Ordner akzeptieren (falls anders benannt)
+  try {
+    const dir = join(process.env.DATA_DIR || "/data", "apk");
+    const hit = readdirSync(dir).find((f) => f.toLowerCase().endsWith(".apk"));
+    if (hit) return join(dir, hit);
+  } catch {
+    /* Ordner fehlt */
+  }
+  return null;
+}
+
+/**
  * Bilder für die EINFACHE API (Handy-App, TV-Browser): lokale Dateien
  * (poster.jpg/fanart.jpg neben dem Film) bzw. aus dem Video erzeugte
  * Standbilder haben Vorrang vor TMDb — sonst blieben dort Kacheln leer,
@@ -248,6 +277,42 @@ async function handle(req, res) {
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Referrer-Policy", "no-referrer");
   if (req.method === "OPTIONS") return res.writeHead(204).end();
+
+  // ── App-Verteilung: Installationsseite + APK-Download ──────────────────────
+  // Bewusst OHNE Anmeldung erreichbar: am Fernseher tippt man die Adresse in
+  // die "Downloader"-App ein, die kein Login-Formular anzeigen kann.
+  if (p === "/app" || p === "/install") {
+    const file = join(LEGACY_DIR, "install.html");
+    if (!existsSync(file)) return res.writeHead(404).end();
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
+    return createReadStream(file).pipe(res);
+  }
+  if (p === "/apk" || p === "/GHGFlix.apk" || p === "/ghgflix.apk") {
+    const file = apkPath();
+    if (!file) {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      return res.end("Noch keine App-Datei hinterlegt. Anleitung: " + "/app");
+    }
+    const st = statSync(file);
+    res.writeHead(200, {
+      "Content-Type": "application/vnd.android.package-archive",
+      "Content-Length": st.size,
+      "Content-Disposition": 'attachment; filename="GHGFlix.apk"',
+      "Cache-Control": "no-cache",
+    });
+    return createReadStream(file).pipe(res);
+  }
+  if (p === "/api/apk/status") {
+    const file = apkPath();
+    if (!file) return json(res, { available: false });
+    const st = statSync(file);
+    return json(res, {
+      available: true,
+      sizeMb: (st.size / 1024 / 1024).toFixed(1),
+      modified: new Date(st.mtimeMs).toLocaleDateString("de-DE"),
+      url: "/apk",
+    });
+  }
 
   if (!p.startsWith("/api/")) return serveStatic(res, p);
 

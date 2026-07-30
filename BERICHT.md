@@ -269,24 +269,59 @@ Dort muss `"version":"2.3.0"` stehen. Steht dort noch `2.2.0`, hat das Update
 nicht gegriffen (dann in ZimaOS/Portainer das Image neu ziehen und den Container
 neu erstellen — deine Daten in `/DATA/AppData/ghgflix/data` bleiben erhalten).
 
-### Schritt 4 — Supabase
+### Schritt 4 — Supabase: **Du musst dort NICHTS machen** ✅
 
-Die neuen Tabellen habe ich in deinem Projekt bereits angelegt, da musst du
-nichts tun. **Falls du später ein neues Projekt aufsetzt**, muss
-`supabase/schema.sql` einmal im SQL-Editor laufen. Vollständige Anleitung:
+Zur Sicherheit ausdrücklich: **Nein, du musst nichts kopieren und nirgends
+einfügen.** Ich habe die neuen Tabellen (`watch_favorites`, `sync_devices`)
+und die Indizes bereits direkt in deinem Projekt **GHG FLIX** angelegt und
+danach mit Testzeilen geprüft.
+
+Auch dein **vorhandenes Konto bleibt**: Du meldest dich einfach wie gewohnt mit
+`bastian.klaus2010@gmail.com` an. Dein bestehendes Profil („tests") wird
+automatisch mit deinem lokalen Profil verknüpft — kein neues Konto, kein neues
+Profil nötig.
+
+Die Datei `supabase/schema.sql` brauchst du nur, wenn du **irgendwann ein ganz
+neues Supabase-Projekt** aufsetzt. Vollständige Anleitung für diesen Fall:
 [`docs/SUPABASE.md`](docs/SUPABASE.md).
 
-### Schritt 5 — Windows-App neu bauen
+### Schritt 5 — Windows-App komplett neu bauen
+
+Dafür gibt es jetzt **ein Skript**, das alles erledigt: laufende GHGFlix-Fenster
+beenden (sonst ist die .exe gesperrt), alte Bau-Ergebnisse löschen, Pakete
+installieren, alle Prüfungen laufen lassen, bauen und am Ende den Ordner mit
+dem Installer öffnen.
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix"
+powershell -ExecutionPolicy Bypass -File scripts\rebuild-windows.ps1
+```
+
+Ohne Prüfungen (schneller):
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix"
+powershell -ExecutionPolicy Bypass -File scripts\rebuild-windows.ps1 -Schnell
+```
+
+Dann den Installer aus dem Ordner `nsis` ausführen. **Verknüpfungen im
+Startmenü und auf dem Desktop werden automatisch mit aktualisiert** — der
+Installer erkennt die alte Version (gleiche Kennung `com.ghgflix.app`) und
+ersetzt sie sauber.
+
+**Deine Daten bleiben erhalten.** Bibliothek, Einstellungen, Gesehen-Stand und
+Favoriten liegen nicht im Programmordner, sondern hier:
+
+```powershell
+explorer "$env:APPDATA\com.ghgflix.app"
+```
+
+Von Hand geht es natürlich auch:
 
 ```powershell
 cd "$env:USERPROFILE\Documents\GHGFlix"
 npm install
 npm run tauri build
-```
-
-Der fertige Installer liegt danach hier:
-
-```powershell
 explorer "$env:USERPROFILE\Documents\GHGFlix\src-tauri\target\release\bundle"
 ```
 
@@ -297,8 +332,7 @@ cd "$env:USERPROFILE\Documents\GHGFlix"
 npm run tauri dev
 ```
 
-Falls beim Bauen etwas klemmt, zuerst die Prüfungen laufen lassen — sie sagen
-dir genau, wo es hakt:
+Einzelne Prüfungen, falls beim Bauen etwas klemmt:
 
 ```powershell
 cd "$env:USERPROFILE\Documents\GHGFlix"
@@ -328,6 +362,73 @@ cd "$env:USERPROFILE\Documents\GHGFlix\mobile"
 npm install
 npx eas-cli build --platform android --profile preview
 ```
+
+---
+
+## Teil 5b: App auf Handy und Fernseher (neu dazugekommen)
+
+### Die Antwort auf „ist das Docker-Ding für Websites und Apps da?"
+
+**Ja — aber es war ein anderes**, als ich zuerst vermutet hatte: das
+**VetNow Studio** (`vetnow-app`, läuft auf Port 3000). Das ist der Container,
+der Web-Apps baut und Expo/Metro für Expo Go startet. GHGFlix war dort **nicht**
+eingetragen — jetzt schon.
+
+Neu im Studio, Gruppe **🎬 GHGFlix**:
+
+| Karte | Was sie macht |
+|---|---|
+| **Handy-/TV-App (Expo Go)** | „Start" drücken → QR-Code scannen → App läuft. Klont das GHGFlix-Repo beim Start **automatisch** und zieht bei jedem Start die neueste Fassung. Port 8044. |
+| **Server-Oberfläche öffnen** | Abkürzung zur laufenden GHGFlix-Bibliothek auf Port 8484 |
+
+Der Knopf **„APK bauen"** auf der Expo-Karte funktioniert jetzt auch — dafür
+habe ich `mobile/eas.json` angelegt (die Datei hat gefehlt, deshalb kam vorher
+eine Fehlermeldung).
+
+> **Beim allerersten Start:** Expo Go unterstützt immer nur die neueste
+> SDK-Version. GHGFlix liegt noch auf SDK 53, VetNow/Avocado auf 54. Falls Expo
+> Go meckert: auf der Karte einmal **„SDK 54 setzen"** drücken — das ist Expos
+> eigener Aktualisierungsweg und erledigt alle Versionen automatisch.
+
+Zusätzlich habe ich im Studio einen Fehler behoben: Apps aus **fremden Repos**
+wurden beim „Start" nicht geklont (man musste vorher manuell „Klonen" drücken,
+und ein Repo-Update kam nie an). Jetzt passiert beides automatisch.
+
+### Der GHGFlix-Server verteilt die App jetzt selbst
+
+Neu im Server (Version 2.3.0):
+
+| Adresse | Was da kommt |
+|---|---|
+| `http://<server-ip>:8484/app` | **Installationsseite** — zeigt deine Adresse groß an, erklärt Handy, Fernseher und PWA, und sagt, ob schon eine App-Datei da ist |
+| `http://<server-ip>:8484/apk` | die App-Datei direkt zum Herunterladen |
+
+Beide sind **ohne Anmeldung** erreichbar — das muss so sein, weil die
+„Downloader"-App am Fernseher kein Login-Formular anzeigen kann.
+
+Die APK legst du **einmal** hier ab, dann überlebt sie jedes Server-Update:
+
+```
+/DATA/AppData/ghgflix/data/apk/GHGFlix.apk
+```
+
+### Wie kommt die App auf deinen PeaQ Smart Google TV?
+
+**Kurz: ohne USB-Stick, über die App „Downloader".** Google TV ist Android TV,
+also geht Sideload problemlos.
+
+1. Am TV: **Einstellungen → System → Info** → 7-mal auf **Build** drücken
+2. Play Store → **Downloader** (blaues Symbol, von AFTVnews) installieren
+3. **Einstellungen → Apps → Sicherheit & Einschränkungen → Unbekannte Quellen**
+   → **Downloader** einschalten
+4. Downloader öffnen → `http://192.168.68.10:8484/apk` eintippen → **Go**
+5. **Installieren** → **Öffnen** → Server-Adresse `192.168.68.10:8484` eintragen
+
+USB-Stick geht auch (FAT32 + Datei-Manager wie X-plore), ist aber umständlicher.
+Und ganz ohne Installation: Browser am TV → `http://<server-ip>:8484/?tv=1`.
+
+**Die vollständige Anleitung mit allen Stolpersteinen steht in
+[`tv/README.md`](tv/README.md).**
 
 ---
 

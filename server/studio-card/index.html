@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GHGFlix öffnen</title>
+<style>
+  :root { --bg:#0b0b0f; --surface:#15151c; --line:#2a2a36; --text:#f2f2f5; --muted:#9a9aa8; --red:#e50914; --red2:#ff2b36; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--text); display:flex;
+         align-items:center; justify-content:center; padding:24px;
+         font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:18px;
+          padding:32px; max-width:520px; width:100%; text-align:center; }
+  .logo { font-size:32px; font-weight:900; letter-spacing:-.5px; }
+  .logo span { color:var(--red); }
+  .zig { height:8px; width:120px; margin:10px auto 20px;
+         background:repeating-linear-gradient(135deg,var(--red) 0 8px,transparent 8px 16px); }
+  a.btn { display:block; background:var(--red); color:#fff; text-decoration:none; padding:14px 20px;
+          border-radius:12px; font-weight:800; font-size:16px; margin:10px 0; }
+  a.btn:hover { background:var(--red2); }
+  a.btn.ghost { background:transparent; border:1px solid var(--line); color:var(--text); font-weight:600; }
+  p { color:var(--muted); font-size:14px; line-height:1.6; }
+  code { background:#1e1e27; padding:2px 6px; border-radius:5px; color:var(--text); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">GHG<span>Flix</span></div>
+    <div class="zig"></div>
+    <p>
+      GHGFlix läuft als <b>eigener Container</b> (Standard-Port 8484) — nicht im Studio.
+      Diese Karte ist nur die Abkürzung dorthin.
+    </p>
+    <a class="btn" id="open" href="#">Bibliothek öffnen</a>
+    <a class="btn ghost" id="install" href="#">App aufs Handy / auf den Fernseher</a>
+    <a class="btn ghost" id="tv" href="#">Im Fernseh-Modus öffnen</a>
+    <p style="margin-top:18px">
+      Läuft GHGFlix auf einem anderen Port? Dann einfach <code id="base">…</code> im Browser
+      von Hand anpassen.
+    </p>
+  </div>
+<script>
+  // Der Studio-Server und GHGFlix laufen auf demselben Rechner — nur ein anderer Port.
+  var base = "http://" + location.hostname + ":8484";
+  document.getElementById("open").href = base + "/";
+  document.getElementById("install").href = base + "/app";
+  document.getElementById("tv").href = base + "/?tv=1";
+  document.getElementById("base").textContent = base;
+</script>
+</body>
+</html>

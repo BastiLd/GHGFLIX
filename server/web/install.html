@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GHGFlix installieren</title>
+<link rel="icon" href="/icon.svg" />
+<style>
+  :root {
+    --bg: #0b0b0f; --surface: #15151c; --surface2: #1e1e27; --line: #2a2a36;
+    --text: #f2f2f5; --muted: #9a9aa8; --red: #e50914; --red2: #ff2b36;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6; padding: 24px 16px 64px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 28px; }
+  .logo { font-size: 30px; font-weight: 900; letter-spacing: -0.5px; }
+  .logo span { color: var(--red); }
+  .zig { height: 8px; width: 120px; margin: 8px auto 0;
+    background: repeating-linear-gradient(135deg, var(--red) 0 8px, transparent 8px 16px); }
+  h2 { font-size: 19px; margin: 0 0 10px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 16px;
+    padding: 20px; margin-bottom: 18px;
+  }
+  .addr {
+    background: var(--surface2); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px; font-family: ui-monospace, Consolas, monospace; font-size: 19px;
+    word-break: break-all; text-align: center; color: var(--red2); font-weight: 700;
+  }
+  .btn {
+    display: inline-block; background: var(--red); color: #fff; text-decoration: none;
+    padding: 12px 20px; border-radius: 10px; font-weight: 700; border: 0; cursor: pointer;
+    font-size: 15px; margin-top: 12px;
+  }
+  .btn:hover { background: var(--red2); }
+  .btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  ol, ul { padding-left: 22px; margin: 10px 0; }
+  li { margin-bottom: 7px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .warn {
+    border-left: 3px solid var(--red); background: rgba(229,9,20,.09);
+    padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 12px 0; font-size: 14px;
+  }
+  .ok { color: #34d399; }
+  .bad { color: var(--red2); }
+  code { background: var(--surface2); padding: 2px 6px; border-radius: 5px; font-size: 14px; }
+  .step { font-weight: 700; color: var(--red2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">GHG<span>Flix</span></div>
+    <div class="zig"></div>
+    <p class="muted">App auf Handy und Fernseher bringen</p>
+  </header>
+
+  <div class="card">
+    <h2>Deine Server-Adresse</h2>
+    <div class="addr" id="addr">…</div>
+    <button class="btn ghost" onclick="copyAddr()">Adresse kopieren</button>
+    <p class="muted">Diese Adresse brauchst du gleich – am Fernseher tippst du sie ein.</p>
+  </div>
+
+  <div class="card">
+    <h2>📱 Handy – einfachster Weg (30 Sekunden)</h2>
+    <ol>
+      <li>Diese Seite im Handy-Browser öffnen: <code id="baseurl">…</code></li>
+      <li>Browser-Menü (⋮ bzw. Teilen-Symbol) öffnen</li>
+      <li><b>„Zum Startbildschirm hinzufügen“</b> antippen</li>
+    </ol>
+    <p class="muted">
+      Danach liegt GHGFlix wie eine echte App auf dem Startbildschirm – ohne Installation,
+      ohne Store. Und das Beste: Sie <b>aktualisiert sich automatisch mit dem Server</b>.
+      Du musst also nie wieder etwas nachinstallieren.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>📺 Fernseher (Google TV / Android TV / Fire TV)</h2>
+    <p id="apkstate" class="muted">Wird geprüft …</p>
+
+    <div id="apkyes" style="display:none">
+      <p><span class="step">Weg A – mit der App „Downloader“ (kein USB-Stick nötig):</span></p>
+      <ol>
+        <li>Am Fernseher im Play Store nach <b>Downloader</b> suchen (blaues Symbol, von AFTVnews) und installieren</li>
+        <li>Fernseher-Einstellungen → <b>System → Info</b> → 7-mal auf <b>Build/Android-Version</b> klicken
+            → Entwickleroptionen sind jetzt frei</li>
+        <li>Einstellungen → <b>Apps → Sicherheit &amp; Einschränkungen → Unbekannte Quellen</b> →
+            <b>Downloader</b> einschalten</li>
+        <li>Downloader öffnen und diese Adresse eintippen:
+            <div class="addr" style="font-size:17px;margin-top:8px" id="apkurl">…</div></li>
+        <li><b>Go</b> drücken → die Datei lädt → <b>Installieren</b> → <b>Öffnen</b></li>
+        <li>In der App die Server-Adresse von oben eintragen → fertig</li>
+      </ol>
+
+      <p><span class="step">Weg B – mit USB-Stick:</span></p>
+      <ol>
+        <li><a class="btn" href="/apk">APK jetzt herunterladen</a> (am PC)</li>
+        <li>Datei auf einen <b>FAT32</b>-USB-Stick kopieren</li>
+        <li>Unbekannte Quellen erlauben (siehe Weg A, Schritt 2 + 3 – dort statt Downloader
+            deinen Datei-Manager freigeben)</li>
+        <li>Am Fernseher einen Datei-Manager installieren (z.&nbsp;B. <b>X-plore</b> oder
+            <b>File Commander</b> aus dem Play Store)</li>
+        <li>Stick einstecken → Datei-Manager → <code>GHGFlix.apk</code> → <b>Installieren</b></li>
+      </ol>
+    </div>
+
+    <div id="apkno" style="display:none">
+      <div class="warn">
+        Es liegt noch keine App-Datei (APK) auf dem Server. Ohne die geht der
+        Weg über „Downloader“ oder USB-Stick nicht.
+      </div>
+      <p><b>So kommt die APK auf den Server</b> (einmalig, am PC):</p>
+      <ol>
+        <li>Kostenloses Konto auf <b>expo.dev</b> anlegen</li>
+        <li>In PowerShell:
+          <div class="addr" style="font-size:14px;text-align:left;color:var(--text)">cd "$env:USERPROFILE\Documents\GHGFlix\mobile"<br>npm install<br>npx eas-cli build --platform android --profile preview</div>
+        </li>
+        <li>Am Ende bekommst du einen Download-Link → die <code>.apk</code> herunterladen</li>
+        <li>Die Datei in den Server-Ordner legen und in <code>GHGFlix.apk</code> umbenennen:
+          <div class="addr" style="font-size:14px;color:var(--text)">/DATA/AppData/ghgflix/data/apk/GHGFlix.apk</div>
+          (in ZimaOS über <b>Files</b> – der Ordner <code>apk</code> muss ggf. angelegt werden)
+        </li>
+        <li>Diese Seite neu laden – die Anleitung oben erscheint dann automatisch</li>
+      </ol>
+      <p class="muted">
+        Der Ordner liegt im Daten-Verzeichnis und überlebt jedes Server-Update. Du legst die
+        Datei also genau einmal ab.
+      </p>
+    </div>
+
+    <p><span class="step">Weg C – ganz ohne Installation:</span></p>
+    <p>
+      Am Fernseher den Browser öffnen und <code id="tvurl">…</code> eingeben.
+      Der TV-Modus (große Schrift, Pfeiltasten-Steuerung, roter Auswahlrahmen)
+      startet automatisch.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>💻 Windows-App</h2>
+    <p>
+      Die Windows-App wird nicht vom Server verteilt – sie wird auf deinem PC gebaut
+      (<code>npm run tauri build</code>) und installiert sich dann selbst.
+      Details stehen in <code>BERICHT.md</code> im GHGFlix-Ordner.
+    </p>
+  </div>
+
+  <p class="muted" style="text-align:center">
+    <a href="/" style="color:var(--red2)">← Zurück zur Bibliothek</a>
+  </p>
+</div>
+
+<script>
+  const base = location.origin;
+  document.getElementById("addr").textContent = base;
+  document.getElementById("baseurl").textContent = base + "/app";
+  document.getElementById("apkurl").textContent = base + "/apk";
+  document.getElementById("tvurl").textContent = base + "/?tv=1";
+
+  function copyAddr() {
+    navigator.clipboard?.writeText(base).then(
+      () => alert("Adresse kopiert: " + base),
+      () => alert("Bitte von Hand abschreiben: " + base),
+    );
+  }
+
+  // Liegt eine APK auf dem Server?
+  fetch("/api/apk/status")
+    .then((r) => r.json())
+    .then((s) => {
+      const state = document.getElementById("apkstate");
+      if (s.available) {
+        state.innerHTML =
+          '<span class="ok">●</span> App-Datei vorhanden' +
+          (s.sizeMb ? " (" + s.sizeMb + " MB" + (s.modified ? ", vom " + s.modified : "") + ")" : "");
+        document.getElementById("apkyes").style.display = "";
+      } else {
+        state.innerHTML = '<span class="bad">●</span> Keine App-Datei auf dem Server';
+        document.getElementById("apkno").style.display = "";
+      }
+    })
+    .catch(() => {
+      document.getElementById("apkstate").textContent = "Status konnte nicht geladen werden.";
+      document.getElementById("apkno").style.display = "";
+    });
+</script>
+</body>
+</html>
