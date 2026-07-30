@@ -44,6 +44,24 @@ services:
       # Seek-genaues Transcoding (behebt Ton/Bild-Versatz nach Spulen).
       # Nur auf sehr schwachen Boards auf "off" stellen:
       TRANSCODE_ACCURATE_SEEK: "on"
+      # ── Vorschaubilder auf der Zeitleiste ────────────────────────────────
+      # Beim Abspielen wird im Hintergrund EIN Bilderstreifen für den ganzen
+      # Film erzeugt (wie bei Plex). Danach erscheint die Vorschau beim
+      # Drüberfahren sofort — auch am Handy und am Fernseher.
+      # "off" schaltet das ab (dann Einzelbilder auf Anfrage):
+      TRICKPLAY: "on"
+      # Abstand zwischen zwei Vorschaubildern in Sekunden (kleiner = feiner,
+      # aber größere Datei und längere Erzeugung):
+      TRICKPLAY_INTERVAL: "10"
+      # Breite eines Vorschaubildes in Pixeln:
+      TRICKPLAY_WIDTH: "240"
+      # Obergrenze für den Einzelbild-Zwischenspeicher in Megabyte:
+      THUMB_CACHE_MB: "512"
+      # Gleichzeitige ffmpeg-Aufrufe für Vorschaubilder (schwache NAS: 1):
+      THUMB_CONCURRENCY: "2"
+      # Dateien unter dieser Größe (MB) gelten als Reste/Werbeschnipsel und
+      # werden nicht in die Bibliothek aufgenommen:
+      MIN_VIDEO_MB: "1"
       # Optional: Supabase-Sync (BRAUCHT den Service-Role-Key, nicht den
       # anon-Key). Am einfachsten über die Web-Einstellungen setzen
       # (Einstellungen → Konto & Sync → "Server-Sync mit Supabase"):

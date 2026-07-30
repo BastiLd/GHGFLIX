@@ -137,7 +137,7 @@ export default function App() {
     [base, conn],
   );
 
-  const img = (path, size = "w342") =>
+  const img = (path, size = "w500") =>
     path ? `${base}/api/img?path=${encodeURIComponent(path)}&size=${size}&profile=1${conn?.token ? `&token=${conn.token}` : ""}` : null;
 
   const updateConn = async (patch) => {
@@ -401,7 +401,7 @@ function HomeScreen({ api, img, push, openSettings }) {
                 }
                 style={{ width: 190 }}
               >
-                <Image source={{ uri: x.still ? img(x.still, "w300") : img(x.mBackdrop || x.sBackdrop, "w300") }} style={st.wideImg} />
+                <Image source={{ uri: x.still ? img(x.still, "w500") : img(x.mBackdrop || x.sBackdrop, "w500") }} style={st.wideImg} />
                 <View style={st.progressBg}>
                   <View style={[st.progressFg, { width: `${Math.round((x.position / x.duration) * 100)}%` }]} />
                 </View>
@@ -518,7 +518,7 @@ function ShowScreen({ api, img, push, pop, id, initialSeason }) {
 
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }}>
-      {show.backdrop && <Image source={{ uri: img(show.backdrop, "w780") }} style={{ width: "100%", height: 190, opacity: 0.55 }} />}
+      {show.backdrop && <Image source={{ uri: img(show.backdrop, "w1280") }} style={{ width: "100%", height: 190, opacity: 0.55 }} />}
       <Pressable onPress={pop} style={st.backBtn}>
         <Text style={{ color: C.text, fontSize: 18 }}>←</Text>
       </Pressable>
@@ -568,7 +568,7 @@ function ShowScreen({ api, img, push, pop, id, initialSeason }) {
               delayLongPress={450}
               style={st.epRow}
             >
-              <Image source={{ uri: e.still ? img(e.still, "w300") : undefined }} style={st.epImg} />
+              <Image source={{ uri: e.still ? img(e.still, "w500") : undefined }} style={st.epImg} />
               <View style={{ flex: 1 }}>
                 <Text style={{ color: C.text, fontWeight: "600", fontSize: 13 }}>
                   {e.episode}. {e.title ?? `Folge ${e.episode}`}
@@ -622,7 +622,7 @@ function MovieScreen({ api, img, push, pop, id }) {
     );
   return (
     <ScrollView style={{ flex: 1 }}>
-      {mv.backdrop && <Image source={{ uri: img(mv.backdrop, "w780") }} style={{ width: "100%", height: 190, opacity: 0.55 }} />}
+      {mv.backdrop && <Image source={{ uri: img(mv.backdrop, "w1280") }} style={{ width: "100%", height: 190, opacity: 0.55 }} />}
       <Pressable onPress={pop} style={st.backBtn}>
         <Text style={{ color: C.text, fontSize: 18 }}>←</Text>
       </Pressable>

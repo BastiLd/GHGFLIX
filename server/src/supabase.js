@@ -102,6 +102,61 @@ export async function pullFromSupabase() {
   return { pulled };
 }
 
+/**
+ * Favoriten ("Meine Liste") in beide Richtungen abgleichen. Die Tabelle
+ * watch_favorites gehört zum Schema v2 — fehlt sie noch (altes Schema), wird
+ * der Schritt still übersprungen statt den ganzen Abgleich scheitern zu lassen.
+ */
+async function syncFavorites(db) {
+  const profiles = db.prepare("SELECT id, supabase_id FROM profiles WHERE supabase_id IS NOT NULL").all();
+  if (!profiles.length) return;
+  for (const p of profiles) {
+    // hoch: lokale Favoriten in TMDb-Koordinaten
+    const rows = db
+      .prepare(
+        `SELECT f.media_type, f.added_at, COALESCE(m.tmdb_id, s.tmdb_id) tmdb_id
+         FROM favorites f
+         LEFT JOIN movies m ON f.media_type='movie' AND m.id=f.ref_id
+         LEFT JOIN shows  s ON f.media_type='show'  AND s.id=f.ref_id
+         WHERE f.profile_id=? AND COALESCE(m.tmdb_id, s.tmdb_id) IS NOT NULL`,
+      )
+      .all(p.id)
+      .map((r) => ({
+        profile_id: p.supabase_id,
+        media_type: r.media_type,
+        tmdb_id: r.tmdb_id,
+        added_at: r.added_at ?? 0,
+        removed: false,
+        updated_at: r.added_at ?? 0,
+      }));
+    try {
+      if (rows.length) {
+        await rest("watch_favorites?on_conflict=profile_id,media_type,tmdb_id", { method: "POST", body: rows });
+      }
+      // runter: was in der Cloud steht, aber hier fehlt
+      const remote = await rest("watch_favorites", {
+        params: { select: "*", profile_id: `eq.${p.supabase_id}`, removed: "eq.false" },
+      });
+      for (const r of remote ?? []) {
+        const refId =
+          r.media_type === "movie"
+            ? db.prepare("SELECT id FROM movies WHERE tmdb_id=?").get(r.tmdb_id)?.id
+            : db.prepare("SELECT id FROM shows WHERE tmdb_id=?").get(r.tmdb_id)?.id;
+        if (!refId) continue;
+        db.prepare(
+          "INSERT OR IGNORE INTO favorites (profile_id, media_type, ref_id, added_at) VALUES (?,?,?,?)",
+        ).run(p.id, r.media_type, refId, r.added_at || Date.now());
+      }
+    } catch (e) {
+      if (/watch_favorites/.test(String(e)) && /(does not exist|PGRST205|404)/.test(String(e))) {
+        console.warn("[supabase] Tabelle watch_favorites fehlt — bitte supabase/schema.sql erneut ausführen");
+        return;
+      }
+      throw e;
+    }
+  }
+}
+
 /** Push local progress changed since the last push (only linked profiles). */
 export async function pushToSupabase() {
   if (!pushEnabled()) return { pushed: 0 };
@@ -130,8 +185,15 @@ export async function pushToSupabase() {
     });
   }
   if (payload.length > 0) {
-    await rest("watch_progress?on_conflict=profile_id,media_type,tmdb_id,season,episode", { method: "POST", body: payload });
+    // in Häppchen, damit sehr große Bibliotheken nicht an Größenlimits scheitern
+    for (let i = 0; i < payload.length; i += 500) {
+      await rest("watch_progress?on_conflict=profile_id,media_type,tmdb_id,season,episode", {
+        method: "POST",
+        body: payload.slice(i, i + 500),
+      });
+    }
   }
+  await syncFavorites(db);
   db.prepare("INSERT INTO settings (key, value) VALUES ('supabase_last_push', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(Date.now()));
   status.lastSyncAt = Date.now();
   status.lastPushed = payload.length;

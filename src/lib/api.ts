@@ -150,8 +150,25 @@ export const setArtwork = (
 
 export const getSeasonArt = (showId: number) => invoke<[number, string][]>("get_season_art", { showId });
 
-export const mediaThumbnail = (path: string, timeSec: number) =>
-  invoke<string>("media_thumbnail", { path, timeSec });
+/**
+ * Einzelnes Vorschaubild für die Zeitleiste.
+ * `width` kommt aus der Einstellung "Vorschaubild-Größe" — vorher wurde immer
+ * mit 320 px erzeugt, große Kacheln waren dadurch unscharf hochskaliert.
+ */
+export const mediaThumbnail = (path: string, timeSec: number, width?: number) =>
+  invoke<string>("media_thumbnail", { path, timeSec, ...(width ? { width } : {}) });
+
+/** Vorgeneriertes Sprite-Blatt (Trickplay) — nur der Server liefert das. */
+export interface TrickplayInfo {
+  url: string;
+  interval: number;
+  tileWidth: number;
+  tileHeight: number;
+  cols: number;
+  rows: number;
+  count: number;
+}
+export const trickplayInfo = (path: string) => invoke<TrickplayInfo | null>("trickplay_info", { path });
 
 export const probeQualities = (force = false) => invoke<void>("probe_qualities", { force });
 

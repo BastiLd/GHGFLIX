@@ -4,7 +4,7 @@ import ReactDOM from "react-dom/client";
 import { HashRouter } from "react-router-dom";
 import App from "./App";
 import "./index.css";
-import { initSupabase, startSupabaseSync } from "./lib/supabase";
+import { autoStartSync } from "./lib/supabase";
 import { initTheme } from "./lib/themes";
 import { initTvMode } from "./lib/tvMode";
 import { useStore } from "./lib/store";
@@ -18,13 +18,13 @@ const queryClient = new QueryClient({
   },
 });
 
-// S-006/S-014: resume the cloud-profile sync loop on app start (it also runs an
-// immediate pull-on-focus tick), so progress from other devices arrives after a
-// restart without re-picking the profile.
-void initSupabase().then((client) => {
-  const { profileId } = useStore.getState();
-  if (client && profileId && profileId !== "local") startSupabaseSync(profileId);
-});
+// Cloud-Abgleich beim App-Start hochfahren — jetzt für JEDES Profil, auch für
+// „Lokal“. Vorher lief er nur für ausdrücklich gewählte Cloud-Profile, weshalb
+// beim normalen Benutzen NIE etwas in Supabase ankam.
+{
+  const { profileId, profileName } = useStore.getState();
+  void autoStartSync(profileId || "local", profileName || "Lokal");
+}
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

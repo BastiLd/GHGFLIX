@@ -1,8 +1,35 @@
+// ============================================================================
+// Supabase-Cloud-Sync
+//
+// WARUM DIESE DATEI NEU IST — die zwei Gründe, warum vorher NICHTS ankam:
+//
+//  1. Der Abgleich lief nur, wenn auf dem Profilbildschirm ausdrücklich ein
+//     CLOUD-Profil ausgewählt wurde. Mit dem Standardprofil „Lokal“ stieg
+//     syncProgress() sofort wieder aus — es wurde also nie etwas hochgeladen.
+//
+//  2. Selbst nach dem Umschalten auf ein Cloud-Profil war die Tabelle leer:
+//     der gesamte bisherige Fortschritt liegt in der lokalen Datenbank unter
+//     der Profil-ID "local". Gepusht wurde aber nur, was unter der NEUEN
+//     Cloud-Profil-ID stand — und das war schlicht nichts.
+//
+// Neu:
+//   * Das lokale Profil wird EINMAL fest mit einem Cloud-Profil verknüpft
+//     (Verknüpfung liegt in den Einstellungen, überlebt Neustarts).
+//   * Danach wird IMMER synchronisiert, egal welches Profil gewählt ist.
+//   * Vorhandener lokaler Fortschritt wird auf Nachfrage einmalig hochgeladen.
+//   * „Meine Liste“ (Favoriten) wird mitsynchronisiert.
+//   * Fehler sind sichtbar (Statuszeile in den Einstellungen) statt nur im Log.
+// ============================================================================
 import { createClient, type SupabaseClient, type Session } from "@supabase/supabase-js";
-import { getSetting, listProgress, applyRemoteProgress, type RemoteProgressRow } from "./api";
+import {
+  getSetting, setSetting, listProgress, applyRemoteProgress, listFavorites, listMovies, listShows,
+  toggleFavorite, type RemoteProgressRow,
+} from "./api";
 
 let client: SupabaseClient | null = null;
 let initialized = false;
+
+// ── Verbindung ──────────────────────────────────────────────────────────────
 
 export async function initSupabase(): Promise<SupabaseClient | null> {
   if (initialized) return client;
@@ -20,6 +47,7 @@ export async function initSupabase(): Promise<SupabaseClient | null> {
 export async function reinitSupabase(): Promise<SupabaseClient | null> {
   initialized = false;
   client = null;
+  stopSupabaseSync();
   return initSupabase();
 }
 
@@ -31,7 +59,12 @@ export function isConfigured(): boolean {
   return !!client;
 }
 
-// ===== auth =====
+function requireClient(): SupabaseClient {
+  if (!client) throw new Error("Supabase ist nicht konfiguriert (in Einstellungen eintragen).");
+  return client;
+}
+
+// ── Anmeldung ───────────────────────────────────────────────────────────────
 
 export async function signIn(email: string, password: string) {
   const c = requireClient();
@@ -67,7 +100,7 @@ export function onAuthChange(cb: (session: Session | null) => void): () => void 
   return () => data.subscription.unsubscribe();
 }
 
-// ===== profiles =====
+// ── Profile ─────────────────────────────────────────────────────────────────
 
 export interface SupaProfile {
   id: string;
@@ -108,19 +141,99 @@ export async function deleteProfile(id: string): Promise<void> {
   if (error) throw error;
 }
 
-// ===== progress sync =====
+// ── Verknüpfung lokales Profil ↔ Cloud-Profil ───────────────────────────────
+// Genau hier lag der zweite Fehler: ohne diese Brücke wurde der Fortschritt des
+// Profils "local" nie einem Cloud-Profil zugeordnet.
+
+const LINK_SETTING = "supabase_profile_links";
+
+type LinkMap = Record<string, string>;
+
+const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+
+async function loadLinks(): Promise<LinkMap> {
+  try {
+    const raw = await getSetting(LINK_SETTING);
+    return raw ? (JSON.parse(raw) as LinkMap) : {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveLink(localId: string, cloudId: string): Promise<void> {
+  const links = await loadLinks();
+  links[localId] = cloudId;
+  await setSetting(LINK_SETTING, JSON.stringify(links));
+}
+
+/** Verknüpftes Cloud-Profil (ohne etwas anzulegen). */
+export async function linkedCloudProfile(localId: string): Promise<string | null> {
+  if (isUuid(localId)) return localId; // das lokale Profil IST bereits ein Cloud-Profil
+  return (await loadLinks())[localId] ?? null;
+}
+
+/**
+ * Cloud-Profil für das aktuelle lokale Profil sicherstellen: verknüpftes
+ * nehmen, sonst eines mit passendem Namen, sonst das erste, sonst neu anlegen.
+ */
+export async function ensureCloudProfile(localId: string, localName = "Lokal"): Promise<string | null> {
+  const c = getClient();
+  if (!c) return null;
+  if (isUuid(localId)) return localId;
+
+  const existing = await linkedCloudProfile(localId);
+  if (existing) {
+    // Prüfen, ob es das Profil in der Cloud noch gibt (könnte gelöscht sein)
+    const { data } = await c.from("profiles").select("id").eq("id", existing).maybeSingle();
+    if (data) return existing;
+  }
+
+  const session = await getSession();
+  if (!session) return null;
+
+  const profiles = await listProfiles();
+  const byName = profiles.find((p) => p.name.toLowerCase() === localName.toLowerCase());
+  const target = byName ?? profiles[0] ?? (await createProfile(localName || "Standard"));
+  await saveLink(localId, target.id);
+  return target.id;
+}
+
+// ── Fortschritt ─────────────────────────────────────────────────────────────
 
 const ON_CONFLICT = "profile_id,media_type,tmdb_id,season,episode";
 
-/** Pull remote progress (apply newest to local), then push the merged local set back. */
-export async function syncProgress(profileId: string): Promise<void> {
-  const c = getClient();
-  if (!c || profileId === "local") return;
+interface RemoteRow {
+  media_type: "movie" | "episode";
+  tmdb_id: number;
+  season: number;
+  episode: number;
+  position_sec: number;
+  duration_sec: number;
+  watched: boolean;
+  updated_at: number;
+}
 
-  // 1) pull
-  const { data, error } = await c.from("watch_progress").select("*").eq("profile_id", profileId);
-  if (!error && data) {
-    const rows: RemoteProgressRow[] = data.map((r: any) => ({
+/**
+ * Ein vollständiger Abgleich für EIN lokales Profil:
+ * erst holen (Neueres gewinnt), dann alles Lokale hochschieben.
+ */
+export async function syncProgress(
+  localProfileId: string,
+  localName = "Lokal",
+): Promise<{ pushed: number; pulled: number }> {
+  const c = getClient();
+  if (!c) return { pushed: 0, pulled: 0 };
+  const session = await getSession();
+  if (!session) return { pushed: 0, pulled: 0 };
+  const cloudId = await ensureCloudProfile(localProfileId, localName);
+  if (!cloudId) return { pushed: 0, pulled: 0 };
+
+  // 1) holen
+  let pulled = 0;
+  const { data, error } = await c.from("watch_progress").select("*").eq("profile_id", cloudId);
+  if (error) throw error;
+  if (data?.length) {
+    const rows: RemoteProgressRow[] = (data as RemoteRow[]).map((r) => ({
       mediaType: r.media_type,
       tmdbId: r.tmdb_id,
       season: r.season === -1 ? null : r.season,
@@ -130,15 +243,17 @@ export async function syncProgress(profileId: string): Promise<void> {
       watched: r.watched,
       updatedAt: r.updated_at,
     }));
-    if (rows.length) await applyRemoteProgress(profileId, rows);
+    await applyRemoteProgress(localProfileId, rows);
+    pulled = rows.length;
   }
 
-  // 2) push merged local set
-  const local = await listProgress(profileId);
+  // 2) schieben — der komplette lokale Stand, nicht nur Änderungen. Bei diesen
+  //    Datenmengen unkritisch und robust gegen jeden Zeigerfehler.
+  const local = await listProgress(localProfileId);
   const toPush = local
     .filter((p) => p.tmdbId != null)
     .map((p) => ({
-      profile_id: profileId,
+      profile_id: cloudId,
       media_type: p.mediaType,
       tmdb_id: p.tmdbId,
       season: p.season ?? -1,
@@ -149,54 +264,184 @@ export async function syncProgress(profileId: string): Promise<void> {
       updated_at: p.updatedAt,
     }));
   if (toPush.length) {
-    await c.from("watch_progress").upsert(toPush, { onConflict: ON_CONFLICT });
+    // in Häppchen, damit sehr große Bibliotheken nicht an Größenlimits scheitern
+    for (let i = 0; i < toPush.length; i += 500) {
+      const { error: upErr } = await c
+        .from("watch_progress")
+        .upsert(toPush.slice(i, i + 500), { onConflict: ON_CONFLICT });
+      if (upErr) throw upErr;
+    }
   }
+
+  await syncFavorites(localProfileId, cloudId).catch((e) => console.warn("[supabase] Favoriten:", e));
+  await touchDevice().catch(() => {});
+  return { pushed: toPush.length, pulled };
 }
 
-// ===== background sync loop (S-006/S-007) =====
-// syncProgress() used to run exactly ONCE when a cloud profile was picked on
-// the profile screen — progress made on other devices never showed up while
-// the app stayed open. This keeps the active cloud profile synced every 60 s
-// and immediately when the window regains focus.
-
-let syncTimer: number | null = null;
-let syncProfile: string | null = null;
-let syncErrorCount = 0;
-let lastSyncErrorAt = 0;
-
-/** Consecutive failures + timestamp — lets the UI tell a broken sync from a
- *  one-off network hiccup (S-008). */
-export function supabaseSyncHealth(): { errors: number; lastErrorAt: number } {
-  return { errors: syncErrorCount, lastErrorAt: lastSyncErrorAt };
+/** Wie viele lokale Einträge könnten hochgeladen werden? (für die Nachfrage) */
+export async function countLocalProgress(localProfileId: string): Promise<number> {
+  const local = await listProgress(localProfileId).catch(() => []);
+  return local.filter((p) => p.tmdbId != null).length;
 }
 
-async function syncTick(): Promise<void> {
-  if (!syncProfile || syncProfile === "local" || !client) return;
-  try {
-    await syncProgress(syncProfile);
-    syncErrorCount = 0;
-  } catch (e) {
-    syncErrorCount++;
-    lastSyncErrorAt = Date.now();
-    // log, don't toast — a background loop must not spam the UI (S-008)
-    if (syncErrorCount === 1 || syncErrorCount % 10 === 0) {
-      console.warn(`[supabase-sync] Fehler (${syncErrorCount}× in Folge):`, e);
+// ── „Meine Liste“ ───────────────────────────────────────────────────────────
+
+/** Favoriten in TMDb-Koordinaten abgleichen (beide Richtungen, additiv). */
+export async function syncFavorites(localProfileId: string, cloudId: string): Promise<void> {
+  const c = getClient();
+  if (!c) return;
+  const [favs, movies, shows] = await Promise.all([listFavorites(localProfileId), listMovies(), listShows()]);
+  const movieById = new Map(movies.map((m) => [m.id, m]));
+  const showById = new Map(shows.map((s) => [s.id, s]));
+
+  // hoch
+  const rows = favs
+    .map((f) => {
+      const tmdbId = f.mediaType === "movie" ? movieById.get(f.refId)?.tmdbId : showById.get(f.refId)?.tmdbId;
+      return tmdbId
+        ? {
+            profile_id: cloudId,
+            media_type: f.mediaType,
+            tmdb_id: tmdbId,
+            added_at: f.addedAt,
+            removed: false,
+            updated_at: f.addedAt,
+          }
+        : null;
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null);
+  if (rows.length) {
+    await c.from("watch_favorites").upsert(rows, { onConflict: "profile_id,media_type,tmdb_id" });
+  }
+
+  // runter — was in der Cloud steht, aber lokal fehlt
+  const { data } = await c.from("watch_favorites").select("*").eq("profile_id", cloudId).eq("removed", false);
+  if (!data?.length) return;
+  const haveMovie = new Set(rows.filter((r) => r.media_type === "movie").map((r) => r.tmdb_id));
+  const haveShow = new Set(rows.filter((r) => r.media_type === "show").map((r) => r.tmdb_id));
+  for (const r of data as { media_type: "movie" | "show"; tmdb_id: number }[]) {
+    if (r.media_type === "movie") {
+      if (haveMovie.has(r.tmdb_id)) continue;
+      const m = movies.find((x) => x.tmdbId === r.tmdb_id);
+      if (m) await toggleFavorite(localProfileId, "movie", m.id).catch(() => {});
+    } else {
+      if (haveShow.has(r.tmdb_id)) continue;
+      const s = shows.find((x) => x.tmdbId === r.tmdb_id);
+      if (s) await toggleFavorite(localProfileId, "show", s.id).catch(() => {});
     }
   }
 }
 
-function onVisibility(): void {
-  if (document.visibilityState === "visible") void syncTick(); // S-007: pull-on-focus
+// ── Geräteliste (welches Gerät hat wann abgeglichen) ────────────────────────
+
+async function touchDevice(): Promise<void> {
+  const c = getClient();
+  if (!c) return;
+  const user = (await c.auth.getUser()).data.user;
+  if (!user) return;
+  let key = localStorage.getItem("ghgflix.deviceKey");
+  if (!key) {
+    key = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    localStorage.setItem("ghgflix.deviceKey", key);
+  }
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  await c.from("sync_devices").upsert(
+    {
+      user_id: user.id,
+      device_key: key,
+      name: ua.includes("Windows") ? "Windows-PC" : ua.includes("Android") ? "Android-Gerät" : "GHGFlix-Gerät",
+      platform: (typeof navigator !== "undefined" && navigator.platform) || "unbekannt",
+      last_seen: Date.now(),
+    },
+    { onConflict: "user_id,device_key" },
+  );
 }
 
-/** Start (or retarget) the background sync for a cloud profile. Safe to re-call. */
-export function startSupabaseSync(profileId: string): void {
-  syncProfile = profileId;
-  if (profileId === "local") return stopSupabaseSync();
-  if (syncTimer != null) return;
+// ── Hintergrund-Abgleich ────────────────────────────────────────────────────
+
+let syncTimer: number | null = null;
+let syncProfile: string | null = null;
+let syncName = "Lokal";
+let syncErrorCount = 0;
+let lastSyncErrorAt = 0;
+let lastSyncAt = 0;
+let lastError: string | null = null;
+let lastPushed = 0;
+let lastPulled = 0;
+let running = false;
+
+export interface SyncHealth {
+  active: boolean;
+  errors: number;
+  lastErrorAt: number;
+  lastError: string | null;
+  lastSyncAt: number;
+  lastPushed: number;
+  lastPulled: number;
+}
+
+/** Klartext-Zustand für die Einstellungen-Seite. */
+export function supabaseSyncHealth(): SyncHealth {
+  return {
+    active: syncTimer != null,
+    errors: syncErrorCount,
+    lastErrorAt: lastSyncErrorAt,
+    lastError,
+    lastSyncAt,
+    lastPushed,
+    lastPulled,
+  };
+}
+
+async function syncTick(): Promise<void> {
+  if (!syncProfile || !client || running) return;
+  running = true;
+  try {
+    const r = await syncProgress(syncProfile, syncName);
+    lastPushed = r.pushed;
+    lastPulled = r.pulled;
+    lastSyncAt = Date.now();
+    lastError = null;
+    syncErrorCount = 0;
+  } catch (e) {
+    syncErrorCount++;
+    lastSyncErrorAt = Date.now();
+    lastError = e instanceof Error ? e.message : String(e);
+    // protokollieren statt Toast — eine Hintergrundschleife darf die
+    // Oberfläche nicht zuspammen
+    if (syncErrorCount === 1 || syncErrorCount % 10 === 0) {
+      console.warn(`[supabase-sync] Fehler (${syncErrorCount}× in Folge):`, e);
+    }
+  } finally {
+    running = false;
+  }
+}
+
+/** Sofort einmal abgleichen (Knopf „Jetzt synchronisieren“). */
+export async function syncNow(): Promise<SyncHealth> {
+  await syncTick();
+  return supabaseSyncHealth();
+}
+
+function onVisibility(): void {
+  if (document.visibilityState === "visible") void syncTick();
+}
+
+/**
+ * Hintergrund-Abgleich starten. Anders als früher läuft er für JEDES Profil —
+ * auch für „Lokal“ —, sobald eine Anmeldung besteht.
+ */
+export function startSupabaseSync(localProfileId: string, localName = "Lokal"): void {
+  syncProfile = localProfileId;
+  syncName = localName;
+  if (syncTimer != null) {
+    void syncTick();
+    return;
+  }
   syncTimer = window.setInterval(() => void syncTick(), 60_000);
   document.addEventListener("visibilitychange", onVisibility);
-  void syncTick(); // immediate first sync (S-014: fresh start picks up remote progress)
+  window.addEventListener("online", onVisibility);
+  void syncTick();
 }
 
 export function stopSupabaseSync(): void {
@@ -204,9 +449,18 @@ export function stopSupabaseSync(): void {
   syncTimer = null;
   syncProfile = null;
   document.removeEventListener("visibilitychange", onVisibility);
+  window.removeEventListener("online", onVisibility);
 }
 
-function requireClient(): SupabaseClient {
-  if (!client) throw new Error("Supabase ist nicht konfiguriert (in Einstellungen eintragen).");
-  return client;
+/**
+ * Beim Start aufrufen: besteht eine Anmeldung, fährt der Abgleich hoch.
+ * Gibt zurück, ob er läuft — die Oberfläche kann das anzeigen.
+ */
+export async function autoStartSync(localProfileId: string, localName = "Lokal"): Promise<boolean> {
+  const c = await initSupabase();
+  if (!c) return false;
+  const session = await getSession();
+  if (!session) return false;
+  startSupabaseSync(localProfileId, localName);
+  return true;
 }

@@ -153,11 +153,18 @@ export function serveTranscode(req, res, row, { start = 0, quality = "original",
     args.push("-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p");
     if (q) args.push("-vf", `scale=-2:min(${q.height}\\,ih)`, "-maxrate", q.maxrate, "-bufsize", q.maxrate);
   }
-  args.push("-c:a", "aac", "-ac", "2", "-b:a", "160k");
-  // A/V-Sync: lock the audio to the video clock. aresample=async stretches or
-  // pads tiny gaps sample-accurately instead of letting the offset accumulate
-  // (the "audio runs ahead / lags behind after a few minutes" bug).
-  args.push("-af", "aresample=async=1:min_hard_comp=0.100:first_pts=0");
+  // Ton NICHT unnötig neu kodieren: ist die Spur schon AAC (und wird nicht
+  // gespult, wo exakte Startpunkte zählen), einfach durchkopieren. Das spart
+  // auf schwachen NAS-CPUs spürbar Last — vorher lief IMMER eine AAC-Kodierung.
+  const copyAudio = row.acodec === "aac" && copyVideo;
+  if (copyAudio) {
+    args.push("-c:a", "copy");
+  } else {
+    args.push("-c:a", "aac", "-ac", "2", "-b:a", "160k");
+    // A/V-Sync: Ton an die Video-Uhr binden. aresample=async dehnt/füllt
+    // winzige Lücken sample-genau, statt den Versatz aufsummieren zu lassen.
+    args.push("-af", "aresample=async=1:min_hard_comp=0.100:first_pts=0");
+  }
   args.push("-avoid_negative_ts", "make_zero", "-max_muxing_queue_size", "2048");
   args.push("-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1");
 

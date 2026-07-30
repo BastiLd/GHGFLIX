@@ -23,7 +23,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { command, destroy, getProperty, init, observeProperties, setProperty, srtToVtt, webTogglePip } from "../lib/mpv";
-import { episodeVersions, getEpisode, getMovie, getProgress, getSetting, listShowEpisodes, mediaThumbnail, movieVersions, revealInExplorer, setEpisodeIntro, setMediaDims, setProgress } from "../lib/api";
+import { episodeVersions, getEpisode, getMovie, getProgress, getSetting, listShowEpisodes, mediaThumbnail, movieVersions, revealInExplorer, setEpisodeIntro, setMediaDims, setProgress, trickplayInfo, type TrickplayInfo } from "../lib/api";
 import { openCtx } from "../lib/contextmenu";
 import { formatTime, quality as computeQuality, seasonEpisodeLabel } from "../lib/format";
 import { comboFromEvent } from "../lib/keys";
@@ -177,6 +177,11 @@ export default function Player() {
   const [versionPath, setVersionPath] = useState<string | null>(null);
   const [thumbInterval, setThumbInterval] = useState(5);
   const [thumbWidth, setThumbWidth] = useState(176);
+  // echtes Seitenverhältnis des laufenden Videos (für die Vorschau-Kachel)
+  const [videoAspect, setVideoAspect] = useState(16 / 9);
+  // vorgeneriertes Sprite-Blatt (nur Server/Browser) — macht die Vorschau
+  // beim Drüberfahren sofort sichtbar, ohne pro Position nachzuladen
+  const [sprite, setSprite] = useState<TrickplayInfo | null>(null);
 
   const posRef = useRef(0);
   const durRef = useRef(0);
@@ -339,9 +344,19 @@ export default function Player() {
       const { type: t, id: i } = itemRef.current;
       if (w > 0 && h > 0 && pathRef.current) {
         void setMediaDims(t, i, pathRef.current, w, h).catch(() => {});
+        // echtes Seitenverhältnis → Vorschau-Kachel passt sich an (4:3, 21:9 …)
+        setVideoAspect(w / h);
       }
     } catch {
       /* ignore */
+    }
+    // Sprite-Blatt für die Zeitleisten-Vorschau holen. Das kann nur der Server
+    // (Browser/Handy/TV); die Windows-App bleibt beim Einzelbild-Verfahren,
+    // das lokal ohnehin sofort aus dem Plattencache kommt.
+    if (IS_WEB && pathRef.current) {
+      trickplayInfo(pathRef.current)
+        .then((info) => setSprite(info ?? null))
+        .catch(() => setSprite(null));
     }
   }, [applyAudioPreference, applySubtitlePreference]);
 
@@ -569,8 +584,20 @@ export default function Player() {
         autoQualityRef.current = (await getSetting("auto_quality")) || "highest";
         const ti = parseInt((await getSetting("thumb_interval")) || "5", 10) || 5;
         setThumbInterval(Math.min(60, Math.max(1, ti)));
+        // "Vorschaubild-Größe": entweder eine der drei Stufen ODER eine freie
+        // Pixelbreite. Der Wert steuert jetzt AUCH die erzeugte Bildgröße,
+        // nicht mehr nur die Kachel — große Vorschauen sind damit wirklich scharf.
         const ts = (await getSetting("thumb_size")) || "md";
-        setThumbWidth(ts === "sm" ? 140 : ts === "lg" ? 260 : 176);
+        const custom = parseInt(ts, 10);
+        setThumbWidth(
+          Number.isFinite(custom) && custom >= 100
+            ? Math.min(480, custom)
+            : ts === "sm"
+              ? 140
+              : ts === "lg"
+                ? 260
+                : 176,
+        );
         const mpvPath = (await getSetting("mpv_path"))?.trim();
         if (playback().mpvInited) {
           // mpv is already running (mini-player handoff) — reuse it seamlessly
@@ -902,14 +929,20 @@ export default function Player() {
     setPosition(v);
     command("seek", [v, "absolute"]).catch(() => {});
   };
-  const getThumb = useCallback(async (t: number) => {
-    if (!pathRef.current || !prefsRef.current.thumbEnabled) return null;
-    try {
-      return await mediaThumbnail(pathRef.current, t);
-    } catch {
-      return null;
-    }
-  }, []);
+  const getThumb = useCallback(
+    async (t: number) => {
+      if (!pathRef.current || !prefsRef.current.thumbEnabled) return null;
+      try {
+        // Bild in der Größe erzeugen, in der es auch angezeigt wird
+        // (× Geräte-Pixelverhältnis, damit es auf 4K/TV scharf bleibt)
+        const dpr = Math.min(3, window.devicePixelRatio || 1);
+        return await mediaThumbnail(pathRef.current, t, Math.round(thumbWidth * dpr));
+      } catch {
+        return null;
+      }
+    },
+    [thumbWidth],
+  );
   const selectAudio = (v: number | "no") => {
     setAid(v);
     setProperty("aid", v as any).catch(() => {});
@@ -1320,6 +1353,8 @@ export default function Player() {
               getThumb={getThumb}
               interval={thumbInterval}
               previewWidth={thumbWidth}
+              aspect={videoAspect}
+              sprite={prefsRef.current.thumbEnabled ? sprite : null}
               markers={prefsRef.current.chapterMarkers ? chapters.map((c) => c.time) : undefined}
               intro={prefsRef.current.introMarker ? resolveIntroWindow() : null}
             />

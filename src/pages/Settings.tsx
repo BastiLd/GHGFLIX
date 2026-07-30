@@ -47,7 +47,9 @@ import {
 import { comboFromEvent, comboHasKey, comboLabel } from "../lib/keys";
 import { useStore } from "../lib/store";
 import { applyAccent, loadAccent, useUiPrefs, type UiPrefs } from "../lib/uiPrefs";
-import { getSession, reinitSupabase, signOut } from "../lib/supabase";
+import {
+  getSession, reinitSupabase, signOut, startSupabaseSync, supabaseSyncHealth, syncNow, type SyncHealth,
+} from "../lib/supabase";
 import { setTvModePref, tvModePref } from "../lib/tvMode";
 import { loadServerConfig, loginServer, saveServerConfig, startServerSync, syncOnce, testServer, type ServerConfig } from "../lib/serverSync";
 import { Button, InfoButton, Modal, Spinner, TextInput } from "../components/ui";
@@ -988,15 +990,24 @@ export default function Settings() {
               <label className="flex-1 min-w-40">
                 <span className="text-xs uppercase tracking-wide text-ghg-muted">Vorschau-Größe</span>
                 <select value={thumbSize} onChange={(e) => setThumbSize(e.target.value)} className="w-full bg-ghg-bg2 border border-ghg-line rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-ghg-red">
-                  <option value="sm">Klein</option>
-                  <option value="md">Mittel</option>
-                  <option value="lg">Groß</option>
+                  <option value="sm">Klein (140 px)</option>
+                  <option value="md">Mittel (176 px)</option>
+                  <option value="lg">Groß (260 px)</option>
+                  <option value="360">Sehr groß (360 px)</option>
+                  <option value="480">Riesig (480 px)</option>
                 </select>
               </label>
             </div>
             <Button onClick={savePlayback}>Speichern</Button>
             <p className="text-xs text-ghg-muted mt-2">
-              Vorschaubilder werden jetzt auf der Festplatte zwischengespeichert – beim zweiten Überfahren erscheinen sie sofort.
+              Die Größe steuert jetzt auch, wie groß das Bild tatsächlich erzeugt wird – große Vorschauen sind
+              dadurch wirklich scharf statt hochskaliert. Die Höhe richtet sich automatisch nach dem echten
+              Seitenverhältnis des Videos (4:3, 16:9, 21:9 …).
+            </p>
+            <p className="text-xs text-ghg-muted mt-1">
+              Über den GHGFlix-Server (Browser, Handy, Fernseher) wird beim Abspielen zusätzlich ein
+              Vorschau-Streifen für den ganzen Film vorbereitet – danach erscheinen die Bilder beim Überfahren
+              ohne jede Verzögerung, genau wie bei Plex.
             </p>
           </Section>
         </>
@@ -1502,6 +1513,7 @@ export default function Settings() {
               </Button>
             )}
           </div>
+          {email && <CloudSyncStatus />}
         </Section>
       )}
 
@@ -1595,6 +1607,59 @@ async function serverSettings<T>(method: "GET" | "POST", path = "/api/settings",
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(String((j as { error?: string })?.error ?? `Serverfehler (${res.status})`));
   return j as T;
+}
+
+/**
+ * Klartext-Status des Cloud-Abgleichs + Knopf „Jetzt synchronisieren“.
+ * Vorher gab es dafür GAR KEINE Anzeige — ein stiller Fehler war von außen
+ * nicht von „läuft alles“ zu unterscheiden.
+ */
+function CloudSyncStatus() {
+  const toast = useStore((s) => s.toast);
+  const profileId = useStore((s) => s.profileId);
+  const profileName = useStore((s) => s.profileName);
+  const [health, setHealth] = useState<SyncHealth>(() => supabaseSyncHealth());
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const t = window.setInterval(() => setHealth(supabaseSyncHealth()), 2000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      startSupabaseSync(profileId || "local", profileName || "Lokal");
+      const h = await syncNow();
+      setHealth(h);
+      if (h.lastError) toast("Abgleich fehlgeschlagen: " + h.lastError, "error");
+      else toast(`Abgeglichen — ${h.lastPushed} gesendet, ${h.lastPulled} empfangen`, "success");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const text = health.lastError
+    ? `Fehler seit ${health.lastErrorAt ? new Date(health.lastErrorAt).toLocaleTimeString("de-DE") : "kurzem"}: ${health.lastError}`
+    : health.lastSyncAt
+      ? `Verbunden — letzter Abgleich ${new Date(health.lastSyncAt).toLocaleTimeString("de-DE")} (${health.lastPushed} gesendet, ${health.lastPulled} empfangen)`
+      : health.active
+        ? "Abgleich läuft — erster Durchgang in Kürze"
+        : "Abgleich noch nicht gestartet";
+  const color = health.lastError ? "text-ghg-red" : health.lastSyncAt ? "text-emerald-500" : "text-ghg-muted";
+
+  return (
+    <div className="mt-4 pt-4 border-t border-ghg-line">
+      <p className={`text-sm mb-2 ${color}`}>● {text}</p>
+      <p className="text-xs text-ghg-muted mb-3">
+        Der Abgleich läuft automatisch alle 60 Sekunden und immer dann, wenn das Fenster wieder in den Vordergrund
+        kommt — unabhängig davon, welches Profil gerade gewählt ist.
+      </p>
+      <Button variant="ghost" onClick={run} disabled={busy}>
+        {busy ? <Spinner className="w-4 h-4" /> : "Jetzt synchronisieren"}
+      </Button>
+    </div>
+  );
 }
 
 function SupabaseServerSection() {

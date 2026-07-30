@@ -16,7 +16,9 @@ alles butterweich über den eingebauten mpv-Player ab.
 - **Schlau beim Erkennen**: TMDb-Auto-Zuordnung (nur Buchstaben, Release-Müll stört nicht), dauerhafte manuelle Zuordnungen, fortlaufende Folgen-Zuordnung („diese Datei ist S01E01, der Rest folgt automatisch")
 - **Nichts geht verloren**: Gesehen-Stand & Favoriten überleben sogar „Bibliothek neu aufbauen" (Verknüpfung über Dateipfad *und* TMDb), wöchentliches Auto-Backup, Export/Import als JSON
 - **Alles einstellbar**: ~60 Einstellungen — Kartengröße, Animationen, Startseiten-Reihen, Scroll-Verhalten, Kindersicherung (FSK), Akzentfarbe, Maskottchen u.v.m.
-- **Optional**: Supabase-Sync des Fortschritts zwischen mehreren PCs
+- **Vorschau auf der Zeitleiste**: Bilderstreifen wie bei Plex — beim Überfahren erscheint das Bild sofort, in einstellbarer Größe und im echten Seitenverhältnis des Videos
+- **Erkennung wie Plex/Jellyfin**: eigene `poster.jpg`/`fanart.jpg`/`.nfo` werden erkannt, fehlende Folgenbilder schneidet ffmpeg selbst aus dem Video
+- **Cloud-Sync, der wirklich läuft**: Fortschritt und „Meine Liste“ gleichen sich automatisch ab (alle 60 s + beim Fensterwechsel) — siehe [`docs/SUPABASE.md`](docs/SUPABASE.md)
 - **GHGFlix Server (ZimaOS/Docker)**: dieselbe Oberfläche 1:1 im Browser & am Handy — der Server streamt (Direct Play oder Live-Transcode), PC-App/Handy/Browser teilen sich automatisch den Stand. Siehe [`server/README-ZimaOS.md`](server/README-ZimaOS.md)
 
 ## 🚀 Installation (Nutzer)
@@ -50,16 +52,21 @@ Umsetzungsstand des großen Ausbau-Plans: [`PLAN_STATUS.md`](PLAN_STATUS.md).
 
 ## 🩺 Fehlerbehebung
 
-**Sync funktioniert nicht?** (Reihenfolge prüfen)
+**Sync funktioniert nicht?** Ausführliche Anleitung mit allen Fällen:
+[`docs/SUPABASE.md`](docs/SUPABASE.md). Die Kurzfassung:
 
-1. Docker-Server erreichbar? `http://<server-ip>:8484/api/ping` im Browser → muss JSON zeigen.
-2. Desktop: *Einstellungen → GHGFlix-Server* aktiviert + Adresse getestet + bei Passwort: angemeldet?
-3. Supabase-Cloud-Sync: in der **Server**-Weboberfläche unter *Konto & Sync →
-   „Server-Sync mit Supabase“* muss der **Service-Role-Key** stehen (der
-   Anon-Key aus dem Abschnitt darunter reicht NICHT — häufigster Fehler!).
-   Die Statuszeile dort zeigt „Verbunden“ oder den konkreten Fehler.
-4. Zwei Geräte zeigen Unterschiedliches? Bis zu 30–60 s warten (Sync-Intervall)
-   oder App-Fenster einmal in den Fokus holen (löst sofortigen Abgleich aus).
+1. Desktop: *Einstellungen → Konto & Sync* → **Anmelden**. Die Statuszeile dort
+   sagt im Klartext, was los ist („Verbunden — letzter Abgleich …“ oder der
+   konkrete Fehler). Knopf **Jetzt synchronisieren** erzwingt einen Abgleich.
+2. Gegenprobe in Supabase: *Table Editor → `watch_progress`* — dort müssen
+   Zeilen stehen.
+3. Docker-Server erreichbar? `http://<server-ip>:8484/api/ping` im Browser →
+   muss JSON zeigen (dort steht auch die Server-Version).
+4. Server-Weboberfläche → *Konto & Sync → „Server-Sync mit Supabase“*: dort
+   gehört der **Service-Role-Key** hinein, der Anon-Key reicht NICHT — das ist
+   der häufigste Fehler.
+5. Ein Titel kommt nicht mit? Nur Titel **mit TMDb-Zuordnung** werden
+   abgeglichen. Im Kontextmenü **Identifizieren** wählen.
 
 **Ton und Bild nicht synchron?**
 
@@ -98,7 +105,8 @@ Tests: `cd src-tauri && cargo test` · Typprüfung: `npx tsc --noEmit`
 | Wiedergabe | mpv via `tauri-plugin-mpv` (rendert hinter dem transparenten WebView) |
 | Daten | SQLite (rusqlite, gebündelt) im App-Data-Ordner |
 | Metadaten | TMDb (API-Key des Nutzers, Sprache wählbar) |
-| Sync (optional) | Supabase (`supabase/schema.sql` einspielen) |
+| Sync | GHGFlix-Server (LAN) + Supabase-Cloud, beides parallel |
+| Vorschaubilder | ffmpeg-Sprite-Streifen („Trickplay“), auf Platte zwischengespeichert |
 
 ## ⌨️ Wichtige Tastenkürzel (Player)
 

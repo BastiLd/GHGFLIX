@@ -8,10 +8,13 @@ import { join, normalize, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb, getSetting, setSetting, settingOr, listLibraries, addLibrary, removeLibrary } from "./db.js";
 import { scanLibrary, scanState, removeLibraryContent, detectLibraries, BROWSE_ROOTS, primaryRoot, isSystemDir } from "./scanner.js";
-import { canDirectPlay, ffprobe, killAllTranscodes, serveFile, serveThumb, serveTranscode } from "./stream.js";
+import { canDirectPlay, ffprobe, killAllTranscodes, serveFile, serveTranscode } from "./stream.js";
 import { cachedImage, tmdbEnabled } from "./tmdb.js";
 import * as supabase from "./supabase.js";
-import { handleInvoke, makeThumb, thumbFile } from "./invoke.js";
+import { handleInvoke } from "./invoke.js";
+import { makeThumb, trickplayInfo, ensureTrickplay, pruneThumbCache, TRICK_DIR } from "./thumbs.js";
+import { isLocalRef, localRefPath, imageMime } from "./artwork.js";
+import { isImage } from "./parser.js";
 import { spawn } from "node:child_process";
 
 const PORT = parseInt(process.env.PORT || "8484", 10);
@@ -21,7 +24,7 @@ const SERVER_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const WEBAPP_DIR = join(SERVER_ROOT, "webapp");
 const LEGACY_DIR = join(SERVER_ROOT, "web");
 const WEB_DIR = existsSync(join(WEBAPP_DIR, "index.html")) ? WEBAPP_DIR : LEGACY_DIR;
-const VERSION = "2.2.0";
+const VERSION = "2.3.0";
 
 const db = openDb();
 
@@ -88,6 +91,65 @@ const readBody = (req) =>
 const mediaRow = (type, id) =>
   db.prepare(`SELECT * FROM ${type === "movie" ? "movies" : "episodes"} WHERE id = ?`).get(id);
 
+/** Rohes Bearer-/Query-Token der Anfrage (für Bild-URLs ohne Header). */
+function bearerToken(req, url) {
+  const h = req.headers.authorization || "";
+  return h.startsWith("Bearer ") ? h.slice(7) : url.searchParams.get("token") || "";
+}
+
+/**
+ * SICHERHEIT: Nur Dateien, die wirklich in der Bibliothek stehen, dürfen als
+ * Vorschau/Standbild verarbeitet werden. Vorher nahm /api/thumbfile JEDEN Pfad
+ * entgegen — ein angemeldeter Nutzer hätte Einzelbilder beliebiger Dateien des
+ * Containers ziehen können.
+ */
+function isLibraryFile(path) {
+  if (!path) return false;
+  return !!(
+    db.prepare("SELECT 1 FROM movies WHERE path = ?").get(path) ||
+    db.prepare("SELECT 1 FROM episodes WHERE path = ?").get(path) ||
+    db.prepare("SELECT 1 FROM episode_files WHERE path = ?").get(path)
+  );
+}
+
+/**
+ * Ordner-Browser: nur innerhalb der konfigurierten Wurzeln (BROWSE_ROOTS) bzw.
+ * unterhalb bereits eingetragener Bibliotheken navigieren.
+ */
+function withinBrowseRoots(target) {
+  const norm = (s) => normalize(String(s)).replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+  const t = norm(target);
+  const roots = [...BROWSE_ROOTS, ...listLibraries().map((l) => l.path), primaryRoot()].map(norm);
+  return roots.some((r) => r === "/" || t === r || t.startsWith(r + "/"));
+}
+
+/** Lokale Bilddatei: muss eine Bildendung haben UND unter einer Bibliothek
+ *  bzw. im Daten-Ordner (erzeugte Standbilder) liegen. */
+function isAllowedImage(file) {
+  if (!isImage(file)) return false;
+  if (!existsSync(file)) return false;
+  const norm = (s) => s.replace(/\\/g, "/").replace(/\/+$/, "");
+  const roots = [...listLibraries().map((l) => l.path), process.env.DATA_DIR || "/data"];
+  return roots.some((r) => norm(file).startsWith(norm(r) + "/"));
+}
+
+/**
+ * Bilder für die EINFACHE API (Handy-App, TV-Browser): lokale Dateien
+ * (poster.jpg/fanart.jpg neben dem Film) bzw. aus dem Video erzeugte
+ * Standbilder haben Vorrang vor TMDb — sonst blieben dort Kacheln leer,
+ * obwohl der Server längst ein Bild hat.
+ */
+function withArt(row) {
+  if (!row) return row;
+  const local = (v) => (v ? (isLocalRef(v) ? v : "local:" + v) : null);
+  return {
+    ...row,
+    poster: local(row.local_poster) ?? row.poster ?? null,
+    backdrop: local(row.local_backdrop) ?? row.backdrop ?? null,
+    still: row.still ?? local(row.local_still) ?? null,
+  };
+}
+
 /** progress rows in TMDb coordinates (the cross-device sync format). */
 function progressAsTmdb(profileId, since = 0) {
   return db
@@ -153,10 +215,17 @@ function serveStatic(res, urlPath) {
     if (legacy.startsWith(LEGACY_DIR) && existsSync(legacy) && statSync(legacy).isFile()) file = legacy;
   }
   if ((!file.startsWith(WEB_DIR) && !file.startsWith(LEGACY_DIR)) || !existsSync(file) || !statSync(file).isFile()) {
-    // SPA fallback
+    // SPA-Rückfall
     const index = join(WEB_DIR, "index.html");
+    if (!existsSync(index)) {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Weboberfläche nicht gefunden (webapp/index.html fehlt im Image)");
+      return;
+    }
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    createReadStream(index).pipe(res);
+    const st = createReadStream(index);
+    st.on("error", () => res.end());
+    st.pipe(res);
     return;
   }
   res.writeHead(200, {
@@ -226,7 +295,7 @@ async function handle(req, res) {
   if (p === "/api/library") {
     const shows = db.prepare("SELECT s.*, COUNT(DISTINCT e.season) seasons, COUNT(e.id) episodes FROM shows s LEFT JOIN episodes e ON e.show_id=s.id GROUP BY s.id ORDER BY s.title").all();
     const movies = db.prepare("SELECT * FROM movies ORDER BY title").all();
-    return json(res, { shows, movies });
+    return json(res, { shows: shows.map(withArt), movies: movies.map(withArt) });
   }
   let m;
   if ((m = p.match(/^\/api\/shows\/(\d+)$/))) {
@@ -237,13 +306,13 @@ async function handle(req, res) {
     for (const e of eps) {
       let s = seasons.find((x) => x.season === e.season);
       if (!s) seasons.push((s = { season: e.season, episodes: [] }));
-      s.episodes.push(e);
+      s.episodes.push(withArt(e));
     }
-    return json(res, { show, seasons });
+    return json(res, { show: withArt(show), seasons });
   }
   if ((m = p.match(/^\/api\/movies\/(\d+)$/))) {
     const movie = db.prepare("SELECT * FROM movies WHERE id = ?").get(+m[1]);
-    return movie ? json(res, movie) : json(res, { error: "not found" }, 404);
+    return movie ? json(res, withArt(movie)) : json(res, { error: "not found" }, 404);
   }
 
   // ── profiles ──
@@ -280,7 +349,9 @@ async function handle(req, res) {
       .prepare(
         `SELECT pr.media_type mediaType, pr.ref_id refId, pr.position, pr.duration, pr.updated_at updatedAt,
                 COALESCE(mv.title, sh.title) title, e.season, e.episode, e.title epTitle,
-                COALESCE(mv.poster, sh.poster) poster, e.show_id showId, mv.backdrop mBackdrop, sh.backdrop sBackdrop, e.still still
+                COALESCE(mv.poster, sh.poster) poster, e.show_id showId, mv.backdrop mBackdrop, sh.backdrop sBackdrop, e.still still,
+                COALESCE(mv.local_poster, sh.local_poster) local_poster,
+                COALESCE(mv.local_backdrop, sh.local_backdrop) local_backdrop, e.local_still local_still
          FROM progress pr
          LEFT JOIN movies mv ON pr.media_type='movie' AND mv.id=pr.ref_id
          LEFT JOIN episodes e ON pr.media_type='episode' AND e.id=pr.ref_id
@@ -290,7 +361,7 @@ async function handle(req, res) {
          ORDER BY pr.updated_at DESC LIMIT 20`,
       )
       .all(profileId);
-    return json(res, rows);
+    return json(res, rows.map(withArt));
   }
   // "Zuletzt gesehen" — most recent progress rows (watched or in-progress)
   if (p === "/api/history") {
@@ -299,7 +370,9 @@ async function handle(req, res) {
         `SELECT pr.media_type mediaType, pr.ref_id refId, pr.updated_at updatedAt,
                 COALESCE(mv.title, sh.title) title, e.season, e.episode,
                 COALESCE(mv.poster, sh.poster) poster, e.show_id showId, e.still still,
-                mv.backdrop mBackdrop, sh.backdrop sBackdrop
+                mv.backdrop mBackdrop, sh.backdrop sBackdrop,
+                COALESCE(mv.local_poster, sh.local_poster) local_poster,
+                COALESCE(mv.local_backdrop, sh.local_backdrop) local_backdrop, e.local_still local_still
          FROM progress pr
          LEFT JOIN movies mv ON pr.media_type='movie' AND mv.id=pr.ref_id
          LEFT JOIN episodes e ON pr.media_type='episode' AND e.id=pr.ref_id
@@ -308,7 +381,7 @@ async function handle(req, res) {
          ORDER BY pr.updated_at DESC LIMIT 20`,
       )
       .all(profileId);
-    return json(res, rows);
+    return json(res, rows.map(withArt));
   }
 
   // ── favorites / Meine Liste ──
@@ -367,6 +440,8 @@ async function handle(req, res) {
     const token = url.searchParams.get("token");
     const tq = token ? `&token=${token}` : "";
     const direct = canDirectPlay(row);
+    // Sprite-Blatt für die Vorschau schon mal im Hintergrund bauen lassen
+    if (row.duration) ensureTrickplay(row.path, row.duration);
     return json(res, {
       duration: row.duration,
       direct,
@@ -374,8 +449,11 @@ async function handle(req, res) {
       acodec: row.acodec,
       width: row.width,
       height: row.height,
+      aspect: row.aspect ?? (row.width && row.height ? row.width / row.height : null),
       directUrl: `/api/stream/${m[1]}/${row.id}?x=1${tq}`,
       transcodeUrl: `/api/transcode/${m[1]}/${row.id}?x=1${tq}`,
+      trickplayUrl: trickplayInfo(row.path) ? `/api/trickplay?path=${encodeURIComponent(row.path)}${tq}` : null,
+      trickplay: trickplayInfo(row.path),
       audioStreams: row.audioStreams ?? [],
     });
   }
@@ -397,7 +475,11 @@ async function handle(req, res) {
     const row = mediaRow(m[1], +m[2]);
     if (!row) return res.writeHead(404).end();
     const at = row.duration ? Math.min(row.duration * 0.25, 420) : 300;
-    return serveThumb(res, row.path, Math.round(at));
+    // über den Plattencache statt bei jedem Aufruf erneut ffmpeg zu starten
+    const file = await makeThumb(row.path, Math.round(at), 480);
+    if (!file) return res.writeHead(404).end();
+    res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=604800" });
+    return createReadStream(file).pipe(res);
   }
 
   // ── desktop-app command surface (the web UI runs the SAME React app as the
@@ -405,19 +487,34 @@ async function handle(req, res) {
   if ((m = p.match(/^\/api\/invoke\/([a-z0-9_]+)$/)) && req.method === "POST") {
     const args = await readBody(req);
     try {
+      // Token durchreichen, damit Kommandos Bild-URLs bauen können, die ein
+      // <img>-Tag auch bei gesetztem Passwort laden darf (kann keine Header).
+      args.__token = bearerToken(req, url);
       const result = await handleInvoke(m[1], args);
       return json(res, { result: result === undefined ? null : result });
     } catch (e) {
       return json(res, { error: String(e?.message || e) }, 400);
     }
   }
-  // seek-preview thumbnail (generated + cached by the media_thumbnail command)
+  // Einzelbild für die Zeitleisten-Vorschau (erzeugt + gecacht)
   if (p === "/api/thumbfile") {
     const path = url.searchParams.get("path") || "";
+    if (!isLibraryFile(path)) return json(res, { error: "unbekannte Datei" }, 403);
     const t = parseInt(url.searchParams.get("t") || "0", 10) || 0;
-    const file = await makeThumb(path, t);
+    const w = Math.min(960, Math.max(80, parseInt(url.searchParams.get("w") || "320", 10) || 320));
+    const file = await makeThumb(path, t, w);
     if (!file) return res.writeHead(404).end();
     res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=604800" });
+    return createReadStream(file).pipe(res);
+  }
+  // Sprite-Blatt (Trickplay): EIN Bild mit allen Vorschaupositionen
+  if (p === "/api/trickplay") {
+    const path = url.searchParams.get("path") || "";
+    if (!isLibraryFile(path)) return json(res, { error: "unbekannte Datei" }, 403);
+    const info = trickplayInfo(path);
+    if (!info) return res.writeHead(404).end();
+    const file = join(TRICK_DIR, info.file);
+    res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=2592000, immutable" });
     return createReadStream(file).pipe(res);
   }
   // embedded text subtitles → WebVTT (browsers can only render VTT)
@@ -435,9 +532,18 @@ async function handle(req, res) {
     return;
   }
 
-  // ── images (TMDb proxy + cache) ──
+  // ── Bilder (TMDb-Proxy mit Cache + lokale Dateien wie bei Plex/Jellyfin) ──
   if (p === "/api/img") {
-    const stream = await cachedImage(url.searchParams.get("path") || "", url.searchParams.get("size") || "w342");
+    const raw = url.searchParams.get("path") || "";
+    // "local:<Pfad>" = Bilddatei, die neben dem Film/der Serie auf der Platte
+    // liegt (poster.jpg, fanart.jpg, aus dem Video geschnittenes Standbild …)
+    if (isLocalRef(raw)) {
+      const file = localRefPath(raw);
+      if (!file || !isAllowedImage(file)) return res.writeHead(404).end();
+      res.writeHead(200, { "Content-Type": imageMime(file), "Cache-Control": "public, max-age=604800" });
+      return createReadStream(file).pipe(res);
+    }
+    const stream = await cachedImage(raw, url.searchParams.get("size") || "w342");
     if (!stream) return res.writeHead(404).end();
     res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=2592000" });
     return stream.pipe(res);
@@ -473,6 +579,9 @@ async function handle(req, res) {
     const root = primaryRoot();
     let target = url.searchParams.get("path");
     if (!target || target === "roots") target = root; // start at the real root
+    // SICHERHEIT: nur innerhalb der erlaubten Wurzeln stöbern. Vorher wurde
+    // JEDER absolute Pfad ausgeliefert (z. B. ?path=/etc).
+    if (!withinBrowseRoots(target)) return json(res, { error: "Pfad außerhalb der erlaubten Ordner" }, 403);
     let entries;
     try {
       entries = readdirSync(target, { withFileTypes: true })
@@ -587,3 +696,9 @@ setInterval(() => {
     if (r.changes > 0) console.log(`[cleanup] ${r.changes} alte pending_progress-Einträge entfernt`);
   } catch {}
 }, 24 * 3600 * 1000).unref();
+
+// Vorschaubild-Cache begrenzen (Standard 512 MB, THUMB_CACHE_MB). Ohne das
+// wuchs thumb-cache/ unbegrenzt — auf einem NAS mit kleiner Systemplatte ein
+// echtes Problem. Einmal kurz nach dem Start, danach stündlich.
+setTimeout(() => pruneThumbCache(), 60_000).unref();
+setInterval(() => pruneThumbCache(), 3600_000).unref();

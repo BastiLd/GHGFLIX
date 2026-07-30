@@ -10,7 +10,7 @@ import {
   listProfiles,
   startSupabaseSync,
   stopSupabaseSync,
-  syncProgress,
+  syncNow,
   type SupaProfile,
 } from "../lib/supabase";
 import { Button, Modal, Spinner, TextInput } from "../components/ui";
@@ -46,16 +46,18 @@ export default function Profiles() {
 
   const choose = async (id: string, name: string) => {
     setProfile(id, name);
-    if (id !== "local") {
+    // WICHTIG: Der Abgleich läuft jetzt für JEDES Profil — auch für „Lokal“.
+    // Vorher wurde er beim lokalen Profil abgeschaltet, weshalb im normalen
+    // Betrieb nie etwas in der Cloud landete.
+    if (loggedIn) {
+      startSupabaseSync(id, name);
       try {
-        await syncProgress(id);
-        toast("Fortschritt synchronisiert", "success");
+        const h = await syncNow();
+        if (h.lastError) toast("Abgleich fehlgeschlagen: " + h.lastError, "error");
+        else toast(`Abgeglichen — ${h.lastPushed} gesendet, ${h.lastPulled} empfangen`, "success");
       } catch (e) {
         toast("Sync fehlgeschlagen: " + String(e), "error");
       }
-      // S-006: keep syncing in the background (60 s + on window focus) instead
-      // of only this one time at profile selection
-      startSupabaseSync(id);
     } else {
       stopSupabaseSync();
     }

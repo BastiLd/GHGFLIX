@@ -1,198 +1,381 @@
-# GHGFlix — Abschlussbericht (Masterplan-Umsetzung, 16.07.2026)
+# GHGFlix — Bericht: Server-Überholung, Erkennung, Vorschaubilder, Cloud-Sync
 
-Alle Phasen des Masterplans wurden abgearbeitet — die kritischen Bugs sind
-behoben, die Architektur ist konsolidiert, Handy und Fernseher sind angebunden,
-der Server ist gehärtet und dokumentiert. Was bewusst offen blieb (v. a. die
-native Android-TV-App), steht mit Begründung in [`PLAN_STATUS.md`](PLAN_STATUS.md).
+**Stand:** 30.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.0** · Handy **1.2.0**
 
----
-
-## Teil 1: Was wurde gemacht
-
-### Phase 1 — Die zwei Kern-Bugs (Branch `fix/supabase-sync`)
-
-**Supabase-Sync repariert.** Der Server las den Schlüssel `supabase_key`
-(Service-Role-Key), die Einstellungs-Seite speicherte aber nur
-`supabase_anon_key` — deshalb kam NIE eine Verbindung zustande. Die
-Server-Weboberfläche hat jetzt unter *Einstellungen → Konto & Sync* ein eigenes
-Formular **„Server-Sync mit Supabase (Cloud-Relay)“** mit Service-Role-Key,
-Senden/Empfangen-Schaltern, „Jetzt importieren“-Button und einer Klartext-
-Statuszeile („Verbunden — letzter Abgleich …“ / „Fehler seit …“). Die
-Desktop-App synct Cloud-Profile jetzt **alle 60 s + beim Fenster-Fokus + beim
-App-Start** statt nur einmal beim Profilwechsel. Dazu: Race-Condition beim
-Fortschritt-Schreiben behoben, Schutz gegen vertauschte URL/Key-Felder, der
-Service-Key wird nie an Browser/Apps ausgeliefert.
-
-**Ton/Bild-Versatz behoben.** Ursache: Beim Spulen/Fortsetzen während
-Server-Transcoding sprang das Video zum letzten Keyframe zurück (bis mehrere
-Sekunden), der Ton startete aber exakt an der gewünschten Stelle. Jetzt wird
-das Video bei jedem Sprung exakt ab der Zielstelle neu kodiert — Ton und Bild
-starten sample-genau zusammen, auch die Fortschrittsanzeige stimmt wieder.
-Zusätzlich am Desktop: mpv nutzt fest `--video-sync=audio` und ignoriert
-fremde `mpv.conf`-Dateien (Experten-Schalter unter *Leistung* vorhanden).
-
-### Phase 2 — Architektur (Branch `feat/arch-consolidation`)
-
-Zielbild festgelegt und in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-(mit Diagramm) dokumentiert: **Dein Docker-Server ist die zentrale Wahrheit,
-Supabase nur optionales Cloud-Relay, Handy/TV sprechen ausschließlich mit dem
-Server.** Jede Server-Installation hat jetzt eine stabile ID; die Desktop-App
-bindet ihre Sync-Zeiger daran — kein doppeltes Ziehen mehr, wenn zwischen
-lokaler IP, Domain und Tailscale gewechselt wird.
-
-### Phase 3 — Handy-App (Branch `feat/mobile-v2`)
-
-Neu in der App: **„Meine Liste“** auf der Startseite mit Herz-Button auf jeder
-Serien-/Film-Seite (synchron mit Desktop und Web), **Gesehen-Markierung**
-(Folge gedrückt halten bzw. Button beim Film), verständliche
-Verbindungs-Fehlermeldungen, `http://` wird beim Eintippen automatisch
-ergänzt, und die App ist Store-/Sideload-bereit versioniert (1.1.0).
-
-### Phase 4 — Fernseher (Branch `feat/tv-mode`)
-
-**TV-Modus für jeden Smart-TV-Browser** — sofort nutzbar, keine Installation:
-rote Fokus-Rahmen, größere Schrift, Abstand zum Bildschirmrand und komplette
-**Pfeiltasten-Navigation** (2D — links/rechts durch die Reihe, hoch/runter
-zwischen Reihen), OK wählt, Zurück-Taste navigiert zurück (inkl. LG-webOS- und
-Samsung-Tizen-Tastencodes). Aktivierung automatisch per TV-Erkennung, per Link
-`?tv=1` oder per Schalter in den Einstellungen. Die **native Android-TV-App**
-ist der größte bewusst offene Punkt (braucht echte Geräte zum Testen) — die
-Handy-APK läuft aber schon heute per Sideload auf Fire TV/Android TV
-(Anleitung unten).
-
-### Phase 5 — Server-Härtung (Branch `feat/server-hardening`)
-
-Login-Tokens laufen nach 180 Tagen ab, **„Alle Geräte abmelden“**-Button für
-verlorene Handys/verkaufte Sticks, Brute-Force-Sperre beim Login (5 Min nach
-8 Fehlversuchen), sauberes Herunterfahren bei Docker-Updates (laufende
-ffmpeg-Prozesse werden beendet), **Limit für gleichzeitige Transcodes**
-(`TRANSCODE_MAX`, Standard 3 — schützt das NAS, wenn alle gleichzeitig
-schauen), Security-Header, und eine tägliche Aufräumroutine für verwaiste
-Sync-Einträge.
-
-### Phase 6 — Doku, Tests, CI (Branch `chore/docs-qa`)
-
-README mit Handy/TV-Abschnitt und Fehlerbehebungs-Kapiteln („Sync geht nicht“,
-„Ton/Bild versetzt“), manuelle [Test-Checkliste](docs/TEST_CHECKLIST.md) für
-Releases, und ein CI-Workflow, der bei jedem Push TypeScript, Web-Build und
-Server-Syntax prüft.
-
-**Versionen:** Desktop 0.9.9 · Server 2.2.0 · Mobile 1.1.0.
+> Der vorherige Bericht zur Masterplan-Umsetzung (16.07.2026) steht in
+> [`PLAN_STATUS.md`](PLAN_STATUS.md).
 
 ---
 
-## Teil 2: Was DU jetzt tun musst
+## Kurzfassung
 
-### 1. Veröffentlichen (einmalig)
+Drei Dinge waren kaputt, alle drei sind behoben:
 
-Die Arbeit liegt auf aufeinander aufbauenden Branches; `chore/docs-qa` enthält
-alles. Mergen und pushen:
+1. **Supabase-Sync ging gar nicht.** Ich habe in deinem Projekt nachgesehen:
+   in `watch_progress` standen **0 Zeilen** — obwohl du angemeldet warst. Es
+   waren **zwei** Fehler, nicht einer. Beide sind gefunden und behoben.
+2. **Die Erkennung im Docker-Server war deutlich schwächer als am Desktop.**
+   Der Server hatte eine stark vereinfachte Nachbildung. Jetzt läuft dort die
+   komplette Desktop-Logik plus die Ordner-Konventionen von Plex und Jellyfin.
+3. **Die Vorschaubilder auf der Zeitleiste** (wenn du mit der Maus drüberfährst)
+   waren im Browser bei gesetztem Passwort komplett unsichtbar, langsam und im
+   falschen Seitenverhältnis. Jetzt gibt es einen vorgenerierten Bilderstreifen
+   wie bei Plex — die Vorschau erscheint ohne jede Verzögerung.
 
-```
-git checkout feature/zimaos-docker-server
-git merge chore/docs-qa
-git push
-```
-
-Der GitHub-Docker-Build baut dann automatisch das neue Server-Image
-(`ghcr.io/bastild/ghgflix-server:latest`, amd64 + arm64).
-
-### 2. Server aktualisieren
-
-ZimaOS App Store → GHGFlix → **Update** (oder in Portainer/Docker das Image
-neu ziehen und den Container neu erstellen). Deine Daten bleiben erhalten.
-
-### 3. Wichtig: Passwort prüfen (SEC-001)
-
-Falls `GHGFLIX_PASSWORD` noch leer ist: in der docker-compose setzen (oder
-Web-Einstellungen). Mit Handy + TV + Tailscale gibt es jetzt deutlich mehr
-Zugänge — ohne Passwort ist die Bibliothek für jeden im Netz offen.
-
-### 4. Supabase-Sync einschalten (optional)
-
-Server-Weboberfläche (`http://<server-ip>:8484`) → ⚙️ *Einstellungen → Konto &
-Sync → „Server-Sync mit Supabase (Cloud-Relay)“* → Project-URL +
-**Service-Role-Key** eintragen (Supabase → Project Settings → API Keys →
-`service_role`) → Speichern. Der Erst-Import startet automatisch; die
-Statuszeile muss „Verbunden“ zeigen.
-
-### 5. Kurz testen
-
-[`docs/TEST_CHECKLIST.md`](docs/TEST_CHECKLIST.md) durchgehen — besonders die
-zwei Sync-Tests und den Spul-Test bei einer MKV-Datei im Browser.
+Dazu kamen rund 40 weitere Korrekturen, davon 13 aus einer unabhängigen
+Code-Prüfung, die ich nach dem Umbau habe laufen lassen.
 
 ---
 
-## Teil 3: Anleitung Fernseher 📺
+## Teil 1: Der Supabase-Sync — was wirklich los war
 
-### Sofort (jeder Smart-TV, keine Installation)
+### Fehler 1: Der Abgleich lief fast nie
 
-1. Browser am TV öffnen (Samsung: „Internet“, LG: „Web Browser“, Fire TV: „Silk“)
-2. Eingeben: **`http://<server-ip>:8484/?tv=1`** — z. B. `http://192.168.1.50:8484/?tv=1`
-3. Ggf. Server-Passwort eingeben (einmalig)
-4. Bedienung: **Pfeiltasten** = navigieren (roter Rahmen zeigt die Auswahl),
-   **OK** = abspielen/auswählen, **Zurück** = zur Übersicht
-5. Tipp: als Lesezeichen/Startseite speichern
+Die App synchronisierte **nur**, wenn du auf dem Profil-Bildschirm ausdrücklich
+ein **Cloud-Profil** angeklickt hast. Beim normalen Benutzen mit dem
+Standardprofil „Lokal“ stieg die Funktion sofort wieder aus:
 
-### Als echte App (Android TV / Fire TV, per USB-Stick)
+```ts
+if (!c || profileId === "local") return;   // ← genau hier war Schluss
+```
 
-**A. APK bauen (einmalig am PC** — kostenloses Konto auf expo.dev nötig**):**
+### Fehler 2: Auch mit Cloud-Profil kam nichts an
+
+Das ist der Grund, warum es auch nach deiner Anmeldung nicht funktioniert hat.
+Dein **gesamter bisheriger Fortschritt** liegt in der lokalen Datenbank unter
+der Profil-Nummer `local`. Hochgeladen wurde aber nur das, was unter der
+**neuen** Cloud-Profil-Nummer stand — und das war leer. Die App hat also
+fleißig „nichts“ synchronisiert und dabei keinen Fehler gemeldet.
+
+### Was jetzt anders ist
+
+- Dein lokales Profil wird **einmalig fest mit einem Cloud-Profil verknüpft**.
+  Die Verknüpfung wird gespeichert und überlebt Neustarts.
+- Danach wird **immer** abgeglichen — egal welches Profil gewählt ist:
+  alle 60 Sekunden, beim App-Start, beim Zurückholen des Fensters und bei
+  wiederhergestellter Internetverbindung.
+- Beim ersten Login fragt die App: **„Auf diesem PC sind N Einträge gefunden —
+  in die Cloud übernehmen?“** (wie von dir gewünscht mit Nachfrage, nicht
+  heimlich).
+- **„Meine Liste“** wird jetzt mit synchronisiert (war vorher gar nicht dabei).
+- In den Einstellungen steht eine **Statuszeile im Klartext**:
+  `● Verbunden — letzter Abgleich 21:14 (147 gesendet, 0 empfangen)` oder
+  eben die konkrete Fehlermeldung. Vorher gab es dafür **keine Anzeige** —
+  ein stiller Fehler war von „läuft alles“ nicht zu unterscheiden.
+- Zusätzlich ein Knopf **„Jetzt synchronisieren“**.
+- Wie von dir gewählt läuft **beides parallel**: direkt in die Cloud **und**
+  über den Docker-Server.
+
+### Deine Cloud-Datenbank habe ich erweitert
+
+Im Projekt **GHG FLIX** neu angelegt (deine vorhandenen Daten blieben unberührt):
+
+| Neu | Wofür |
+|---|---|
+| `watch_favorites` | „Meine Liste“ auf allen Geräten |
+| `sync_devices` | welches Gerät zuletzt wann abgeglichen hat |
+| 4 Indizes | spürbar schnellere Abfragen |
+
+Alles mit denselben Sicherheitsregeln (Row Level Security) wie bisher — nur du
+siehst deine Daten. Ich habe die Struktur direkt in deinem Projekt getestet
+(Test-Zeilen geschrieben, geprüft, danach wieder gelöscht — die Tabellen sind
+jetzt wieder bei 0).
+
+**Die vollständige Schritt-für-Schritt-Anleitung steht in
+[`docs/SUPABASE.md`](docs/SUPABASE.md)** — inklusive der Erklärung, welcher der
+beiden Schlüssel wohin gehört (das ist die häufigste Fehlerquelle).
+
+---
+
+## Teil 2: Die Erkennung — jetzt 1:1 wie am Desktop
+
+Der Server hatte eine 76-zeilige Nachbildung der 319-zeiligen Desktop-Logik.
+Konkrete Folgen davon:
+
+| Vorher im Server | Jetzt |
+|---|---|
+| „Marvel's Daredevil Season 1“ und „… Season 2“ wurden zu **zwei getrennten Serien** | eine Serie, beide Staffeln drin |
+| Suchte nur **eine Ebene tief** — Filme in Unterordnern fehlten | rekursiv bis 8 Ebenen |
+| Nahm blind das **erste** TMDb-Suchergebnis | Treffer-Bewertung nach Titel, Jahr und Folgenzahl |
+| `sample.mkv` und `-trailer.mkv` landeten als echte Titel in der Bibliothek | werden übersprungen |
+| Gemerkte Zuordnungen hingen am **Ordnerpfad** — nach Umbenennen weg | hängen am stabilen Namens-Schlüssel |
+| Mehrteiler `S01E01-E02` wurde als E01 gelesen | als E01–E02 erkannt |
+| „Specials“ wurden nicht als Staffel 0 erkannt | werden erkannt |
+| Verschieben einer Staffel auf eine andere Serie wurde beim nächsten Scan **rückgängig gemacht** | wird gemerkt und wieder angewandt |
+| Zwei Qualitäten derselben Folge = **zwei Folgen** in der Liste | eine Folge mit zwei Dateiversionen |
+| Ein ins Leere zeigender Docker-Mount **löschte die ganze Bibliothek** | wird erkannt, Einträge bleiben erhalten |
+
+Zusätzlich die Plex-/Jellyfin-Konventionen: Provider-Tags im Ordnernamen
+(`Firefly (2002) [tmdbid-1437]`), `.nfo`-Dateien, `Extras`-Ordner werden
+ignoriert, `www.SeitenName.org - `-Präfixe fliegen raus.
+
+**Belegt durch Tests:** 38 Parser-Tests und 20 Scanner-Tests, die eine echte
+Beispiel-Bibliothek auf der Festplatte anlegen und den Scanner darüberlaufen
+lassen. Beide laufen ab jetzt bei jedem Push automatisch mit.
+
+---
+
+## Teil 3: Vorschaubilder auf der Zeitleiste
+
+Das war dein Punkt „die Vorschaubilder, wenn ich mit der Maus drüberfahre“.
+
+**Der Hauptfehler:** Der Server gab die Bild-Adresse **ohne Zugangs-Token**
+zurück. Ein `<img>`-Tag kann keine Kopfzeilen mitschicken — sobald ein
+Server-Passwort gesetzt war, antwortete der Server mit „nicht angemeldet“ und
+die Vorschau blieb **dauerhaft leer**.
+
+Weiter behoben:
+
+- **Bilderstreifen wie bei Plex** („Trickplay“): Beim Abspielen wird im
+  Hintergrund **ein einziges** großes Bild mit allen Vorschaupositionen erzeugt.
+  Der Browser lädt es einmal — danach kostet jede Mausbewegung null Netzwerk und
+  die Vorschau springt **sofort** mit. Auch am Handy und am Fernseher.
+- **Die eingestellte Größe wirkt jetzt wirklich.** Vorher wurde das Bild immer
+  mit 320 Pixeln erzeugt und in der Anzeige hochskaliert (= unscharf). Jetzt
+  wird es in der gewählten Größe erzeugt, inklusive Berücksichtigung von
+  4K-Bildschirmen. Zwei neue Stufen: „Sehr groß“ und „Riesig“.
+- **Die Höhe folgt dem echten Seitenverhältnis** des Videos. Vorher war die
+  Kachel starr 16:9 — bei 4:3-Material und Cinemascope war das Bild beschnitten.
+- **Bremse gegen Überlastung:** höchstens 2 gleichzeitige ffmpeg-Aufrufe,
+  Zeitlimit pro Aufruf, Cache-Obergrenze (Standard 512 MB, vorher unbegrenzt).
+- **Sicherheitslücke geschlossen:** Die Vorschau-Adresse nahm vorher **jeden**
+  Dateipfad entgegen. Jetzt werden nur Dateien akzeptiert, die tatsächlich in
+  der Bibliothek stehen.
+
+### Und die anderen Bilder (Poster + Hintergrund)
+
+- Poster und Hintergründe kommen jetzt aus den **Detaildaten** von TMDb statt
+  aus dem Suchtreffer, und in **höherer Auflösung** (Poster w500 statt w342,
+  Hintergrund passend zur Bildschirmbreite bis „original“).
+- **Lokale Bilder gewinnen**, wie bei Plex und Jellyfin: `poster.jpg`,
+  `folder.jpg`, `cover.jpg`, `fanart.jpg`, `banner.jpg`, `logo.png`,
+  `season01-poster.jpg` und `<Dateiname>-thumb.jpg` werden gefunden und
+  bevorzugt. Löschst du so eine Datei wieder, fällt die Anzeige sauber auf das
+  TMDb-Bild zurück.
+- **Fehlende Folgenbilder werden erzeugt:** Hat TMDb kein Standbild, schneidet
+  ffmpeg automatisch eines bei 25 % der Laufzeit heraus und behält es dauerhaft.
+  Keine leeren Kacheln mehr.
+- Handy-App und TV-Browser bekommen diese Bilder ebenfalls (sie hingen vorher
+  an einer älteren Schnittstelle, die die neuen Bilder nicht mitgeliefert hat).
+
+---
+
+## Teil 4: Was die unabhängige Code-Prüfung gefunden hat
+
+Nach dem Umbau habe ich den kompletten Server-Code von einem zweiten Durchgang
+gegenprüfen lassen. 13 echte Fehler kamen zurück, alle behoben — die drei
+wichtigsten:
+
+1. **Nachträglich hinzugefügte 4K-Fassungen wurden nie erkannt.** Eine
+   Abbruchbedingung stand an der falschen Stelle, dadurch war die ganze
+   Mehrfach-Qualitäten-Funktion im Dauerbetrieb wirkungslos.
+2. **Erzeugte Folgenbilder wurden vom Cache-Aufräumer wieder gelöscht** — und
+   weil die Datenbank sich merkte „schon erzeugt“, kamen sie nie wieder. Sie
+   liegen jetzt in einem eigenen, geschützten Ordner.
+3. **Ein leerer Docker-Mount hätte die komplette Bibliothek gelöscht.** Zeigt
+   ein Bind-Mount auf einen Host-Pfad, den es nicht gibt, entsteht im Container
+   ein leerer Ordner — vorher hätte ein einziger Scan alles verworfen. Jetzt
+   wird das erkannt und die Einträge bleiben erhalten. Dafür gibt es einen
+   eigenen Test.
+
+Ebenfalls behoben: Abstürze durch unbehandelte Hintergrundfehler, ein
+Datenbankfehler beim Zusammenführen zweier Serien, die Ordner-Durchsuchung
+akzeptierte beliebige Systempfade (`/etc`), und Hash-Kollisionen bei den
+Vorschaubildern (eine Datei konnte das Bild einer anderen zeigen).
+
+---
+
+## Teil 5: Was DU jetzt tun musst
+
+Alle Befehle sind für **PowerShell** und zum Kopieren gedacht. Rechtsklick auf
+den Start-Knopf → **Terminal** bzw. **Windows PowerShell**.
+
+### Schritt 1 — Änderungen ansehen
+
+Alle 34 geänderten Dateien sind bereits **vorgemerkt** (`git add` ist erledigt),
+aber noch **nicht committet** — der Commit muss von Windows aus laufen.
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix"
+git status
+```
+
+Wenn du dir die Änderungen im Detail ansehen willst:
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix"
+git diff --cached --stat
+```
+
+### Schritt 2 — Committen und veröffentlichen (löst den Docker-Build aus)
+
+Falls Git meckert, dass ein anderer Prozess läuft, zuerst die stehengebliebene
+Sperrdatei entfernen:
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix"
+Remove-Item -Force .git\index.lock -ErrorAction SilentlyContinue
+```
+
+Dann committen und hochladen:
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix"
+git add -A
+git commit -m "Server-Ueberholung: Erkennung 1:1 wie Desktop, Vorschaubilder, Supabase-Sync repariert"
+git push origin feature/zimaos-docker-server
+```
+
+Danach baut GitHub automatisch das neue Server-Image. Der Fortschritt ist hier
+zu sehen: `https://github.com/BastiLd/GHGFLIX/actions` — dauert etwa 5–10
+Minuten (es werden zwei Architekturen gebaut).
+
+### Schritt 3 — ZimaOS aktualisieren
+
+**Die Version, die du brauchst: `2.3.0`**
+
+Das Image heißt:
 
 ```
-cd mobile
+ghcr.io/bastild/ghgflix-server:2.3.0
+```
+
+Zwei Wege:
+
+**A) Einfach (empfohlen):** ZimaOS → App Store → GHGFlix → **Update**.
+Das zieht `:latest`, was nach dem Build identisch zu `2.3.0` ist.
+
+**B) Fest auf die Version:** In deiner docker-compose die Zeile
+
+```yaml
+image: ghcr.io/bastild/ghgflix-server:latest
+```
+
+ersetzen durch
+
+```yaml
+image: ghcr.io/bastild/ghgflix-server:2.3.0
+```
+
+und die App neu importieren.
+
+**Prüfen, ob die neue Version wirklich läuft** — im Browser aufrufen:
+
+```
+http://<server-ip>:8484/api/ping
+```
+
+Dort muss `"version":"2.3.0"` stehen. Steht dort noch `2.2.0`, hat das Update
+nicht gegriffen (dann in ZimaOS/Portainer das Image neu ziehen und den Container
+neu erstellen — deine Daten in `/DATA/AppData/ghgflix/data` bleiben erhalten).
+
+### Schritt 4 — Supabase
+
+Die neuen Tabellen habe ich in deinem Projekt bereits angelegt, da musst du
+nichts tun. **Falls du später ein neues Projekt aufsetzt**, muss
+`supabase/schema.sql` einmal im SQL-Editor laufen. Vollständige Anleitung:
+[`docs/SUPABASE.md`](docs/SUPABASE.md).
+
+### Schritt 5 — Windows-App neu bauen
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix"
+npm install
+npm run tauri build
+```
+
+Der fertige Installer liegt danach hier:
+
+```powershell
+explorer "$env:USERPROFILE\Documents\GHGFlix\src-tauri\target\release\bundle"
+```
+
+Nur schnell testen, ohne zu bauen:
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix"
+npm run tauri dev
+```
+
+Falls beim Bauen etwas klemmt, zuerst die Prüfungen laufen lassen — sie sagen
+dir genau, wo es hakt:
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix"
+npx tsc --noEmit
+node server\src\parser.js --test
+cd "$env:USERPROFILE\Documents\GHGFlix\server"
+node test\scan.test.mjs
+cd "$env:USERPROFILE\Documents\GHGFlix\src-tauri"
+cargo test --lib
+```
+
+### Schritt 6 — Den Sync einmal scharf schalten
+
+1. GHGFlix starten → **Einstellungen → Konto & Sync** → **Anmelden**
+   (E-Mail `bastian.klaus2010@gmail.com`).
+2. Bei der Frage **„Bisherigen Fortschritt übernehmen?“** → **Ja, hochladen**.
+3. In den Einstellungen muss die Statuszeile grün werden:
+   `● Verbunden — letzter Abgleich …`
+4. **Gegenprobe:** Supabase öffnen → **Table Editor** → `watch_progress`.
+   Dort müssen jetzt Zeilen stehen. Vorher waren es **0** — genau das war der
+   Beweis für den Fehler.
+
+### Schritt 7 — Handy-App neu bauen (optional, Version 1.2.0)
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix\mobile"
 npm install
 npx eas-cli build --platform android --profile preview
 ```
 
-Am Ende bekommst du einen Download-Link zur `GHGFlix.apk`.
+---
 
-**B. Auf den Fernseher bringen (USB-Stick):**
+## Teil 6: Neue Einstellungen im docker-compose
 
-1. APK auf einen **FAT32-USB-Stick** kopieren
-2. Am TV „Apps unbekannter Herkunft“ erlauben:
-   - **Fire TV:** Einstellungen → Mein Fire TV → Entwickleroptionen → „Apps
-     unbekannter Herkunft“ AN *(Entwickleroptionen nicht da? Einstellungen →
-     Mein Fire TV → Info → 7× auf die Seriennummer klicken)*
-   - **Android TV:** Einstellungen → Apps → Sicherheit & Einschränkungen →
-     „Unbekannte Quellen“ für deinen Datei-Manager AN
-3. Datei-Manager-App aus dem TV-Store laden (z. B. „X-plore“ / „File Commander“)
-4. Stick einstecken → Datei-Manager → `GHGFlix.apk` → **Installieren**
-5. GHGFlix öffnen → Server-Adresse eintragen (`192.168.1.50:8484` reicht,
-   `http://` wird ergänzt) → ggf. Passwort → Profil wählen → schauen
+Alle optional — die Standardwerte passen für eine ZimaBoard:
 
-*Ohne USB-Port (Fire TV Stick):* App **„Downloader“** aus dem Amazon-Store
-installieren, den EAS-Download-Link der APK eingeben — installiert direkt.
-Details + adb-Variante: [`tv/README.md`](tv/README.md)
+```yaml
+TRICKPLAY: "on"            # Bilderstreifen für die Zeitleiste (off = aus)
+TRICKPLAY_INTERVAL: "10"   # Sekunden zwischen zwei Vorschaubildern
+TRICKPLAY_WIDTH: "240"     # Breite eines Vorschaubildes in Pixeln
+THUMB_CACHE_MB: "512"      # Obergrenze für den Bild-Zwischenspeicher
+THUMB_CONCURRENCY: "2"     # gleichzeitige ffmpeg-Aufrufe (schwaches NAS: 1)
+MIN_VIDEO_MB: "1"          # kleinere Dateien gelten als Reste
+```
+
+Der Bilderstreifen wird beim **ersten Abspielen** einer Datei im Hintergrund
+erzeugt (immer nur einer gleichzeitig, damit das NAS nicht einbricht). Bei einem
+45-Minuten-Film dauert das auf einer ZimaBoard einige Minuten — danach ist die
+Vorschau für diese Datei für immer sofort da.
 
 ---
 
-## Teil 4: Anleitung Handy 📱
+## Teil 7: Bewusst offen geblieben
 
-### Variante 1: PWA (ohne alles, 30 Sekunden)
-
-`http://<server-ip>:8484` im Handy-Browser öffnen → Menü → **„Zum
-Startbildschirm hinzufügen“**. Sieht aus wie eine App, kann alles Wichtige.
-
-### Variante 2: Native App (Expo)
-
-- **Zum Ausprobieren:** Expo Go aus dem Store laden, am PC `cd mobile && npm
-  install && npx expo start`, QR-Code scannen (Handy + PC im selben WLAN).
-- **Dauerhaft:** die oben gebaute `GHGFlix.apk` aufs Handy laden und
-  installieren (gleiche APK wie für den TV).
-
-**In der App:** Adressen für Zuhause/Tailscale/Domain eintragen —
-„Automatisch wechseln“ nimmt immer die erste erreichbare (zuhause LAN,
-unterwegs Tailscale). Herz ♥ = Meine Liste · Folge **gedrückt halten** =
-gesehen/ungesehen · Fortschritt landet automatisch auf allen Geräten.
+- **Lokale Bilddateien in der Windows-App.** Der Server nutzt jetzt
+  `poster.jpg` & Co. Für die Windows-App müsste dafür der Rust-Teil geändert
+  werden — das konnte ich hier nicht kompilieren und testen, und ungetesteten
+  Rust-Code auszuliefern hätte den Desktop-Build gefährdet. Über den Server
+  (Browser/Handy/TV) funktioniert es vollständig.
+- **Native Android-TV-App** — unverändert der größte offene Punkt aus dem alten
+  Plan (braucht echte Geräte zum Testen). Der TV-Browser-Modus läuft.
+- **Zwei gleichnamige Serienordner in verschiedenen Bibliotheken** (z. B.
+  deutsche und englische Fassung) werden zu einer Serie zusammengefasst — so
+  verhält sich die Windows-App auch. Bei gleicher Auflösung gewinnt die zuerst
+  eingelesene Datei, es wechselt also nichts von selbst.
 
 ---
 
-## Teil 5: Bewusst offen (Backlog)
+## Anhang: Geänderte Dateien
 
-Vollständige Liste mit Begründungen in [`PLAN_STATUS.md`](PLAN_STATUS.md).
-Die größten Brocken: **native Android-TV-App** mit echter D-Pad-Fokusführung
-(TV-005…TV-032 — braucht Fire-TV-/Android-TV-Hardware zum Testen),
-Untertitel & Audiospur-Wahl im Handy-Player (MOB-011/012), Chromecast
-(MOB-004), QR-Code-Pairing (MOB-018/TV-013) und Offline-Downloads (MOB-003).
-Empfehlung fürs nächste Mal: mit der nativen TV-App anfangen — Grundlage
-(gemeinsame Codebasis mit `mobile/`, Sync, A/V-Fixes) liegt jetzt bereit.
+**Server:** `parser.js` (neu geschrieben), `scanner.js` (neu geschrieben),
+`tmdb.js` (neu geschrieben), `artwork.js` (neu), `thumbs.js` (neu), `db.js`,
+`invoke.js`, `index.js`, `stream.js`, `supabase.js`, `test/scan.test.mjs` (neu)
+
+**Windows-App / Weboberfläche:** `lib/supabase.ts` (neu geschrieben),
+`lib/img.ts`, `lib/api.ts`, `components/Scrubber.tsx`, `pages/Player.tsx`,
+`pages/Login.tsx`, `pages/Profiles.tsx`, `pages/Settings.tsx`, `main.tsx`
+
+**Sonstiges:** `supabase/schema.sql`, `docs/SUPABASE.md` (neu),
+`docker-compose.yml`, beide GitHub-Workflows, alle Versionsnummern

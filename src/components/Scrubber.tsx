@@ -1,9 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatTime } from "../lib/format";
 
-/** Netflix/Plex-style seek bar: hover or drag to scrub, with a live thumbnail
- *  preview rendered above the cursor. Thumbnails are fetched on demand (throttled
- *  + cached per `interval`-second bucket) so we never spam the extractor. */
+/** Vorgeneriertes Sprite-Blatt (Trickplay) — EIN Bild mit allen Vorschau-
+ *  positionen. Liegt es vor, kostet jede Mausbewegung null Netzwerk. */
+export interface TrickplaySprite {
+  url: string;
+  /** Sekunden zwischen zwei Bildern */
+  interval: number;
+  tileWidth: number;
+  tileHeight: number;
+  cols: number;
+  rows: number;
+  count: number;
+}
+
+/** Netflix/Plex-artige Suchleiste: drüberfahren oder ziehen zum Spulen, mit
+ *  Vorschaubild über dem Zeiger.
+ *
+ *  Zwei Quellen für das Bild:
+ *   1. `sprite` — vorgeneriertes Blatt, sofortige Anzeige ohne Nachladen
+ *   2. `getThumb` — Einzelbild auf Anfrage (gedrosselt + gecacht je Zeitfenster)
+ */
 export function Scrubber({
   position,
   duration,
@@ -12,6 +29,8 @@ export function Scrubber({
   getThumb,
   interval = 5,
   previewWidth = 176,
+  aspect = 16 / 9,
+  sprite = null,
   markers,
   intro,
 }: {
@@ -22,9 +41,13 @@ export function Scrubber({
   getThumb: (t: number) => Promise<string | null>;
   interval?: number;
   previewWidth?: number;
-  /** chapter positions (seconds) rendered as small ticks */
+  /** echtes Seitenverhältnis des Videos (Breite/Höhe) — damit die Vorschau bei
+   *  4:3- oder 21:9-Material nicht mehr verzerrt bzw. beschnitten wird */
+  aspect?: number;
+  sprite?: TrickplaySprite | null;
+  /** Kapitelmarken (Sekunden) als kleine Striche */
   markers?: number[];
-  /** intro window rendered as a highlighted segment */
+  /** Intro-Bereich als hervorgehobener Abschnitt */
   intro?: { start: number; end: number } | null;
 }) {
   const BUCKET = Math.max(1, interval);
@@ -68,6 +91,7 @@ export function Scrubber({
   const scheduleThumb = useCallback(
     (t: number) => {
       if (duration <= 0) return;
+      if (sprite) return; // Sprite-Blatt deckt alles ab — kein Nachladen nötig
       const bucket = Math.min(duration, Math.max(0, Math.round(t / BUCKET) * BUCKET));
       const cached = cacheRef.current.get(bucket);
       if (cached) {
@@ -78,7 +102,7 @@ export function Scrubber({
       wantRef.current = bucket;
       if (timerRef.current == null && !busyRef.current) timerRef.current = window.setTimeout(runThumb, 110);
     },
-    [duration, runThumb, BUCKET],
+    [duration, runThumb, BUCKET, sprite],
   );
 
   const timeFromEvent = useCallback(
@@ -142,26 +166,51 @@ export function Scrubber({
   const hoverPct = hover && duration > 0 ? Math.min(100, (hover.t / duration) * 100) : 0;
   const bufPct = duration > 0 ? Math.min(100, (buffered / duration) * 100) : 0;
 
-  // clamp the floating preview so it never overflows the track edges
+  // Vorschau am Rand einfangen, damit sie nie über die Leiste hinausragt
   const previewW = previewWidth;
+  // Höhe folgt dem ECHTEN Seitenverhältnis des Videos (vorher fest 16:9 —
+  // dadurch war die Vorschau bei 4:3- und Cinemascope-Material beschnitten)
+  const safeAspect = Number.isFinite(aspect) && aspect > 0.2 && aspect < 5 ? aspect : 16 / 9;
+  const previewH = Math.round(previewW / safeAspect);
   const clampX = hover ? Math.min(Math.max(hover.x, previewW / 2), (trackRef.current?.clientWidth ?? 0) - previewW / 2) : 0;
+
+  // Sprite-Blatt: Kachel zur Zeit ausrechnen und per background-position zeigen
+  let spriteStyle: React.CSSProperties | null = null;
+  if (sprite && hover && sprite.count > 0) {
+    const idx = Math.min(sprite.count - 1, Math.max(0, Math.floor(hover.t / sprite.interval)));
+    const col = idx % sprite.cols;
+    const row = Math.floor(idx / sprite.cols);
+    const scale = previewW / sprite.tileWidth;
+    const tileH = sprite.tileHeight * scale;
+    spriteStyle = {
+      backgroundImage: `url(${sprite.url})`,
+      backgroundSize: `${sprite.cols * previewW}px ${sprite.rows * tileH}px`,
+      backgroundPosition: `-${col * previewW}px -${row * tileH}px`,
+      backgroundRepeat: "no-repeat",
+      height: tileH,
+    };
+  }
 
   return (
     <div className="relative flex-1">
-      {/* floating preview */}
+      {/* schwebende Vorschau */}
       {hover && (
         <div
           className="absolute -top-2 -translate-y-full -translate-x-1/2 pointer-events-none z-30"
           style={{ left: clampX }}
         >
           <div className="rounded-lg overflow-hidden border border-white/20 bg-black shadow-2xl" style={{ width: previewW }}>
-            <div className="aspect-video bg-ghg-bg2 flex items-center justify-center">
-              {thumb ? (
-                <img src={thumb} alt="" className="w-full h-full object-cover" />
-              ) : (
-                <span className="text-[11px] text-ghg-muted">Vorschau …</span>
-              )}
-            </div>
+            {spriteStyle ? (
+              <div style={spriteStyle} />
+            ) : (
+              <div className="bg-ghg-bg2 flex items-center justify-center" style={{ height: previewH }}>
+                {thumb ? (
+                  <img src={thumb} alt="" className="w-full h-full object-cover" draggable={false} />
+                ) : (
+                  <span className="text-[11px] text-ghg-muted">Vorschau …</span>
+                )}
+              </div>
+            )}
           </div>
           <p className="text-center mt-1 text-xs font-mono font-semibold drop-shadow">{formatTime(hover.t)}</p>
         </div>

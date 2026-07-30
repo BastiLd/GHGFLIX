@@ -123,6 +123,54 @@ export function openDb() {
       path TEXT NOT NULL,
       PRIMARY KEY (show_id, season)
     );
+    -- ── Desktop-Parität (siehe src-tauri/src/db.rs) ────────────────────────
+    -- Gemerkte manuelle Zuordnungen NACH STABILEM KEY (nicht nach Ordnerpfad).
+    -- Der Ordner kann umbenannt/verschoben werden — der Key aus dem Titel
+    -- bleibt gleich, deshalb überlebt die Zuordnung auch "neu aufbauen".
+    CREATE TABLE IF NOT EXISTS identity_keys (
+      key TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('movie','tv')),
+      tmdb_id INTEGER NOT NULL,
+      PRIMARY KEY (key, kind)
+    );
+    -- Stabile Gruppierungs-Keys einer Serie (eine Serie kann mehrere haben,
+    -- z. B. wenn Ordner unterschiedlich heißen: "Daredevil", "Marvel's Daredevil")
+    CREATE TABLE IF NOT EXISTS show_keys (
+      key TEXT NOT NULL PRIMARY KEY,
+      show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE
+    );
+    -- Pro-Datei-Platzierung: "diese Datei gehört zu TMDb-Serie X als SxxEyy".
+    -- Wird bei JEDEM Scan neu angewandt und schlägt die automatische Erkennung.
+    CREATE TABLE IF NOT EXISTS placements (
+      path TEXT NOT NULL PRIMARY KEY,
+      show_tmdb INTEGER NOT NULL,
+      season INTEGER NOT NULL,
+      episode INTEGER NOT NULL
+    );
+    -- Mehrere Dateien (Qualitäten) derselben Folge — Desktop-Modell.
+    -- episodes.path bleibt die "beste" Datei, damit alter Code weiterläuft.
+    CREATE TABLE IF NOT EXISTS episode_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      episode_id INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+      path TEXT NOT NULL UNIQUE,
+      width INTEGER, height INTEGER, duration REAL,
+      vcodec TEXT, acodec TEXT, container TEXT,
+      added_at INTEGER NOT NULL
+    );
+    -- Trickplay: vorgenerierte Sprite-Sheets für die Zeitleisten-Vorschau
+    -- (wie Plex' "trickplay" / Jellyfins Trickplay-Plugin).
+    CREATE TABLE IF NOT EXISTS trickplay (
+      path TEXT NOT NULL PRIMARY KEY,
+      interval INTEGER NOT NULL,
+      tile_w INTEGER NOT NULL,
+      tile_h INTEGER NOT NULL,
+      cols INTEGER NOT NULL,
+      rows INTEGER NOT NULL,
+      count INTEGER NOT NULL,
+      sheets INTEGER NOT NULL DEFAULT 1,
+      file TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
   `);
   // column migrations for desktop-app parity (safe to re-run)
   const addCol = (table, ddl) => {
@@ -143,6 +191,43 @@ export function openDb() {
   addCol("episodes", "runtime INTEGER");
   addCol("episodes", "intro_start REAL");
   addCol("episodes", "intro_end REAL");
+  // ── Bilder (Vorschau) ──
+  // local_* = Bilddatei AUF DER PLATTE (poster.jpg/fanart.jpg neben dem Film,
+  // wie Plex/Jellyfin) bzw. ein aus dem Video erzeugtes Standbild. Hat Vorrang
+  // vor TMDb, wenn der Nutzer eigene Bilder hinlegt.
+  addCol("shows", "local_poster TEXT");
+  addCol("shows", "local_backdrop TEXT");
+  addCol("shows", "logo TEXT");
+  addCol("movies", "local_poster TEXT");
+  addCol("movies", "local_backdrop TEXT");
+  addCol("movies", "logo TEXT");
+  addCol("episodes", "local_still TEXT");
+  // aus dem Video erzeugtes Standbild (Jellyfin-Stil), damit wir es beim
+  // nächsten Scan nicht erneut extrahieren
+  addCol("episodes", "still_generated INTEGER NOT NULL DEFAULT 0");
+  // Mehrteiler: "S01E01-E02" → episode=1, episode_end=2
+  addCol("episodes", "episode_end INTEGER");
+  // echtes Seitenverhältnis (für die Vorschau-Kachel und die Qualitätsanzeige)
+  addCol("episodes", "aspect REAL");
+  addCol("movies", "aspect REAL");
+  // Serien-Gruppierungsschlüssel direkt an der Zeile (schneller als Join)
+  addCol("shows", "show_key TEXT");
+  addCol("shows", "overview_de TEXT");
+  // Reihenfolge/Extras
+  addCol("movies", "tagline TEXT");
+  addCol("shows", "tagline TEXT");
+  try {
+    db.exec("CREATE INDEX IF NOT EXISTS idx_shows_tmdb ON shows(tmdb_id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_movies_tmdb ON movies(tmdb_id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_movies_path ON movies(path)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_episodes_path ON episodes(path)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_favorites_profile ON favorites(profile_id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_progress_profile ON progress(profile_id, media_type, ref_id)");
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_show_keys_show ON show_keys(key)");
+  } catch { /* ältere SQLite-Version — Indizes sind optional */ }
+  // Einmalige Migration: alte identity_map (nach Ordnerpfad) bleibt bestehen,
+  // wird aber zusätzlich als Key abgelegt, damit Umbenennungen sie nicht mehr
+  // wertlos machen. Passiert lazy im Scanner (dort ist der Parser verfügbar).
   // default profile so everything works out of the box
   const n = db.prepare("SELECT COUNT(*) c FROM profiles").get().c;
   if (n === 0) {
@@ -187,6 +272,55 @@ export function removeLibrary(id) {
   if (row) d.prepare("DELETE FROM libraries WHERE id = ?").run(id);
   return row;
 }
+
+// ── Serien-Gruppierungsschlüssel (Desktop-Parität) ──────────────────────────
+
+/** Serie zu einem stabilen Key finden. */
+export const showIdForKey = (key) =>
+  openDb().prepare("SELECT show_id FROM show_keys WHERE key = ?").get(key)?.show_id ?? null;
+
+/** Key an eine Serie hängen, wenn er noch frei ist (idempotent). */
+export function setShowKeyIfAbsent(key, showId) {
+  if (!key) return;
+  openDb().prepare("INSERT OR IGNORE INTO show_keys (key, show_id) VALUES (?, ?)").run(key, showId);
+}
+
+/** Alle Keys einer Serie (für gemerkte Zuordnungen). */
+export const keysForShow = (showId) =>
+  openDb().prepare("SELECT key FROM show_keys WHERE show_id = ?").all(showId).map((r) => r.key);
+
+/** Keys einer verschwundenen Serie auf die überlebende umbiegen. */
+export const moveShowKeys = (fromId, toId) =>
+  openDb().prepare("UPDATE OR IGNORE show_keys SET show_id = ? WHERE show_id = ?").run(toId, fromId);
+
+// ── gemerkte manuelle Zuordnungen ───────────────────────────────────────────
+
+export const identityOverride = (kind, key) =>
+  openDb().prepare("SELECT tmdb_id FROM identity_keys WHERE kind = ? AND key = ?").get(kind, key)?.tmdb_id ?? null;
+
+export function rememberIdentityKey(kind, key, tmdbId) {
+  if (!key) return;
+  openDb()
+    .prepare(
+      "INSERT INTO identity_keys (key, kind, tmdb_id) VALUES (?,?,?) ON CONFLICT(key,kind) DO UPDATE SET tmdb_id=excluded.tmdb_id",
+    )
+    .run(key, kind, tmdbId);
+}
+
+export const forgetIdentityKey = (kind, key) =>
+  openDb().prepare("DELETE FROM identity_keys WHERE kind = ? AND key = ?").run(kind, key);
+
+// ── Pro-Datei-Platzierungen ─────────────────────────────────────────────────
+
+export const placementFor = (path) =>
+  openDb().prepare("SELECT show_tmdb, season, episode FROM placements WHERE path = ?").get(path) ?? null;
+
+export const setPlacement = (path, showTmdb, season, episode) =>
+  openDb()
+    .prepare(
+      "INSERT INTO placements (path, show_tmdb, season, episode) VALUES (?,?,?,?) ON CONFLICT(path) DO UPDATE SET show_tmdb=excluded.show_tmdb, season=excluded.season, episode=excluded.episode",
+    )
+    .run(path, showTmdb, season, episode);
 
 export const getSetting = (key) => openDb().prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value ?? null;
 export const setSetting = (key, value) =>

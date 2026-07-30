@@ -3,13 +3,19 @@
 // unmodified desktop React UI run in the browser: src/lib/backend.ts routes
 // every `invoke()` here, with identical argument and result shapes
 // (camelCase, desktop types from src/lib/types.ts).
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, normalize, basename, dirname } from "node:path";
 import { spawn } from "node:child_process";
-import { openDb, getSetting, setSetting, listLibraries, addLibrary, removeLibrary, DATA_DIR } from "./db.js";
-import { scanLibrary, scanState, removeLibraryContent, detectLibraries, primaryRoot, isSystemDir, applyPendingProgress } from "./scanner.js";
+import { openDb, getSetting, setSetting, listLibraries, addLibrary, removeLibrary, DATA_DIR, setPlacement } from "./db.js";
+import {
+  scanLibrary, scanState, removeLibraryContent, detectLibraries, primaryRoot, isSystemDir, BROWSE_ROOTS,
+  applyPendingProgress, refreshAllMetadata, applyShowMatch, applyMovieMatch, refreshEpisodeMeta,
+  rememberShowIdentity, rememberMovieIdentity,
+} from "./scanner.js";
 import { canDirectPlay, ffprobe } from "./stream.js";
 import * as tmdb from "./tmdb.js";
+import { asLocalRef, isLocalRef } from "./artwork.js";
+import { makeThumb, trickplayInfo, ensureTrickplay, dirSize, clearThumbCache, THUMB_DIR, TRICK_DIR } from "./thumbs.js";
 
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
 const FFPROBE = process.env.FFPROBE_PATH || "ffprobe";
@@ -27,6 +33,13 @@ function genresJson(g) {
   return JSON.stringify(String(g).split(",").map((s) => s.trim()).filter(Boolean));
 }
 
+/**
+ * Bildpfad für die Oberfläche. Lokale Dateien (poster.jpg neben dem Film,
+ * Plex/Jellyfin-Stil) haben Vorrang vor TMDb und werden als "local:<Pfad>"
+ * ausgeliefert — /api/img erkennt das Präfix und liefert die Datei direkt aus.
+ */
+const pickArt = (local, remote) => (local ? (isLocalRef(local) ? local : asLocalRef(local)) : (remote ?? null));
+
 function movieOut(r) {
   if (!r) return null;
   return {
@@ -36,8 +49,10 @@ function movieOut(r) {
     year: r.year ?? null,
     tmdbId: r.tmdb_id ?? null,
     overview: r.overview ?? null,
-    posterPath: r.poster ?? null,
-    backdropPath: r.backdrop ?? null,
+    tagline: r.tagline ?? null,
+    posterPath: pickArt(r.local_poster, r.poster),
+    backdropPath: pickArt(r.local_backdrop, r.backdrop),
+    logoPath: r.logo ?? null,
     genres: genresJson(r.genres),
     runtime: r.runtime_min ?? (r.duration ? Math.round(r.duration / 60) : null),
     rating: r.rating ?? null,
@@ -45,6 +60,7 @@ function movieOut(r) {
     identified: !!(r.identified || r.tmdb_id),
     width: r.width ?? null,
     height: r.height ?? null,
+    aspect: r.aspect ?? (r.width && r.height ? r.width / r.height : null),
     cert: r.cert ?? null,
   };
 }
@@ -59,8 +75,10 @@ function showOut(r) {
     year: r.year ?? null,
     tmdbId: r.tmdb_id ?? null,
     overview: r.overview ?? null,
-    posterPath: r.poster ?? null,
-    backdropPath: r.backdrop ?? null,
+    tagline: r.tagline ?? null,
+    posterPath: pickArt(r.local_poster, r.poster),
+    backdropPath: pickArt(r.local_backdrop, r.backdrop),
+    logoPath: r.logo ?? null,
     genres: genresJson(r.genres),
     rating: r.rating ?? null,
     addedAt: r.added_at,
@@ -80,15 +98,19 @@ function showOut(r) {
 
 function episodeOut(r, showTitle = null) {
   if (!r) return null;
+  const files = r.file_count ?? db().prepare("SELECT COUNT(*) c FROM episode_files WHERE episode_id=?").get(r.id)?.c ?? 1;
   return {
     id: r.id,
     showId: r.show_id,
     season: r.season,
     episode: r.episode,
+    episodeEnd: r.episode_end ?? null,
     path: r.path,
     title: r.title ?? null,
     overview: r.overview ?? null,
-    stillPath: r.still ?? null,
+    // TMDb-Standbild zuerst; sonst das lokal danebenliegende bzw. das aus dem
+    // Video geschnittene Bild (Jellyfin-Verhalten) — nie mehr eine leere Kachel.
+    stillPath: r.still ?? (r.local_still ? asLocalRef(r.local_still) : null),
     airDate: r.air_date ?? null,
     runtime: r.runtime ?? (r.duration ? Math.round(r.duration / 60) : null),
     addedAt: r.added_at,
@@ -97,7 +119,8 @@ function episodeOut(r, showTitle = null) {
     showTitle: showTitle ?? r.show_title ?? null,
     width: r.width ?? null,
     height: r.height ?? null,
-    fileCount: 1,
+    aspect: r.aspect ?? (r.width && r.height ? r.width / r.height : null),
+    fileCount: Math.max(1, files),
   };
 }
 
@@ -111,6 +134,16 @@ function progressOut(r) {
     watched: !!r.watched,
     updatedAt: r.updated_at,
   };
+}
+
+/** Nur Dateien, die wirklich in der Bibliothek stehen, dürfen an ffmpeg. */
+function isLibraryFile(d, path) {
+  if (!path) return false;
+  return !!(
+    d.prepare("SELECT 1 FROM movies WHERE path = ?").get(path) ||
+    d.prepare("SELECT 1 FROM episodes WHERE path = ?").get(path) ||
+    d.prepare("SELECT 1 FROM episode_files WHERE path = ?").get(path)
+  );
 }
 
 const getEpisodeRow = (id) =>
@@ -127,64 +160,15 @@ const rememberIdentity = (folder, kind, tmdbId) =>
 
 // ── TMDb enrichment helpers ──────────────────────────────────────────────────
 
+// Anreicherung läuft über dieselben Funktionen wie der Scan (eine Wahrheit),
+// damit "Identifizieren" exakt dasselbe Ergebnis liefert wie die Auto-Erkennung.
 async function enrichShow(showId, tmdbId) {
-  const det = await tmdb.showDetails(tmdbId);
-  if (!det) return;
-  const cert = await tmdb.certification("tv", tmdbId).catch(() => null);
-  db()
-    .prepare(
-      `UPDATE shows SET tmdb_id=?, title=COALESCE(?, title), overview=?, poster=?, backdrop=?, genres=?, rating=?,
-        year=?, last_year=?, status=?, runtime=?, cert=?, identified=1 WHERE id=?`,
-    )
-    .run(
-      tmdbId,
-      det.name ?? null,
-      det.overview ?? null,
-      det.poster_path ?? null,
-      det.backdrop_path ?? null,
-      JSON.stringify((det.genres ?? []).map((g) => g.name)),
-      det.vote_average ?? null,
-      parseInt((det.first_air_date || "").slice(0, 4), 10) || null,
-      parseInt((det.last_air_date || "").slice(0, 4), 10) || null,
-      det.status ?? null,
-      det.episode_run_time?.[0] ?? null,
-      cert,
-      showId,
-    );
-  // refresh episode metadata per season
-  const seasons = db().prepare("SELECT DISTINCT season FROM episodes WHERE show_id=?").all(showId);
-  for (const { season } of seasons) {
-    const eps = await tmdb.seasonEpisodeList(tmdbId, season).catch(() => []);
-    for (const ep of eps) {
-      db()
-        .prepare("UPDATE episodes SET title=?, overview=?, still=?, air_date=? WHERE show_id=? AND season=? AND episode=?")
-        .run(ep.title ?? null, ep.overview ?? null, ep.stillPath ?? null, ep.airDate ?? null, showId, season, ep.episode);
-    }
-  }
+  await applyShowMatch(db(), showId, tmdbId, true);
+  await refreshEpisodeMeta(db(), showId, tmdbId, true).catch(() => {});
 }
 
 async function enrichMovie(movieId, tmdbId) {
-  const det = await tmdb.movieDetails(tmdbId);
-  if (!det) return;
-  const cert = await tmdb.certification("movie", tmdbId).catch(() => null);
-  db()
-    .prepare(
-      `UPDATE movies SET tmdb_id=?, title=COALESCE(?, title), overview=?, poster=?, backdrop=?, genres=?, rating=?,
-        year=?, runtime_min=?, cert=?, identified=1 WHERE id=?`,
-    )
-    .run(
-      tmdbId,
-      det.title ?? null,
-      det.overview ?? null,
-      det.poster_path ?? null,
-      det.backdrop_path ?? null,
-      JSON.stringify((det.genres ?? []).map((g) => g.name)),
-      det.vote_average ?? null,
-      parseInt((det.release_date || "").slice(0, 4), 10) || null,
-      det.runtime ?? null,
-      cert,
-      movieId,
-    );
+  await applyMovieMatch(db(), movieId, tmdbId, true);
 }
 
 /** Merge shows that ended up on the same TMDb id — returns the surviving id. */
@@ -195,52 +179,15 @@ function mergeShowsByTmdb(tmdbId, preferId) {
   for (const r of rows) {
     if (r.id === survivor) continue;
     db().prepare("UPDATE episodes SET show_id=? WHERE show_id=?").run(survivor, r.id);
-    db().prepare("UPDATE favorites SET ref_id=? WHERE media_type='show' AND ref_id=?").run(survivor, r.id);
+    db().prepare("UPDATE OR IGNORE favorites SET ref_id=? WHERE media_type='show' AND ref_id=?").run(survivor, r.id);
+    db().prepare("DELETE FROM favorites WHERE media_type='show' AND ref_id=?").run(r.id);
     db().prepare("DELETE FROM shows WHERE id=?").run(r.id);
   }
   return survivor;
 }
 
-// ── thumbnails (seek preview) with on-disk cache ─────────────────────────────
-
-const THUMB_DIR = join(DATA_DIR, "thumb-cache");
-
-function hashStr(s) {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
-  return h.toString(36);
-}
-
-export function thumbFile(path, t) {
-  return join(THUMB_DIR, `${hashStr(path)}_${Math.round(t)}.jpg`);
-}
-
-export function makeThumb(path, t) {
-  mkdirSync(THUMB_DIR, { recursive: true });
-  const file = thumbFile(path, t);
-  if (existsSync(file)) return Promise.resolve(file);
-  return new Promise((resolve) => {
-    const ff = spawn(FFMPEG, [
-      "-hide_banner", "-loglevel", "error",
-      "-ss", String(Math.max(0, t)), "-i", path,
-      "-frames:v", "1", "-vf", "scale=320:-2", "-q:v", "5", file,
-    ]);
-    ff.on("close", () => resolve(existsSync(file) ? file : null));
-    ff.on("error", () => resolve(null));
-  });
-}
-
-const dirSize = (dir) => {
-  let total = 0;
-  try {
-    for (const e of readdirSync(dir, { withFileTypes: true })) {
-      const p = join(dir, e.name);
-      if (e.isFile()) total += statSync(p).size;
-      else if (e.isDirectory()) total += dirSize(p);
-    }
-  } catch { /* missing dir */ }
-  return total;
-};
+// Vorschaubilder + Sprite-Blätter leben jetzt komplett in ./thumbs.js
+// (Parallelitäts-Bremse, einstellbare Größe, Cache-Grenze, Trickplay).
 
 // ── ffprobe chapters (player chapter menu + intro skip) ──────────────────────
 
@@ -321,6 +268,13 @@ export async function handleInvoke(cmd, a = {}) {
     case "browse_dirs": {
       const root = primaryRoot();
       let target = a.path ? String(a.path) : root;
+      // nur innerhalb der erlaubten Wurzeln bzw. bestehender Bibliotheken
+      const nrm = (x) => normalize(String(x)).replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+      const allowed = [...BROWSE_ROOTS, ...listLibraries().map((l) => l.path), root].map(nrm);
+      const tn = nrm(target);
+      if (!allowed.some((r) => r === "/" || tn === r || tn.startsWith(r + "/"))) {
+        throw new Error("Pfad außerhalb der erlaubten Ordner");
+      }
       let entries;
       try {
         entries = readdirSync(target, { withFileTypes: true })
@@ -349,14 +303,7 @@ export async function handleInvoke(cmd, a = {}) {
         total: scanState.total || 0,
       };
     case "refresh_metadata": {
-      (async () => {
-        for (const s of d.prepare("SELECT id, tmdb_id FROM shows WHERE tmdb_id IS NOT NULL").all()) {
-          await enrichShow(s.id, s.tmdb_id).catch(() => {});
-        }
-        for (const m of d.prepare("SELECT id, tmdb_id FROM movies WHERE tmdb_id IS NOT NULL").all()) {
-          await enrichMovie(m.id, m.tmdb_id).catch(() => {});
-        }
-      })();
+      void refreshAllMetadata().catch((e) => console.error("[refresh]", e));
       return null;
     }
     case "reset_library": {
@@ -445,7 +392,22 @@ export async function handleInvoke(cmd, a = {}) {
       return episodeOut(getEpisodeRow(Number(a.id)));
     case "episode_versions": {
       const e = d.prepare("SELECT * FROM episodes WHERE id=?").get(Number(a.id));
-      return e ? [{ id: e.id, episodeId: e.id, path: e.path, width: e.width ?? null, height: e.height ?? null, addedAt: e.added_at }] : [];
+      if (!e) return [];
+      // alle Dateivarianten derselben Folge (verschiedene Qualitäten)
+      const files = d
+        .prepare("SELECT * FROM episode_files WHERE episode_id=? ORDER BY COALESCE(height,0) DESC, id ASC")
+        .all(e.id);
+      if (!files.length) {
+        return [{ id: e.id, episodeId: e.id, path: e.path, width: e.width ?? null, height: e.height ?? null, addedAt: e.added_at }];
+      }
+      return files.map((f) => ({
+        id: f.id,
+        episodeId: e.id,
+        path: f.path,
+        width: f.width ?? e.width ?? null,
+        height: f.height ?? e.height ?? null,
+        addedAt: f.added_at,
+      }));
     }
     case "list_show_episodes":
       return d
@@ -483,7 +445,12 @@ export async function handleInvoke(cmd, a = {}) {
       const m = d.prepare("SELECT * FROM movies WHERE id=?").get(Number(a.movieId));
       if (!m) throw new Error("Film nicht gefunden");
       await enrichMovie(m.id, Number(a.tmdbId));
-      if (a.remember !== false) rememberIdentity(dirname(m.path), "movie", Number(a.tmdbId));
+      if (a.remember !== false) {
+        // BEIDES merken: über den stabilen Namens-Key (überlebt Umbenennen und
+        // "Bibliothek neu aufbauen") und über den Ordner (Altbestand).
+        rememberMovieIdentity(d, m.path, Number(a.tmdbId));
+        rememberIdentity(dirname(m.path), "movie", Number(a.tmdbId));
+      }
       return null;
     }
     case "identify_show": {
@@ -491,7 +458,10 @@ export async function handleInvoke(cmd, a = {}) {
       if (!s) throw new Error("Serie nicht gefunden");
       await enrichShow(s.id, Number(a.tmdbId));
       const survivor = mergeShowsByTmdb(Number(a.tmdbId), s.id);
-      if (a.remember !== false && s.folder) rememberIdentity(s.folder, "show", Number(a.tmdbId));
+      if (a.remember !== false) {
+        rememberShowIdentity(d, survivor, Number(a.tmdbId));
+        if (s.folder) rememberIdentity(s.folder, "show", Number(a.tmdbId));
+      }
       return survivor;
     }
     case "set_episode_numbers": {
@@ -537,6 +507,11 @@ export async function handleInvoke(cmd, a = {}) {
         await enrichShow(Number(info.lastInsertRowid), Number(a.targetTmdb));
         target = d.prepare("SELECT * FROM shows WHERE id=?").get(Number(info.lastInsertRowid));
       }
+      // Platzierung MERKEN, damit der nächste Scan die Verschiebung nicht
+      // rückgängig macht (das war bisher der Fall).
+      for (const e of d.prepare("SELECT path, season, episode FROM episodes WHERE show_id=? AND season=?").all(src.id, Number(a.season))) {
+        setPlacement(e.path, Number(a.targetTmdb), e.season, e.episode);
+      }
       d.prepare("UPDATE episodes SET show_id=? WHERE show_id=? AND season=?").run(target.id, src.id, Number(a.season));
       d.exec("DELETE FROM shows WHERE id NOT IN (SELECT DISTINCT show_id FROM episodes)");
       await enrichShow(target.id, Number(a.targetTmdb)).catch(() => {});
@@ -551,6 +526,7 @@ export async function handleInvoke(cmd, a = {}) {
         await enrichShow(Number(info.lastInsertRowid), Number(a.targetTmdb));
         target = d.prepare("SELECT * FROM shows WHERE id=?").get(Number(info.lastInsertRowid));
       }
+      setPlacement(e.path, Number(a.targetTmdb), Number(a.season), Number(a.episode));
       d.prepare("UPDATE episodes SET show_id=?, season=?, episode=? WHERE id=?").run(target.id, Number(a.season), Number(a.episode), e.id);
       d.exec("DELETE FROM shows WHERE id NOT IN (SELECT DISTINCT show_id FROM episodes)");
       await enrichShow(target.id, Number(a.targetTmdb)).catch(() => {});
@@ -599,8 +575,10 @@ export async function handleInvoke(cmd, a = {}) {
       const rows = d
         .prepare(
           `SELECT pr.*, mv.title m_title, mv.poster m_poster, mv.backdrop m_backdrop, mv.year m_year,
-                  e.season, e.episode, e.title e_title, e.still, e.show_id,
-                  sh.title s_title, sh.poster s_poster, sh.backdrop s_backdrop
+                  mv.local_poster m_lposter, mv.local_backdrop m_lbackdrop,
+                  e.season, e.episode, e.title e_title, e.still, e.local_still, e.show_id,
+                  sh.title s_title, sh.poster s_poster, sh.backdrop s_backdrop,
+                  sh.local_poster s_lposter, sh.local_backdrop s_lbackdrop
            FROM progress pr
            LEFT JOIN movies mv ON pr.media_type='movie' AND mv.id=pr.ref_id
            LEFT JOIN episodes e ON pr.media_type='episode' AND e.id=pr.ref_id
@@ -622,8 +600,10 @@ export async function handleInvoke(cmd, a = {}) {
               ? String(r.m_year)
               : null
             : `S${pad(r.season)} E${pad(r.episode)}${r.e_title ? " · " + r.e_title : ""}`,
-          posterPath: isMovie ? r.m_poster : r.s_poster,
-          backdropPath: isMovie ? r.m_backdrop : r.still ?? r.s_backdrop,
+          posterPath: isMovie ? pickArt(r.m_lposter, r.m_poster) : pickArt(r.s_lposter, r.s_poster),
+          backdropPath: isMovie
+            ? pickArt(r.m_lbackdrop, r.m_backdrop)
+            : (r.still ?? (r.local_still ? asLocalRef(r.local_still) : null) ?? pickArt(r.s_lbackdrop, r.s_backdrop)),
           positionSec: r.position,
           durationSec: r.duration,
           progress: r.duration > 0 ? Math.min(1, r.position / r.duration) : 0,
@@ -706,9 +686,12 @@ export async function handleInvoke(cmd, a = {}) {
     case "set_artwork": {
       const { target, id, path, field, season } = a;
       const col = field === "backdrop" ? "backdrop" : "poster";
-      if (target === "movie") d.prepare(`UPDATE movies SET ${col}=? WHERE id=?`).run(path, Number(id));
-      else if (target === "show") d.prepare(`UPDATE shows SET ${col}=? WHERE id=?`).run(path, Number(id));
-      else if (target === "episode") d.prepare("UPDATE episodes SET still=? WHERE id=?").run(path, Number(id));
+      // Eine bewusste Auswahl im Bild-Dialog muss auch dann greifen, wenn eine
+      // lokale poster.jpg danebenliegt — sonst passiert sichtbar nichts.
+      const localCol = field === "backdrop" ? "local_backdrop" : "local_poster";
+      if (target === "movie") d.prepare(`UPDATE movies SET ${col}=?, ${localCol}=NULL WHERE id=?`).run(path, Number(id));
+      else if (target === "show") d.prepare(`UPDATE shows SET ${col}=?, ${localCol}=NULL WHERE id=?`).run(path, Number(id));
+      else if (target === "episode") d.prepare("UPDATE episodes SET still=?, local_still=NULL, still_generated=1 WHERE id=?").run(path, Number(id));
       else if (target === "season")
         d.prepare("INSERT INTO season_art (show_id, season, path) VALUES (?,?,?) ON CONFLICT(show_id,season) DO UPDATE SET path=excluded.path").run(Number(id), Number(season), path);
       return null;
@@ -716,10 +699,35 @@ export async function handleInvoke(cmd, a = {}) {
     case "get_season_art":
       return d.prepare("SELECT season, path FROM season_art WHERE show_id=?").all(Number(a.showId)).map((r) => [r.season, r.path]);
     case "media_thumbnail": {
+      const path = String(a.path || "");
+      if (!isLibraryFile(d, path)) throw new Error("Datei nicht in der Bibliothek");
       const t = Math.max(0, Number(a.timeSec) || 0);
-      const file = await makeThumb(String(a.path), t);
+      // Breite kommt aus der Einstellung "Vorschaubild-Größe" — vorher wurde
+      // IMMER mit 320 px erzeugt und große Kacheln waren unscharf hochskaliert.
+      const width = Math.min(960, Math.max(80, Number(a.width) || 320));
+      const file = await makeThumb(path, t, width);
       if (!file) throw new Error("Kein Vorschaubild");
-      return `/api/thumbfile?path=${encodeURIComponent(String(a.path))}&t=${Math.round(t)}`;
+      // Der Token muss mit in die URL: <img src> kann keine Header senden, und
+      // bei gesetztem GHGFLIX_PASSWORD lieferte der Server sonst 401 — genau
+      // deshalb blieb die Zeitleisten-Vorschau im Browser leer.
+      const tok = a.__token ? `&token=${encodeURIComponent(String(a.__token))}` : "";
+      return `/api/thumbfile?path=${encodeURIComponent(path)}&t=${Math.round(t)}&w=${width}${tok}`;
+    }
+    // Vorgeneriertes Sprite-Blatt (Trickplay) für flüssige Zeitleisten-Vorschau
+    case "trickplay_info": {
+      const path = String(a.path || "");
+      if (!isLibraryFile(d, path)) return null;
+      const info = trickplayInfo(path);
+      if (!info) {
+        // im Hintergrund erzeugen, damit es beim nächsten Mal da ist
+        const row =
+          d.prepare("SELECT duration FROM movies WHERE path=?").get(path) ??
+          d.prepare("SELECT duration FROM episodes WHERE path=?").get(path);
+        if (row?.duration) ensureTrickplay(path, row.duration);
+        return null;
+      }
+      const tok = a.__token ? `&token=${encodeURIComponent(String(a.__token))}` : "";
+      return { ...info, url: `/api/trickplay?path=${encodeURIComponent(path)}${tok}` };
     }
     case "probe_qualities": {
       (async () => {
@@ -733,7 +741,7 @@ export async function handleInvoke(cmd, a = {}) {
           d.prepare(`UPDATE ${r.t === "movie" ? "movies" : "episodes"} SET duration=?, vcodec=?, acodec=?, container=?, width=?, height=? WHERE id=?`)
             .run(info.duration, info.vcodec, info.acodec, info.container, info.width, info.height, r.id);
         }
-      })();
+      })().catch((e) => console.error("[probe]", e));
       return null;
     }
     case "set_media_dims": {
@@ -760,12 +768,9 @@ export async function handleInvoke(cmd, a = {}) {
       };
     }
     case "thumb_cache_size":
-      return dirSize(THUMB_DIR) + dirSize(join(DATA_DIR, "img-cache"));
-    case "clear_thumb_cache": {
-      const size = dirSize(THUMB_DIR);
-      rmSync(THUMB_DIR, { recursive: true, force: true });
-      return size;
-    }
+      return dirSize(THUMB_DIR) + dirSize(TRICK_DIR) + dirSize(join(DATA_DIR, "img-cache"));
+    case "clear_thumb_cache":
+      return clearThumbCache();
     case "db_optimize":
       d.exec("VACUUM");
       return null;
@@ -815,6 +820,11 @@ export async function handleInvoke(cmd, a = {}) {
       const path = String(a.path || "");
       let row = d.prepare("SELECT 'movie' mt, * FROM movies WHERE path=?").get(path);
       if (!row) row = d.prepare("SELECT 'episode' mt, * FROM episodes WHERE path=?").get(path);
+      if (!row) {
+        // Qualitätsvariante einer Folge (episode_files) → Folge dahinter finden
+        const f = d.prepare("SELECT episode_id FROM episode_files WHERE path=?").get(path);
+        if (f) row = d.prepare("SELECT 'episode' mt, * FROM episodes WHERE id=?").get(f.episode_id);
+      }
       if (!row) throw new Error("Datei nicht in der Bibliothek: " + path);
       if (!row.vcodec) {
         const info = await ffprobe(path);
@@ -824,8 +834,11 @@ export async function handleInvoke(cmd, a = {}) {
             .run(info.duration, info.vcodec, info.acodec, info.container, info.width, info.height, row.id);
         }
       }
-      const probe = await ffprobe(path).catch(() => null);
+      // EIN ffprobe-Aufruf statt zwei (der zweite lief bisher immer zusätzlich)
+      const probe = row.audioStreams ? row : await ffprobe(path).catch(() => null);
       const chapters = await probeChapters(path).catch(() => []);
+      // Sprite-Blatt für die Zeitleisten-Vorschau im Hintergrund vorbereiten
+      if (row.duration) ensureTrickplay(path, row.duration);
       return {
         mediaType: row.mt,
         id: row.id,
@@ -835,6 +848,7 @@ export async function handleInvoke(cmd, a = {}) {
         transcodeUrl: `/api/transcode/${row.mt}/${row.id}?x=1`,
         width: row.width ?? null,
         height: row.height ?? null,
+        aspect: row.aspect ?? (row.width && row.height ? row.width / row.height : null),
         audioStreams: probe?.audioStreams ?? [],
         subtitleStreams: (probe?.subtitleStreams ?? []).filter((s) => !["hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle"].includes(s.codec ?? "")),
         chapters,
