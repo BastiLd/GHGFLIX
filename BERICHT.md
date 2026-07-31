@@ -1,6 +1,6 @@
 # GHGFlix — Bericht: Server-Überholung, Erkennung, Vorschaubilder, Cloud-Sync
 
-**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.2** · Handy **1.6.0**
+**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.2** · Handy **1.7.0**
 
 ---
 
@@ -186,7 +186,29 @@ Behoben ab 1.6.0: Das Kachelbild ist jetzt schlicht das **App-Symbol**
 Datei-Kopie ist komplett entfernt, damit diese Fehlerquelle gar nicht mehr
 existieren kann. Optisch etwas schlichter, dafür kann es nicht mehr schiefgehen.
 
-### 8d. `adb connect` lief in einen Zeitüberschreitung
+### 8c-2. Und es lag NICHT am Banner — jetzt wird abgesichert statt geraten
+
+Auch mit dem Banner-Fix stürzte die App ab. Damit sind drei Vermutungen
+widerlegt (neue Architektur, Banner-Ressource, Leanback-Eintrag). Statt weiter
+zu raten, sind ab 1.7.0 zwei Dinge anders:
+
+**1. Die riskanten Module werden abgesichert geladen.** `expo-video` und
+`expo-keep-awake` bringen native Bestandteile mit. Schlägt so ein Modul beim
+Start fehl, riss es bisher die **ganze App** mit — genau das Symptom „kurz
+schwarz, zurück ins Menü". Jetzt startet die App auf jeden Fall; fehlt der
+Video-Baustein, erscheint oben ein gelber Hinweis mit der genauen Meldung, und
+beim Abspielen steht „Videowiedergabe nicht verfügbar" statt eines Absturzes.
+
+Damit gilt: **Startet die App jetzt und zeigt einen gelben Hinweis — dann war
+`expo-video` die Ursache, und wir sehen es schwarz auf weiß.** Startet sie
+immer noch nicht, liegt es tiefer und wir brauchen das Systemlog.
+
+**2. Ein Skript holt das Log.** `scripts\tv-log-holen.ps1` besorgt adb,
+koppelt sich mit dem Fernseher (führt durch den Kopplungscode), zeichnet den
+Absturz auf, filtert die wichtigen Zeilen heraus und legt die Datei auf dem
+Desktop ab. Kein Herumhantieren mehr mit Pfaden und Ports.
+
+### 8d. `adb connect` lief in eine Zeitüberschreitung
 
 `cannot connect to …:5555 (10060)` — Port 5555 ist bei Google TV schlicht
 **nicht offen**. Der einfache `adb connect` funktioniert nur, wenn der Port

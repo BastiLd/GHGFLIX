@@ -3,10 +3,39 @@
 // switching, profile picker, library, season-aware show pages and a native
 // video player (expo-video) with progress sync.
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useKeepAwake } from "expo-keep-awake";
 import { StatusBar } from "expo-status-bar";
-import { VideoView, useVideoPlayer } from "expo-video";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+// ── Zusatzmodule vorsichtig laden ───────────────────────────────────────────
+//
+// WARUM NICHT EINFACH `import`:
+// Ein fehlgeschlagener Modul-Import beim App-Start reisst die GANZE App mit —
+// auf dem Fernseher sieht man dann nur: kurz schwarz, zurueck ins Menue, ohne
+// jeden Hinweis. Genau dieses Verhalten trat auf.
+//
+// `expo-video` und `expo-keep-awake` bringen native Bestandteile mit. Fehlt auf
+// einem Geraet etwas davon (bei Android-TV-Geraeten durchaus moeglich), soll
+// die App trotzdem starten und die Bibliothek anzeigen — nur das Abspielen
+// meldet dann sauber "Videowiedergabe nicht verfuegbar", statt alles zu killen.
+let VideoView = null;
+let useVideoPlayer = null;
+let videoLadeFehler = null;
+try {
+  const v = require("expo-video");
+  VideoView = v.VideoView;
+  useVideoPlayer = v.useVideoPlayer;
+  if (typeof useVideoPlayer !== "function") throw new Error("expo-video unvollstaendig geladen");
+} catch (e) {
+  videoLadeFehler = String(e?.message || e);
+  useVideoPlayer = () => null; // Platzhalter, damit der Hook-Aufruf nicht knallt
+}
+
+let useKeepAwake = () => {};
+try {
+  useKeepAwake = require("expo-keep-awake").useKeepAwake || useKeepAwake;
+} catch {
+  /* ohne Bildschirm-Wachhalten laesst sich leben */
+}
 import {
   ActivityIndicator,
   BackHandler,
@@ -92,12 +121,25 @@ class ErrorBoundary extends React.Component {
 /** Banner mit dem zuletzt gespeicherten Absturz (erscheint nach einem Neustart). */
 function CrashBanner() {
   const [crash, setCrash] = useState(null);
+  // Ein fehlgeschlagenes Zusatzmodul ist kein Absturz, aber wissenswert
+  const modulFehler = videoLadeFehler;
   useEffect(() => {
     AsyncStorage.getItem(CRASH_KEY)
       .then((v) => v && setCrash(JSON.parse(v)))
       .catch(() => {});
   }, []);
-  if (!crash) return null;
+  if (!crash && !modulFehler) return null;
+  if (!crash && modulFehler) {
+    return (
+      <View style={{ backgroundColor: "#3b2a0d", borderBottomWidth: 1, borderBottomColor: "#c78a00", padding: 12 }}>
+        <Text style={{ color: "#ffc65c", fontWeight: "700", fontSize: 13 }}>Video-Baustein nicht geladen</Text>
+        <Text style={{ color: "#f2f2f5", fontSize: 12, marginTop: 4 }}>{modulFehler}</Text>
+        <Text style={{ color: "#9a9aa5", fontSize: 11, marginTop: 4 }}>
+          Bibliothek und Einstellungen gehen, nur das Abspielen nicht.
+        </Text>
+      </View>
+    );
+  }
   const verwerfen = () => {
     AsyncStorage.removeItem(CRASH_KEY).catch(() => {});
     setCrash(null);
@@ -941,6 +983,26 @@ function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, n
     pop();
     if (nextEp) push({ name: "play", type: "episode", id: nextEp.id, title, subtitle: se(nextEp.season, nextEp.episode) + (nextEp.title ? " · " + nextEp.title : "") });
   };
+
+  // Konnte das Video-Modul nicht geladen werden, hier sauber Bescheid geben
+  if (videoLadeFehler || !VideoView) {
+    return (
+      <View style={[st.center, { backgroundColor: "#000", padding: 28 }]}>
+        <Text style={{ color: C.red, fontSize: 18, fontWeight: "800", marginBottom: 10 }}>
+          Videowiedergabe nicht verfuegbar
+        </Text>
+        <Text style={{ color: C.text, fontSize: 13, textAlign: "center", marginBottom: 6 }}>
+          Auf diesem Geraet fehlt der Video-Baustein der App.
+        </Text>
+        <Text style={{ color: C.muted, fontSize: 11, textAlign: "center", marginBottom: 18 }}>
+          {videoLadeFehler || "expo-video nicht geladen"}
+        </Text>
+        <Pressable onPress={pop} style={st.btn}>
+          <Text style={st.btnText}>Zurueck</Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   if (!info)
     return (
