@@ -269,6 +269,27 @@ was passiert ist.
 Kommt gar nichts (auch kein Banner), war es ein Absturz **vor** dem Start der
 Oberfläche. Dann hilft nur Weg 2.
 
+#### Weg 1b: Diagnose-Fassung der App (kein PC nötig) ⭐
+
+Wenn dein Fernseher **kein „Drahtloses Debugging"** anbietet — bei vielen
+günstigen Android-TVs ist nur „USB-Debugging" vorhanden — kommst du per adb
+nicht ans Log. Dafür gibt es eine eigene Diagnose-Fassung der App:
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix\mobile"
+npx eas-cli build --platform android --profile diagnose
+```
+
+Diese Fassung importiert am Anfang **nichts** außer React Native und prüft die
+Zusatzmodule erst nach dem ersten Bild. Auf dem Fernseher siehst du dann:
+
+- ob das Grundgerüst überhaupt startet (steht Text da → ja)
+- Android-Version, Modell, ob Hermes läuft
+- **welches Modul sich nicht laden lässt** — grün „OK" oder rot „FEHLER"
+
+Bildschirm abfotografieren, fertig. Damit lässt sich die Ursache eingrenzen,
+ohne je einen PC anzuschließen.
+
 #### Weg 2: Echte Logs per adb vom PC
 
 1. **Am Fernseher** Entwickleroptionen freischalten:
@@ -310,11 +331,23 @@ Oberfläche. Dann hilft nur Weg 2.
    (`cannot connect … (10060)`), weil Port 5555 gar nicht offen ist. Google TV
    verlangt erst eine Kopplung mit Code:
 
-   1. Am TV: *Einstellungen → System → Entwickleroptionen →*
-      **Drahtloses Debugging** einschalten
+   1. Am TV: *Einstellungen → System → Entwickleroptionen*. Dort den Abschnitt
+      **DEBUGGING** suchen — er steht meist **weiter oben**, über „NETZWERKE".
+      Untereinander stehen dort **USB-Debugging** und **Drahtloses Debugging**
+      (je nach Gerät auch „Debugging über WLAN" oder „ADB über Netzwerk").
+      **Drahtloses Debugging** einschalten.
    2. Dort **„Gerät mit Kopplungscode koppeln"** öffnen.
-      Es erscheinen eine **IP mit Port** (z. B. `192.168.68.55:37129`) und ein
-      **sechsstelliger Code**. Dieses Fenster offen lassen!
+      Es erscheint ein Fenster mit **zwei** Angaben:
+
+      ```
+      WLAN-Kopplungscode:   123456                  <- sechsstellig
+      IP-Adresse und Port:  192.168.68.157:41234    <- Port ist 41234
+      ```
+
+      Gebraucht wird die Zahl **nach dem Doppelpunkt** (hier `41234`) — sie ist
+      vier- bis fünfstellig. **Nicht** die MAC-Adresse aus den WLAN-Infos
+      verwenden, die endet oft auf ähnlich aussehende Ziffern!
+      Dieses Fenster am Fernseher offen lassen.
    3. Am PC — die Zahlen von Schritt 2 einsetzen:
 
    ```powershell

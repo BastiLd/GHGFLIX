@@ -228,6 +228,28 @@ auf ZimaOS lief noch die alte Fassung. Der Server ist jetzt **2.3.2**, und das
 Skript prüft vorab, ob der Server Dateien überhaupt annehmen kann — statt einer
 nichtssagenden 404 steht dann im Klartext, was zu tun ist.
 
+### 8f. Der Fernseher kann kein adb über WLAN — Diagnose ohne PC
+
+Deine Entwickleroptionen zeigen im Abschnitt DEBUGGING nur **USB-Debugging**,
+kein „Drahtloses Debugging". Damit ist der adb-Weg für dieses Gerät zu. Und
+ein TV lässt sich auch nicht per Kabel als USB-Gerät an den PC hängen — die
+USB-Buchsen am Fernseher sind Anschlüsse FÜR Sticks, nicht umgekehrt.
+
+Deshalb gibt es jetzt eine **Diagnose-Fassung der App**
+(`mobile/App.diagnose.js`, Bau-Profil `diagnose`). Sie importiert am Anfang
+nichts außer React Native und prüft die Zusatzmodule erst nach dem ersten Bild.
+Auf dem Fernseher steht dann schwarz auf weiß:
+
+- ob das Grundgerüst startet (siehst du Text → ja)
+- Android-Version, Modell, Hermes
+- welches Modul sich **nicht** laden lässt (grün OK / rot FEHLER)
+
+Ein Foto vom Bildschirm reicht zur Auswertung. Kein PC, kein adb.
+
+Ebenfalls wichtig: Beim ersten Verbindungsversuch war **USB-Debugging noch
+ausgeschaltet**. Manche Android-TVs öffnen Port 5555 erst, wenn es an ist —
+ein erneuter Versuch kostet nichts und könnte den adb-Weg doch noch öffnen.
+
 ### 9. Studio-Klon scheiterte an eigenen Bau-Dateien
 
 ```

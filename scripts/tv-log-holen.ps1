@@ -61,25 +61,57 @@ Write-Host "     Versuche direkte Verbindung auf Port 5555 ..."
 $r = & $Adb connect "${TvIp}:5555" 2>&1
 if ($r -match "connected to") { $verbunden = $true; Write-Host "     verbunden." -ForegroundColor Green }
 
-# Versuch B: Kopplung mit Code (Android 11+, Normalfall bei Google TV)
+# Versuch B: Kopplung mit Code (Android 11+) - NICHT jedes Geraet kann das
 if (-not $verbunden) {
-  Write-Host "     Port 5555 ist zu - das ist bei Google TV normal." -ForegroundColor Yellow
+  Write-Host "     Port 5555 antwortet nicht." -ForegroundColor Yellow
   Write-Host ""
-  Write-Host "     Am Fernseher jetzt oeffnen:" -ForegroundColor Yellow
-  Write-Host "       Entwickleroptionen -> Drahtloses Debugging" -ForegroundColor Yellow
-  Write-Host "         -> 'Geraet mit Kopplungscode koppeln'" -ForegroundColor Yellow
-  Write-Host "     Dort stehen eine IP MIT PORT und ein sechsstelliger Code."
-  Write-Host "     Das Fenster am Fernseher offen lassen!"
+  Write-Host "     Sieh am Fernseher nach:"
+  Write-Host "       Einstellungen -> System -> Entwickleroptionen -> Abschnitt DEBUGGING"
+  Write-Host "     Steht dort ausser 'USB-Debugging' auch 'Drahtloses Debugging'"
+  Write-Host "     (oder 'Debugging ueber WLAN')?"
   Write-Host ""
-  $paarPort = Read-Host "Kopplungs-PORT (die Zahl NACH dem Doppelpunkt, z. B. 37129)"
-  $code     = Read-Host "Sechsstelliger Kopplungscode"
+  $hatWireless = Read-Host "Gibt es 'Drahtloses Debugging'? (j/n)"
+
+  if ($hatWireless -notmatch '^[jJyY]') {
+    Write-Host ""
+    Write-Host "Dann kann dieser Fernseher kein adb ueber WLAN." -ForegroundColor Yellow
+    Write-Host "Das ist bei vielen guenstigen Android-TVs so - kein Fehler deinerseits."
+    Write-Host ""
+    Write-Host "ES GIBT EINEN WEG OHNE ADB:" -ForegroundColor Green
+    Write-Host "  Eine Diagnose-Fassung der App, die dir die Ursache auf dem"
+    Write-Host "  Fernsehbildschirm anzeigt. Bauen mit:"
+    Write-Host ""
+    Write-Host "    cd `"`$env:USERPROFILE\Documents\GHGFlix\mobile`"" -ForegroundColor Green
+    Write-Host "    npx eas-cli build --platform android --profile diagnose" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  Danach wie gewohnt hochladen und am TV installieren."
+    Write-Host "  Den angezeigten Bildschirm abfotografieren und an Claude schicken."
+    exit 1
+  }
+
+  Write-Host ""
+  Write-Host "     SO FINDEST DU DEN KOPPLUNGSCODE:" -ForegroundColor Yellow
+  Write-Host "     1. 'Drahtloses Debugging' antippen und EINSCHALTEN."
+  Write-Host "     2. Auf 'Geraet mit Kopplungscode koppeln' druecken."
+  Write-Host "     3. Es erscheint ein Fenster mit ZWEI Angaben:"
+  Write-Host "          WLAN-Kopplungscode:  123456        <- sechsstellig"
+  Write-Host "          IP-Adresse und Port: 192.168.68.157:41234"
+  Write-Host "        Gebraucht wird die Zahl NACH dem Doppelpunkt: 41234"
+  Write-Host "     4. Das Fenster am Fernseher OFFEN LASSEN."
+  Write-Host ""
+  $paarPort = (Read-Host "Kopplungs-PORT (4- bis 5-stellig)").Trim()
+  if ($paarPort -notmatch '^\d{4,5}$') {
+    Write-Host "'$paarPort' ist kein gueltiger Port (4-5 Ziffern)." -ForegroundColor Red
+    exit 1
+  }
+  $code = (Read-Host "Sechsstelliger Kopplungscode").Trim()
   Write-Host "     koppele ..."
-  $code | & $Adb pair "${TvIp}:$($paarPort.Trim())" | Write-Host
+  $code | & $Adb pair "${TvIp}:$paarPort" | Write-Host
 
   Write-Host ""
   Write-Host "     Im Fenster 'Drahtloses Debugging' steht OBEN eine andere Portnummer."
-  $verbPort = Read-Host "Verbindungs-PORT (die obere Zahl, z. B. 42871)"
-  $r = & $Adb connect "${TvIp}:$($verbPort.Trim())" 2>&1
+  $verbPort = (Read-Host "Verbindungs-PORT (die obere Zahl)").Trim()
+  $r = & $Adb connect "${TvIp}:$verbPort" 2>&1
   Write-Host "     $r"
   if ($r -match "connected to") { $verbunden = $true }
 }
