@@ -119,10 +119,20 @@ npx eas-cli build --platform android --profile preview
 (Einmalig ein kostenloses Konto auf **expo.dev** anlegen; beim ersten Mal
 fragt es nach einem Keystore → einfach bestätigen, Expo verwaltet ihn.)
 
-**Dann die Datei auf den Server legen:**
+**Dann die Datei auf den Server legen — am einfachsten per Skript:**
 
-In ZimaOS → **Files** → zu diesem Ordner navigieren und die Datei dort
-ablegen, umbenannt in `GHGFlix.apk`:
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix"
+powershell -ExecutionPolicy Bypass -File scripts\apk-hochladen.ps1
+```
+
+Das Skript sucht die zuletzt heruntergeladene `.apk` (Downloads/Desktop),
+fragt nach dem Server-Passwort und legt sie am richtigen Ort ab. Voraussetzung
+ist ein gesetztes `GHGFLIX_PASSWORD` — ohne Passwort wäre so ein Upload ein
+offenes Tor und ist deshalb gesperrt.
+
+**Oder von Hand:** In ZimaOS → **Files** → zu diesem Ordner navigieren und die
+Datei dort ablegen, umbenannt in `GHGFlix.apk`:
 
 ```
 /DATA/AppData/ghgflix/data/apk/GHGFlix.apk
@@ -267,20 +277,36 @@ Oberfläche. Dann hilft nur Weg 2.
    und, falls vorhanden, **Debugging über WLAN / Netzwerk-Debugging**
 3. IP des Fernsehers notieren: *Einstellungen → Netzwerk & Internet* → dein WLAN
 
-4. **Am PC** die Android-Platform-Tools installieren (einmalig):
+4. **Am PC** die Android-Platform-Tools holen (einmalig).
+
+   > `winget install Google.PlatformTools` bricht oft mit
+   > **„Der Installer-Hash stimmt nicht überein"** ab — Google tauscht das
+   > Paket häufiger aus, als der winget-Katalog nachzieht. Nimm deshalb
+   > direkt den Weg über Google, der klappt immer:
 
    ```powershell
-   winget install --id Google.PlatformTools -e
+   $ziel = "$env:USERPROFILE\platform-tools"
+   Invoke-WebRequest "https://dl.google.com/android/repository/platform-tools-latest-windows.zip" -OutFile "$env:TEMP\pt.zip"
+   Expand-Archive "$env:TEMP\pt.zip" -DestinationPath $env:USERPROFILE -Force
+   cd $ziel
+   .\adb.exe version
    ```
 
-   Klappt winget nicht: [developer.android.com/tools/releases/platform-tools](https://developer.android.com/tools/releases/platform-tools)
-   herunterladen, entpacken, z. B. nach `C:\platform-tools`, und dorthin wechseln.
+   **Wichtig:** `adb` ist danach nur in DIESEM Ordner aufrufbar, deshalb immer
+   mit `.\adb.exe` davor — oder dauerhaft in den Suchpfad legen:
+
+   ```powershell
+   [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$env:USERPROFILE\platform-tools", "User")
+   ```
+
+   (danach PowerShell einmal schließen und neu öffnen, dann geht schlicht `adb`)
 
 5. **Verbinden und mitlesen** (TV-IP anpassen):
 
    ```powershell
-   adb connect 192.168.68.55:5555
-   adb devices
+   cd "$env:USERPROFILE\platform-tools"
+   .\adb.exe connect 192.168.68.55:5555
+   .\adb.exe devices
    ```
 
    Am Fernseher erscheint „USB-Debugging zulassen?" → **Immer zulassen** →
@@ -289,28 +315,29 @@ Oberfläche. Dann hilft nur Weg 2.
 6. Log leeren, App am TV starten, Log ansehen:
 
    ```powershell
-   adb logcat -c
+   cd "$env:USERPROFILE\platform-tools"
+   .\adb.exe logcat -c
    # jetzt am Fernseher GHGFlix oeffnen, ca. 10 Sekunden warten, dann:
-   adb logcat -d *:E > "$env:USERPROFILE\Desktop\ghgflix-log.txt"
+   .\adb.exe logcat -d -b crash *:E > "$env:USERPROFILE\Desktop\ghgflix-log.txt"
    notepad "$env:USERPROFILE\Desktop\ghgflix-log.txt"
    ```
 
    Nur die GHGFlix-Zeilen, live mitlaufend:
 
    ```powershell
-   adb logcat --pid=$(adb shell pidof -s com.bastild.ghgflix)
+   .\adb.exe logcat --pid=$(.\adb.exe shell pidof -s com.bastild.ghgflix)
    ```
 
    Nach dem Absturz die Ursache direkt anzeigen:
 
    ```powershell
-   adb logcat -d -b crash
+   .\adb.exe logcat -d -b crash
    ```
 
 7. Fertig? Verbindung trennen:
 
    ```powershell
-   adb disconnect
+   .\adb.exe disconnect
    ```
 
 Die interessanten Zeilen beginnen mit `FATAL EXCEPTION`, `AndroidRuntime` oder

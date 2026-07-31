@@ -2,7 +2,7 @@
 // dependencies. HTTP + routing on node:http, storage on node:sqlite,
 // video via ffmpeg. Designed for ZimaOS/Docker (see ../Dockerfile).
 import { createServer } from "node:http";
-import { createReadStream, existsSync, readdirSync, statSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join, normalize, extname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -304,13 +304,67 @@ async function handle(req, res) {
   }
   if (p === "/api/apk/status") {
     const file = apkPath();
-    if (!file) return json(res, { available: false });
+    if (!file) return json(res, { available: false, canUpload: !!password() });
     const st = statSync(file);
     return json(res, {
       available: true,
       sizeMb: (st.size / 1024 / 1024).toFixed(1),
       modified: new Date(st.mtimeMs).toLocaleDateString("de-DE"),
       url: "/apk",
+      canUpload: !!password(),
+    });
+  }
+  // App-Datei vom PC hochladen — spart das Herumschieben im Datei-Manager.
+  // NUR mit gesetztem Server-Passwort UND gültigem Token: ohne Passwort wäre
+  // das ein offenes Tor, um eine Datei auf dem NAS abzulegen.
+  if (p === "/api/apk" && req.method === "POST") {
+    if (!password()) {
+      return json(res, { error: "Hochladen nur mit gesetztem Server-Passwort (GHGFLIX_PASSWORD)." }, 403);
+    }
+    if (!authed(req, url)) return json(res, { error: "unauthorized" }, 401);
+    const dir = join(process.env.DATA_DIR || "/data", "apk");
+    const target = join(dir, "GHGFlix.apk");
+    const tmp = target + ".teil";
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch (e) {
+      return json(res, { error: "Ordner nicht anlegbar: " + String(e.message || e) }, 500);
+    }
+    return new Promise((resolve) => {
+      let bytes = 0;
+      let magicOk = null;
+      const out = createWriteStream(tmp);
+      const abbruch = (msg, code = 400) => {
+        try {
+          out.destroy();
+          rmSync(tmp, { force: true });
+        } catch { /* egal */ }
+        req.destroy();
+        json(res, { error: msg }, code);
+        resolve();
+      };
+      req.on("data", (chunk) => {
+        // Eine APK ist ein ZIP: die ersten beiden Bytes sind "PK".
+        if (magicOk === null && chunk.length >= 2) {
+          magicOk = chunk[0] === 0x50 && chunk[1] === 0x4b;
+          if (!magicOk) return abbruch("Das ist keine APK-Datei (ZIP-Kennung fehlt).");
+        }
+        bytes += chunk.length;
+        if (bytes > 500 * 1024 * 1024) return abbruch("Datei zu groß (max. 500 MB).", 413);
+      });
+      req.on("error", () => abbruch("Übertragung abgebrochen.", 400));
+      req.pipe(out);
+      out.on("finish", () => {
+        if (bytes < 1024) return abbruch("Datei ist leer.");
+        try {
+          renameSync(tmp, target);
+        } catch (e) {
+          return abbruch("Speichern fehlgeschlagen: " + String(e.message || e), 500);
+        }
+        console.log(`[apk] neue App-Datei abgelegt (${(bytes / 1024 / 1024).toFixed(1)} MB)`);
+        json(res, { ok: true, sizeMb: (bytes / 1024 / 1024).toFixed(1), url: "/apk" });
+        resolve();
+      });
     });
   }
 
