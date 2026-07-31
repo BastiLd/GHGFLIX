@@ -9,6 +9,7 @@ import React, { useCallback, useMemo, useRef } from "react";
 import { ActivityIndicator, FlatList, Image, Text, TextInput, View } from "react-native";
 import { FKnopf, FokusReihe, useFokusElement } from "./fokus.js";
 import { C, M, gross, st } from "./stile.js";
+import { qrErzeugen } from "./qr.js";
 
 /* ══ Kleinkram ═══════════════════════════════════════════════════════════ */
 
@@ -339,6 +340,61 @@ export function DialogListe({ eintraege, aktiv, aufWahl }) {
           {aktiv === e.wert && <Text style={[st.knopfText, { color: C.red }]}>✓</Text>}
         </FKnopf>
       ))}
+    </View>
+  );
+}
+
+/* ══ QR-Code ═════════════════════════════════════════════════════════════
+ * Gezeichnet aus einfachen Rechtecken — kein react-native-svg nötig.
+ *
+ * Bewusst NICHT ein Rechteck je Punkt: Bei Version 4 wären das über 1200
+ * einzelne Views, was auf einem schwachen Fernseher spürbar ruckelt.
+ * Stattdessen wird jede Zeile in waagerechte Streifen gleicher Farbe
+ * zusammengefasst — bei einem typischen QR-Code sind das etwa zehnmal
+ * weniger Elemente, und das Ergebnis sieht identisch aus.
+ */
+export function QrBild({ text, groesse: wunschGroesse }) {
+  const q = useMemo(() => qrErzeugen(text), [text]);
+  if (!q) return null;
+
+  const rand = 4;                       // Ruhezone, von der Norm gefordert
+  const felder = q.groesse + rand * 2;
+  const seite = wunschGroesse ?? (gross ? 320 : 210);
+  const punkt = seite / felder;
+
+  const streifen = [];
+  for (let z = 0; z < q.groesse; z++) {
+    let start = -1;
+    for (let s = 0; s <= q.groesse; s++) {
+      const schwarz = s < q.groesse && q.punkte[z][s];
+      if (schwarz && start < 0) start = s;
+      if (!schwarz && start >= 0) {
+        streifen.push({ z, s: start, breite: s - start });
+        start = -1;
+      }
+    }
+  }
+
+  return (
+    <View style={{
+      width: seite, height: seite, backgroundColor: "#ffffff",
+      borderRadius: 8, padding: rand * punkt,
+    }}>
+      <View style={{ width: q.groesse * punkt, height: q.groesse * punkt }}>
+        {streifen.map((r, i) => (
+          <View
+            key={i}
+            style={{
+              position: "absolute",
+              left: r.s * punkt,
+              top: r.z * punkt,
+              width: r.breite * punkt + 0.5,   // halber Punkt gegen Haarlinien
+              height: punkt + 0.5,
+              backgroundColor: "#000000",
+            }}
+          />
+        ))}
+      </View>
     </View>
   );
 }

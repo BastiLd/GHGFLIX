@@ -135,7 +135,8 @@ Module._load = function (name, parent, isMain) {
 console.log("\n── Alle Quelldateien übersetzen und laden ──────────────────");
 
 const dateien = [
-  "src/fokus-kern.js", "src/stile.js", "src/fokus.js", "src/bausteine.js",
+  "src/fokus-kern.js", "src/stile.js", "src/qr.js", "src/untertitel.js",
+  "src/einstellungen.js", "src/update.js", "src/fokus.js", "src/bausteine.js",
   "src/netzsuche.js", "src/seitenleiste.js", "src/seiten.js",
   "src/player.js", "src/verbindung.js", "App.js",
 ];
@@ -158,8 +159,12 @@ console.log("\n── Erwartete Exporte vorhanden ──────────
     "src/fokus-kern.js": ["erzeugeFokusKern"],
     "src/fokus.js": ["FokusProvider", "FKnopf", "FokusReihe", "useFokusElement", "useFernbedienung", "useDialog", "useFokusSystem"],
     "src/stile.js": ["C", "M", "st", "gross"],
-    "src/bausteine.js": ["PosterReihe", "BreitReihe", "Hero", "Knopf", "FFeld", "Dialog", "DialogListe", "Laden", "fmtZeit", "se", "parseGenres", "BackdropKopf"],
+    "src/bausteine.js": ["PosterReihe", "BreitReihe", "Hero", "Knopf", "FFeld", "Dialog", "DialogListe", "Laden", "fmtZeit", "se", "parseGenres", "BackdropKopf", "QrBild"],
     "src/netzsuche.js": ["ping", "sucheServer", "sucheImNetz", "normUrl"],
+    "src/qr.js": ["qrErzeugen"],
+    "src/untertitel.js": ["vttLesen", "vttZeit", "erzeugeSucher", "untertitelHolen"],
+    "src/einstellungen.js": ["STANDARD", "FELDER", "laden", "sichern", "jetzt", "waehleTon", "waehleUntertitel", "passtSprache"],
+    "src/update.js": ["vergleicheVersion", "pruefeUpdate", "starteUpdate"],
     "src/seitenleiste.js": ["Seitenleiste", "NAV"],
     "src/seiten.js": ["StartSeite", "RasterSeite", "SuchSeite", "SerienSeite", "FilmSeite", "ProfilSeite", "EinstellungenSeite"],
     "src/player.js": ["PlayerScreen"],

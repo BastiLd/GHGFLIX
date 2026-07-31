@@ -2,13 +2,15 @@
 // dependencies. HTTP + routing on node:http, storage on node:sqlite,
 // video via ffmpeg. Designed for ZimaOS/Docker (see ../Dockerfile).
 import { createServer } from "node:http";
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join, normalize, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb, getSetting, setSetting, settingOr, listLibraries, addLibrary, removeLibrary } from "./db.js";
 import { scanLibrary, scanState, removeLibraryContent, detectLibraries, BROWSE_ROOTS, primaryRoot, isSystemDir } from "./scanner.js";
 import { canDirectPlay, ffprobe, killAllTranscodes, serveFile, serveTranscode } from "./stream.js";
+import { alleSpuren, dateiAlsVtt, eingebettetAlsVtt, spurenLaden, spurenSpeichern } from "./spuren.js";
+import { kopplungsSeite, loeseKopplungEin, pruefeKopplung, starteKopplung } from "./koppeln.js";
 import { cachedImage, tmdbEnabled } from "./tmdb.js";
 import * as supabase from "./supabase.js";
 import { handleInvoke } from "./invoke.js";
@@ -24,7 +26,7 @@ const SERVER_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const WEBAPP_DIR = join(SERVER_ROOT, "webapp");
 const LEGACY_DIR = join(SERVER_ROOT, "web");
 const WEB_DIR = existsSync(join(WEBAPP_DIR, "index.html")) ? WEBAPP_DIR : LEGACY_DIR;
-const VERSION = "2.3.2";
+const VERSION = "2.4.0";
 
 const db = openDb();
 
@@ -72,6 +74,15 @@ const json = (res, data, status = 200) => {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(data));
 };
+/**
+ * Anfrage-Inhalt einlesen.
+ *
+ * Versteht JSON (so sprechen die Apps) und Formulardaten im Format
+ * application/x-www-form-urlencoded. Letzteres braucht die Kopplungsseite,
+ * die das Handy nach dem Scannen des QR-Codes öffnet: Ein schlichtes
+ * HTML-Formular funktioniert auf jedem Browser, auch ohne JavaScript —
+ * und genau das ist dort gewollt.
+ */
 const readBody = (req) =>
   new Promise((resolve, reject) => {
     let buf = "";
@@ -80,9 +91,22 @@ const readBody = (req) =>
       if (buf.length > 10_000_000) reject(new Error("body too large"));
     });
     req.on("end", () => {
+      if (!buf) return resolve({});
+      const art = String(req.headers["content-type"] || "");
+      if (art.includes("x-www-form-urlencoded")) {
+        const aus = {};
+        for (const [k, v] of new URLSearchParams(buf)) aus[k] = v;
+        return resolve(aus);
+      }
       try {
-        resolve(buf ? JSON.parse(buf) : {});
+        resolve(JSON.parse(buf));
       } catch {
+        // Kein JSON, aber vielleicht doch ein Formular ohne passenden Kopf
+        if (buf.includes("=")) {
+          const aus = {};
+          for (const [k, v] of new URLSearchParams(buf)) aus[k] = v;
+          return resolve(aus);
+        }
         reject(new Error("invalid json"));
       }
     });
@@ -138,6 +162,26 @@ function isAllowedImage(file) {
  * Server-Update, dort legt der Nutzer sie über ZimaOS → Files ab), sonst die
  * im Image mitgelieferte. Gibt null zurück, wenn keine vorhanden ist.
  */
+/**
+ * Version der hinterlegten App-Datei.
+ *
+ * Die Versionsnummer steckt zwar in der APK selbst, liegt dort aber im
+ * binären Android-Manifest — sie herauszulesen wäre unverhältnismäßig
+ * aufwendig. Stattdessen legt das Upload-Skript sie als kleine Textdatei
+ * daneben. Fehlt sie (Datei von Hand kopiert), meldet der Server null und
+ * die Apps bieten das Update schlicht ohne Versionsvergleich an.
+ */
+function apkVersion() {
+  const datei = apkPath();
+  if (!datei) return null;
+  try {
+    const v = readFileSync(datei + ".version", "utf8").trim();
+    return /^[\d.]+$/.test(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 function apkPath() {
   const candidates = [
     join(process.env.DATA_DIR || "/data", "apk", "GHGFlix.apk"),
@@ -308,6 +352,7 @@ async function handle(req, res) {
     const st = statSync(file);
     return json(res, {
       available: true,
+      version: apkVersion(),
       sizeMb: (st.size / 1024 / 1024).toFixed(1),
       modified: new Date(st.mtimeMs).toLocaleDateString("de-DE"),
       url: "/apk",
@@ -321,7 +366,50 @@ async function handle(req, res) {
     if (!password()) {
       return json(res, { error: "Hochladen nur mit gesetztem Server-Passwort (GHGFLIX_PASSWORD)." }, 403);
     }
-    if (!authed(req, url)) return json(res, { error: "unauthorized" }, 401);
+    /* ── Kopplung: Zugang ohne Tippen am Fernseher ───────────────────────
+     Der Fernseher holt sich einen Code, zeigt ihn als QR-Code, das Handy
+     scannt ihn und gibt das Passwort ein. Details in src/koppeln.js.
+     Diese drei Endpunkte liegen bewusst VOR der Token-Pruefung — sie sind
+     ja gerade dafuer da, ein Token zu bekommen. */
+  if (p === "/api/pair/start" && req.method === "POST") {
+    if (!password()) return json(res, { error: "Ohne Server-Passwort ist keine Kopplung noetig." }, 400);
+    const body = await readBody(req).catch(() => ({}));
+    const vorgang = starteKopplung(body?.geraet || "Fernseher");
+    if (!vorgang) return json(res, { error: "Kein Code frei — kurz warten." }, 503);
+    return json(res, vorgang);
+  }
+
+  if (p === "/api/pair/check") {
+    const ergebnis = pruefeKopplung(url.searchParams.get("code"));
+    return json(res, ergebnis);
+  }
+
+  /* Die Seite, die das Handy nach dem Scannen oeffnet. */
+  if (p === "/koppeln") {
+    if (req.method === "POST") {
+      const body = await readBody(req).catch(() => ({}));
+      const code = String(body.code || "").toUpperCase().trim();
+      const pw = String(body.passwort ?? body.password ?? "");
+      const html = (o) => {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(kopplungsSeite(o));
+      };
+      if (!password()) return html({ code, meldung: "Dieser Server hat kein Passwort — der Fernseher kommt auch so hinein." });
+      if (pw !== password()) return html({ code, meldung: "Falsches Passwort." });
+      const t = randomBytes(24).toString("hex");
+      tokens.set(t, Date.now());
+      saveTokens();
+      if (!loeseKopplungEin(code, t)) {
+        return html({ code, meldung: "Dieser Code ist abgelaufen. Am Fernseher einen neuen anzeigen lassen." });
+      }
+      console.log(`[koppeln] Fernseher freigeschaltet (Code ${code})`);
+      return html({ fertig: true });
+    }
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    return res.end(kopplungsSeite({ code: String(url.searchParams.get("code") || "").toUpperCase() }));
+  }
+
+  if (!authed(req, url)) return json(res, { error: "unauthorized" }, 401);
     const dir = join(process.env.DATA_DIR || "/data", "apk");
     const target = join(dir, "GHGFlix.apk");
     const tmp = target + ".teil";
@@ -361,8 +449,17 @@ async function handle(req, res) {
         } catch (e) {
           return abbruch("Speichern fehlgeschlagen: " + String(e.message || e), 500);
         }
-        console.log(`[apk] neue App-Datei abgelegt (${(bytes / 1024 / 1024).toFixed(1)} MB)`);
-        json(res, { ok: true, sizeMb: (bytes / 1024 / 1024).toFixed(1), url: "/apk" });
+        /* Versionsnummer daneben ablegen, damit die Apps vergleichen koennen,
+           ob sich das Herunterladen ueberhaupt lohnt. Sie kommt vom
+           Upload-Skript als ?version=3.1.0 mit. */
+        const version = String(url.searchParams.get("version") || "").trim();
+        try {
+          if (/^[\d.]+$/.test(version)) writeFileSync(target + ".version", version);
+          else rmSync(target + ".version", { force: true });
+        } catch { /* nicht schlimm - dann eben ohne Versionsvergleich */ }
+
+        console.log(`[apk] neue App-Datei abgelegt (${(bytes / 1024 / 1024).toFixed(1)} MB${version ? ", Version " + version : ""})`);
+        json(res, { ok: true, version: version || null, sizeMb: (bytes / 1024 / 1024).toFixed(1), url: "/apk" });
         resolve();
       });
     });
@@ -561,6 +658,17 @@ async function handle(req, res) {
     const direct = canDirectPlay(row);
     // Sprite-Blatt für die Vorschau schon mal im Hintergrund bauen lassen
     if (row.duration) ensureTrickplay(row.path, row.duration);
+
+    /* Ton- und Untertitelspuren. Beim ersten Mal werden sie ermittelt und
+       gespeichert; danach kommen sie ohne ffprobe aus der Datenbank. Findet
+       sich nichts (Datei geloescht, ffprobe fehlt), bleiben die Listen leer
+       und die Apps zeigen die Auswahl schlicht nicht an. */
+    let spuren = spurenLaden(row);
+    if (!spuren) {
+      spuren = await alleSpuren(row.path);
+      const tabelle = m[1] === "movie" ? "movies" : "episodes";
+      spurenSpeichern(db, tabelle, row.id, spuren);
+    }
     return json(res, {
       duration: row.duration,
       direct,
@@ -574,8 +682,50 @@ async function handle(req, res) {
       trickplayUrl: trickplayInfo(row.path) ? `/api/trickplay?path=${encodeURIComponent(row.path)}${tq}` : null,
       trickplay: trickplayInfo(row.path),
       audioStreams: row.audioStreams ?? [],
+      // Ton- und Untertitelspuren, aufbereitet fuer die Apps. Beim ersten
+      // Abspielen einer Datei kostet das einen ffprobe-Aufruf, danach kommt
+      // es aus der Datenbank.
+      spuren,
+      untertitelUrl: `/api/untertitel/${m[1]}/${row.id}?x=1${tq}`,
     });
   }
+  /* ── Untertitel als WebVTT ───────────────────────────────────────────
+     Die Apps zeichnen Untertitel selbst, statt sie ins Bild einbrennen zu
+     lassen. Das hat drei Vorteile: kein erneutes Kodieren des Videos (Last
+     auf dem NAS), sofortiges Umschalten, und Groesse sowie Farbe bleiben
+     einstellbar. Geliefert wird deshalb reiner Text im WebVTT-Format.
+
+     ?track=s0  eingebettete Spur Nummer 0
+     ?track=d1  Untertiteldatei Nummer 1 neben dem Video            */
+  if ((m = p.match(/^\/api\/untertitel\/(movie|episode)\/(\d+)$/))) {
+    const row = mediaRow(m[1], +m[2]);
+    if (!row) return json(res, { error: "not found" }, 404);
+    const kennung = String(url.searchParams.get("track") || "");
+
+    let spuren = spurenLaden(row);
+    if (!spuren) {
+      spuren = await alleSpuren(row.path);
+      spurenSpeichern(db, m[1] === "movie" ? "movies" : "episodes", row.id, spuren);
+    }
+    const spur = (spuren.sub || []).find((x) => x.id === kennung);
+    if (!spur) return json(res, { error: "Diese Untertitelspur gibt es nicht" }, 404);
+    if (spur.bild) {
+      return json(res, { error: "Bild-Untertitel (PGS/VOBSUB) enthalten keinen Text" }, 415);
+    }
+
+    const vtt = spur.quelle === "datei"
+      ? await dateiAlsVtt(spur.datei)
+      : await eingebettetAlsVtt(row.path, spur.nr);
+
+    if (!vtt) return json(res, { error: "Untertitel konnten nicht gelesen werden" }, 500);
+    res.writeHead(200, {
+      "Content-Type": "text/vtt; charset=utf-8",
+      // Untertitel aendern sich nicht — einen Tag zwischenspeichern lassen
+      "Cache-Control": "public, max-age=86400",
+    });
+    return res.end(vtt);
+  }
+
   if ((m = p.match(/^\/api\/stream\/(movie|episode)\/(\d+)$/))) {
     const row = mediaRow(m[1], +m[2]);
     if (!row) return res.writeHead(404).end();

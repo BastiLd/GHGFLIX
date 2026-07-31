@@ -7,38 +7,46 @@
  * „Ich kann ihn überhaupt nicht steuern. Es ist ganz schwer, in diese
  *  Oberfläche reinzukommen, und dann kann man nichts machen."
  *
- * Der Grund: Die Bedienleiste bestand aus Knöpfen, die auf Androids eigenen
- * View-Fokus angewiesen waren. Über einem Video, das den ganzen Bildschirm
- * füllt, findet Androids geometrische Fokus-Suche aber kaum einen Weg zu
- * ihnen — und ausgeblendete Knöpfe sind gar nicht erst erreichbar.
+ * Der Grund: Die Bedienleiste hing an Androids eigenem View-Fokus. Über
+ * einem formatfüllenden Video findet dessen geometrische Suche kaum einen
+ * Weg dorthin, und ausgeblendete Knöpfe sind gar nicht erreichbar.
  *
  * WIE ES JETZT FUNKTIONIERT
  * Der Player benutzt dasselbe Fokus-System wie der Rest der App (fokus.js).
  * Die Bedienleiste ist ein festes Raster:
  *
  *     Zeile 0   [────────── Fortschrittsbalken ──────────]
- *     Zeile 1   [ −10 ] [ ⏯ ] [ +10 ] [ Nächste ] [ Ton ] [ Info ]
+ *     Zeile 1   [−10] [⏯] [+30] [Nächste] [Ton] [Untertitel] [Tempo] [Info]
  *
  * ← → auf dem Balken springen im Video (der Balken behält die Tasten für
  * sich, siehe aufRichtung im Fokus-Kern). ↑ ↓ wechseln zwischen Balken und
- * Knöpfen. Beim Öffnen liegt die Auswahl gleich auf ⏯, damit die erste
- * OK-Taste sofort etwas Sinnvolles tut.
+ * Knöpfen. Die Medientasten der Fernbedienung wirken immer, auch bei
+ * ausgeblendeter Leiste.
  *
- * Zusätzlich wirken die Medientasten der Fernbedienung direkt, ganz ohne
- * Bedienleiste — genau wie bei Netflix oder Plex.
+ * ── TON UND UNTERTITEL ────────────────────────────────────────────────────
+ * Der Server meldet alle Spuren der Datei (server/src/spuren.js), inklusive
+ * Untertiteldateien, die neben dem Video liegen. Umgeschaltet wird so:
+ *
+ *   Ton bei Direktwiedergabe    expo-video schaltet die eingebettete Spur um
+ *   Ton beim Umwandeln          der Server bekommt &a=<Nummer>, der Strom
+ *                               wird an derselben Stelle neu aufgebaut
+ *   Untertitel immer            als Text vom Server geholt und selbst
+ *                               gezeichnet — dadurch sofortiges Umschalten
+ *                               und einstellbare Größe und Farbe
  *
  * ── WICHTIG ZUM ABSTURZ "NativeSharedObjectNotFoundException" ─────────────
  * expo-video gibt das native Player-Objekt frei, sobald der Bildschirm
  * verlassen wird. Jeder spätere Zugriff auf player.currentTime & Co. wirft
  * dann. Deshalb werden Position und Dauer fortlaufend in Refs gespiegelt und
  * NUR aus diesen gespeichert; jeder direkte Zugriff läuft über safe().
- * Diese bewährte Absicherung ist unverändert übernommen.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Text, View } from "react-native";
-import { FKnopf, FokusReihe, useDialog, useFernbedienung, useFokusElement, useFokusSystem } from "./fokus.js";
+import { FKnopf, FokusReihe, useDialog, useFernbedienung, useFokusElement } from "./fokus.js";
 import { C, M, gross, st } from "./stile.js";
 import { Dialog, DialogListe, fmtZeit } from "./bausteine.js";
+import { untertitelHolen } from "./untertitel.js";
+import { jetzt as einstellungenJetzt, waehleTon, waehleUntertitel } from "./einstellungen.js";
 
 /* ── expo-video vorsichtig laden ──────────────────────────────────────────
    Fehlt das Modul, soll die App eine verständliche Meldung zeigen statt
@@ -61,7 +69,7 @@ try { useKeepAwake = require("expo-keep-awake").useKeepAwake; } catch {}
 
 export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, nextEp }) {
   useKeepAwake();
-  const sys = useFokusSystem();
+  const E = einstellungenJetzt();
 
   const [info, setInfo] = useState(null);
   const [resume, setResume] = useState(0);
@@ -71,8 +79,16 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   const [pos, setPos] = useState(0);
   const [dauer, setDauer] = useState(0);
   const [balkenBreite, setBalkenBreite] = useState(0);
-  const [dialog, setDialog] = useState(null);   // null | "info" | "tempo"
-  const [tempo, setTempo] = useState(1);
+  const [dialog, setDialog] = useState(null);   // null | "ton" | "ut" | "tempo" | "bild" | "info"
+  const [tempo, setTempo] = useState(E.tempo);
+  const [bildmodus, setBildmodus] = useState(E.bildmodus);
+
+  // Spuren
+  const [tonSpur, setTonSpur] = useState(null);
+  const [utSpur, setUtSpur] = useState(null);
+  const [utSucher, setUtSucher] = useState(null);
+  const [utText, setUtText] = useState(null);
+  const [utLaedt, setUtLaedt] = useState(false);
 
   const offsetRef = useRef(0);   // beim Umwandeln: Startpunkt des Datenstroms
   const modeRef = useRef("direct");
@@ -80,6 +96,7 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   const durRef = useRef(0);
   const lebtRef = useRef(true);
   const versteckRef = useRef(null);
+  const tonRef = useRef(null);   // aktuelle Tonspur für den Umwandel-Neustart
 
   /** Jeder Zugriff auf das native Player-Objekt — niemals ungeschützt. */
   const safe = useCallback((fn, fallback = undefined) => {
@@ -98,37 +115,47 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   /* ── Infos und gespeicherten Fortschritt holen ─────────────────────── */
   useEffect(() => {
     (async () => {
-      const [i, prog] = await Promise.all([
+      const [i, fortschritt] = await Promise.all([
         api(`/api/play/${type}/${id}`),
         api("/api/progress"),
       ]);
-      const gemerkt = prog.find?.((x) => x.mediaType === type && x.refId === +id);
+      const gemerkt = fortschritt.find?.((x) => x.mediaType === type && x.refId === +id);
       const bei =
-        gemerkt && !gemerkt.watched && gemerkt.position > 30 &&
+        gemerkt && !gemerkt.watched && gemerkt.position > (E.fortsetzenAb || 30) &&
         gemerkt.position < (gemerkt.duration || 1e9) * 0.95
           ? gemerkt.position : 0;
       modeRef.current = i.direct ? "direct" : "transcode";
       offsetRef.current = i.direct ? 0 : bei;
       posRef.current = bei;
       durRef.current = i.duration || 0;
+
+      // Spuren nach den Vorlieben vorbelegen
+      const ton = waehleTon(i.spuren?.audio, E.tonSprache);
+      tonRef.current = ton;
+      setTonSpur(ton);
+      const ut = waehleUntertitel(i.spuren?.sub, E.utSprache, E.utAn);
+      setUtSpur(ut);
+
       setResume(bei);
       setDauer(i.duration || 0);
       setPos(bei);
       setInfo(i);
     })().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, type, id]);
 
   const tok = conn?.token ? `?token=${conn.token}` : "?";
   const quelleFuer = useCallback(
-    (i, t) =>
-      modeRef.current === "direct"
-        ? `${base}${i.directUrl}${tok}&profile=1`
-        : `${base}${i.transcodeUrl}${tok}&profile=1&t=${Math.floor(t)}`,
+    (i, t) => {
+      if (modeRef.current === "direct") return `${base}${i.directUrl}${tok}&profile=1`;
+      const a = tonRef.current?.nr ?? 0;
+      return `${base}${i.transcodeUrl}${tok}&profile=1&a=${a}&t=${Math.floor(t)}`;
+    },
     [base, tok],
   );
 
   const player = useVideoPlayer(null, (p) => {
-    if (p) p.timeUpdateEventInterval = 0.5;
+    if (p) p.timeUpdateEventInterval = 0.25;   // flüssige Untertitel
   });
 
   /* ── Quelle laden ──────────────────────────────────────────────────── */
@@ -137,12 +164,30 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     safe(() => {
       player.replace(quelleFuer(info, resume));
       player.play();
+      if (tempo !== 1) player.playbackRate = tempo;
     });
     if (modeRef.current === "direct" && resume > 0) {
       const t = setTimeout(() => safe(() => { player.currentTime = resume; }), 700);
       return () => clearTimeout(t);
     }
-  }, [info, player, resume, quelleFuer, safe]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info, player, resume]);
+
+  /* ── Untertitel holen, sobald eine Spur gewählt ist ────────────────── */
+  useEffect(() => {
+    let abgebrochen = false;
+    if (!utSpur || !info?.untertitelUrl) { setUtSucher(null); setUtText(null); return; }
+    setUtLaedt(true);
+    const tr = info.untertitelUrl.includes("?") ? "&" : "?";
+    untertitelHolen(`${base}${info.untertitelUrl}${tr}track=${utSpur.id}`.replace(base + base, base))
+      .then((s) => {
+        if (abgebrochen) return;
+        setUtSucher(s);
+        setUtLaedt(false);
+      })
+      .catch(() => { if (!abgebrochen) setUtLaedt(false); });
+    return () => { abgebrochen = true; };
+  }, [utSpur, info, base]);
 
   /* ── Laufende Werte spiegeln ───────────────────────────────────────── */
   useEffect(() => {
@@ -187,6 +232,13 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     return () => abos.forEach((a) => { try { a?.remove?.(); } catch {} });
   }, [player, info, quelleFuer, safe]);
 
+  /* ── Untertiteltext zur aktuellen Stelle bestimmen ─────────────────── */
+  useEffect(() => {
+    if (!utSucher) { setUtText(null); return; }
+    const neu = utSucher.beiZeit(pos, E.utVersatz || 0);
+    setUtText((alt) => (alt === neu ? alt : neu));
+  }, [pos, utSucher, E.utVersatz]);
+
   /* ── Fortschritt sichern ───────────────────────────────────────────── */
   const sichern = useCallback(
     (gesehen = false) => {
@@ -208,8 +260,9 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   const wecken = useCallback(() => {
     setLeisteAn(true);
     if (versteckRef.current) clearTimeout(versteckRef.current);
-    versteckRef.current = setTimeout(() => setLeisteAn(false), 5000);
-  }, []);
+    const nach = (E.leisteAus ?? 5) * 1000;
+    if (nach > 0) versteckRef.current = setTimeout(() => setLeisteAn(false), nach);
+  }, [E.leisteAus]);
   useEffect(() => { wecken(); }, [wecken]);
 
   /* ── Steuerung ─────────────────────────────────────────────────────── */
@@ -246,10 +299,57 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     pop();
     push({
       name: "play", type: "episode", id: nextEp.id, title,
-      subtitle: nextEp.se + (nextEp.title ? " · " + nextEp.title : ""),
+      subtitle: (nextEp.se || "") + (nextEp.title ? " · " + nextEp.title : ""),
       nextEp: nextEp.next ?? null,
     });
   }, [nextEp, sichern, pop, push, title]);
+
+  /* Nächste Folge von selbst starten, wenn eingestellt. */
+  const autoRef = useRef(false);
+  useEffect(() => {
+    if (!E.autoNaechste || !nextEp || autoRef.current) return;
+    if (dauer > 0 && pos >= dauer * (E.autoNaechsteAb || 0.95)) {
+      autoRef.current = true;
+      naechsteFolge();
+    }
+  }, [pos, dauer, nextEp, naechsteFolge, E.autoNaechste, E.autoNaechsteAb]);
+
+  /* ── Tonspur wechseln ──────────────────────────────────────────────── */
+  const tonWaehlen = useCallback((kennung) => {
+    const spur = (info?.spuren?.audio || []).find((s) => s.id === kennung);
+    if (!spur) return;
+    tonRef.current = spur;
+    setTonSpur(spur);
+    setDialog(null);
+
+    if (modeRef.current === "direct") {
+      /* Bei Direktwiedergabe schaltet expo-video die eingebettete Spur
+         selbst um — ohne Neuladen und ohne Aussetzer. */
+      safe(() => {
+        const verfuegbar = player.availableAudioTracks || [];
+        if (verfuegbar[spur.nr]) player.audioTrack = verfuegbar[spur.nr];
+      });
+      return;
+    }
+    /* Beim Umwandeln entscheidet der Server, welche Spur im Strom landet.
+       Also an derselben Stelle neu anfordern — die Position bleibt erhalten. */
+    const stelle = posRef.current;
+    offsetRef.current = stelle;
+    safe(() => {
+      player.replace(quelleFuer(info, stelle));
+      player.play();
+    });
+    wecken();
+  }, [info, player, quelleFuer, safe, wecken]);
+
+  /* ── Untertitel wechseln ───────────────────────────────────────────── */
+  const utWaehlen = useCallback((kennung) => {
+    setDialog(null);
+    if (kennung === "aus") { setUtSpur(null); setUtSucher(null); setUtText(null); return; }
+    const spur = (info?.spuren?.sub || []).find((s) => s.id === kennung);
+    if (spur) setUtSpur(spur);
+    wecken();
+  }, [info, wecken]);
 
   const setzeTempo = useCallback((v) => {
     setTempo(v);
@@ -261,8 +361,8 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   useFernbedienung((taste) => {
     switch (taste) {
       case "playPause": anHalten(); break;
-      case "fastForward": springeUm(30); break;
-      case "rewind": springeUm(-10); break;
+      case "fastForward": springeUm(E.sprungVor || 30); break;
+      case "rewind": springeUm(-(E.sprungZurueck || 10)); break;
       case "next": naechsteFolge(); break;
       case "previous": springeAuf(0); break;
       case "stop": verlassen(); break;
@@ -271,18 +371,14 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     }
   });
 
-  /* ── Ist die Leiste aus, holt die erste Taste sie zurück ───────────── */
-  const leisteAnRef = useRef(leisteAn);
-  leisteAnRef.current = leisteAn;
-
   useDialog(!!dialog);
 
   /* ── Fortschrittsbalken als Fokus-Element ──────────────────────────── */
   const balkenRichtung = useCallback((r) => {
-    if (r === "left") { springeUm(-10); return true; }
-    if (r === "right") { springeUm(30); return true; }
+    if (r === "left") { springeUm(-(E.sprungZurueck || 10)); return true; }
+    if (r === "right") { springeUm(E.sprungVor || 30); return true; }
     return false;
-  }, [springeUm]);
+  }, [springeUm, E.sprungVor, E.sprungZurueck]);
 
   const balkenAn = useFokusElement({
     bereich: "inhalt", zeile: 0, spalte: 0,
@@ -293,6 +389,9 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
 
   /* ── Anzeige ───────────────────────────────────────────────────────── */
   const anteil = dauer > 0 ? Math.min(1, Math.max(0, pos / dauer)) : 0;
+  const tonListe = info?.spuren?.audio || [];
+  const utListe = (info?.spuren?.sub || []).filter((s) => s.text && !s.bild);
+  const utBildNur = (info?.spuren?.sub || []).filter((s) => s.bild).length;
 
   if (videoLadeFehler || !VideoView) {
     return (
@@ -310,12 +409,15 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     );
   }
 
+  // Knopfspalten fortlaufend vergeben, damit übersprungene Knöpfe keine Lücke lassen
+  let sp = 0;
+
   return (
     <View style={st.playerWurzel}>
       <VideoView
         style={{ flex: 1 }}
         player={player}
-        contentFit="contain"
+        contentFit={bildmodus}
         nativeControls={false}
         allowsFullscreen={false}
       />
@@ -323,6 +425,40 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
       {puffert && (
         <View style={[st.center, { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, backgroundColor: "transparent" }]}>
           <ActivityIndicator size="large" color={C.red} />
+        </View>
+      )}
+
+      {/* ── Untertitel ────────────────────────────────────────────────── */}
+      {!!utText && (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute", left: "6%", right: "6%",
+            bottom: leisteAn
+              ? `${Math.round((E.utPosition ?? 0.08) * 100) + (gross ? 18 : 15)}%`
+              : `${Math.round((E.utPosition ?? 0.08) * 100)}%`,
+            alignItems: "center",
+          }}
+        >
+          <Text
+            style={{
+              color: E.utFarbe || "#ffffff",
+              fontSize: (gross ? 30 : 17) * (E.utGroesse ?? 1),
+              lineHeight: (gross ? 40 : 23) * (E.utGroesse ?? 1),
+              fontWeight: "600",
+              textAlign: "center",
+              backgroundColor: `rgba(0,0,0,${E.utHintergrund ?? 0.55})`,
+              paddingHorizontal: 14,
+              paddingVertical: 4,
+              borderRadius: 6,
+              overflow: "hidden",
+              ...(E.utRand !== false
+                ? { textShadowColor: "#000", textShadowRadius: 5, textShadowOffset: { width: 0, height: 1 } }
+                : {}),
+            }}
+          >
+            {utText}
+          </Text>
         </View>
       )}
 
@@ -344,24 +480,30 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
             <Text numberOfLines={1} style={st.playerTitel}>{title}</Text>
             {!!subtitle && <Text numberOfLines={1} style={st.playerUnter}>{subtitle}</Text>}
           </View>
-          {modeRef.current === "transcode" && (
-            <View style={[st.hinweis, { paddingVertical: 5, paddingHorizontal: 10 }]}>
-              <Text style={{ color: C.text, fontSize: M.klein, fontWeight: "700" }}>Umgewandelt</Text>
-            </View>
-          )}
+          <View style={{ alignItems: "flex-end", gap: 4 }}>
+            {modeRef.current === "transcode" && (
+              <View style={[st.hinweis, { paddingVertical: 4, paddingHorizontal: 10 }]}>
+                <Text style={{ color: C.text, fontSize: M.klein, fontWeight: "700" }}>Umgewandelt</Text>
+              </View>
+            )}
+            {!!tonSpur && tonListe.length > 1 && (
+              <Text style={{ color: "#c9c9d6", fontSize: M.klein }}>🔊 {tonSpur.name}</Text>
+            )}
+            {!!utSpur && (
+              <Text style={{ color: "#c9c9d6", fontSize: M.klein }}>
+                💬 {utSpur.name}{utLaedt ? " (lädt …)" : ""}
+              </Text>
+            )}
+          </View>
         </View>
       )}
 
       {/* ── Bedienleiste ──────────────────────────────────────────────── */}
       {leisteAn && (
         <View pointerEvents="box-none" style={st.playerFuss}>
-          {/* Zeile 0: Fortschrittsbalken */}
           <View style={[st.balkenRahmen, balkenAn && st.fokus]}>
             <Text style={st.playerZeit}>{fmtZeit(pos)}</Text>
-            <View
-              style={st.balkenSpur}
-              onLayout={(e) => setBalkenBreite(e.nativeEvent.layout.width)}
-            >
+            <View style={st.balkenSpur} onLayout={(e) => setBalkenBreite(e.nativeEvent.layout.width)}>
               <View style={[st.balkenVoll, { width: balkenBreite * anteil }]} />
               <View style={[st.balkenGriff, {
                 left: balkenBreite * anteil,
@@ -373,33 +515,88 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
 
           {balkenAn && (
             <Text style={[st.gedaempft, { textAlign: "center", marginTop: 2, fontSize: M.klein }]}>
-              ← 10 Sek zurück   ·   OK Pause   ·   30 Sek vor →
+              ← {E.sprungZurueck || 10} Sek zurück   ·   OK Pause   ·   {E.sprungVor || 30} Sek vor →
             </Text>
           )}
 
-          {/* Zeile 1: Knöpfe */}
           <FokusReihe zeile={1}>
             <View style={st.playerKnopfReihe}>
-              <PKnopf spalte={0} text="10" symbol="⏪" onPress={() => springeUm(-10)} />
-              <PKnopf spalte={1} symbol={laeuft ? "⏸" : "▶"} haupt onPress={anHalten} gross />
-              <PKnopf spalte={2} text="30" symbol="⏩" onPress={() => springeUm(30)} />
-              {!!nextEp && <PKnopf spalte={3} text="Nächste" symbol="⏭" onPress={naechsteFolge} />}
-              <PKnopf spalte={nextEp ? 4 : 3} text={`${tempo}×`} onPress={() => setDialog("tempo")} />
-              <PKnopf spalte={nextEp ? 5 : 4} symbol="ℹ" onPress={() => setDialog("info")} />
+              <PKnopf spalte={sp++} text={String(E.sprungZurueck || 10)} symbol="⏪" onPress={() => springeUm(-(E.sprungZurueck || 10))} />
+              <PKnopf spalte={sp++} symbol={laeuft ? "⏸" : "▶"} haupt grossKnopf onPress={anHalten} />
+              <PKnopf spalte={sp++} text={String(E.sprungVor || 30)} symbol="⏩" onPress={() => springeUm(E.sprungVor || 30)} />
+              {!!nextEp && <PKnopf spalte={sp++} text="Nächste" symbol="⏭" onPress={naechsteFolge} />}
+              {tonListe.length > 1 && <PKnopf spalte={sp++} symbol="🔊" text="Ton" onPress={() => setDialog("ton")} />}
+              {(utListe.length > 0 || utBildNur > 0) && (
+                <PKnopf spalte={sp++} symbol="💬" text={utSpur ? "UT an" : "UT"} onPress={() => setDialog("ut")} />
+              )}
+              <PKnopf spalte={sp++} text={`${tempo}×`} onPress={() => setDialog("tempo")} />
+              <PKnopf spalte={sp++} symbol="⛶" onPress={() => setDialog("bild")} />
+              <PKnopf spalte={sp++} symbol="ℹ" onPress={() => setDialog("info")} />
             </View>
           </FokusReihe>
         </View>
       )}
 
       {/* ── Dialoge ───────────────────────────────────────────────────── */}
+      {dialog === "ton" && (
+        <Dialog titel="Tonspur">
+          <DialogListe
+            aktiv={tonSpur?.id}
+            aufWahl={tonWaehlen}
+            eintraege={tonListe.map((s) => ({ wert: s.id, text: s.name }))}
+          />
+          {modeRef.current === "transcode" && (
+            <Text style={[st.gedaempft, { marginTop: 12, fontSize: M.klein }]}>
+              Beim Umwandeln wird nach dem Wechsel kurz neu geladen.
+            </Text>
+          )}
+        </Dialog>
+      )}
+
+      {dialog === "ut" && (
+        <Dialog titel="Untertitel">
+          <DialogListe
+            aktiv={utSpur?.id ?? "aus"}
+            aufWahl={utWaehlen}
+            eintraege={[
+              { wert: "aus", text: "Aus" },
+              ...utListe.map((s) => ({ wert: s.id, text: s.name })),
+            ]}
+          />
+          {utBildNur > 0 && (
+            <Text style={[st.gedaempft, { marginTop: 12, fontSize: M.klein }]}>
+              {utBildNur} weitere Spur{utBildNur > 1 ? "en" : ""} ist Bild-Untertitel (Blu-ray/DVD).
+              {"\n"}Die enthalten keinen Text und lassen sich nicht anzeigen.
+            </Text>
+          )}
+          <Text style={[st.gedaempft, { marginTop: 10, fontSize: M.klein }]}>
+            Größe, Farbe und Position stellst du unter Einstellungen ein.
+          </Text>
+        </Dialog>
+      )}
+
       {dialog === "tempo" && (
-        <Dialog titel="Wiedergabegeschwindigkeit">
+        <Dialog titel="Geschwindigkeit">
           <DialogListe
             aktiv={tempo}
             aufWahl={setzeTempo}
             eintraege={[0.75, 1, 1.25, 1.5, 2].map((v) => ({
               wert: v, text: v === 1 ? "Normal (1×)" : `${v}×`,
             }))}
+          />
+        </Dialog>
+      )}
+
+      {dialog === "bild" && (
+        <Dialog titel="Bildanpassung">
+          <DialogListe
+            aktiv={bildmodus}
+            aufWahl={(v) => { setBildmodus(v); setDialog(null); }}
+            eintraege={[
+              { wert: "contain", text: "Einpassen — nichts wird abgeschnitten" },
+              { wert: "cover", text: "Füllen — schwarze Balken weg, Ränder ab" },
+              { wert: "fill", text: "Verzerren — füllt alles, Bild wird gedehnt" },
+            ]}
           />
         </Dialog>
       )}
@@ -411,10 +608,12 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
             {[
               `Laufzeit: ${fmtZeit(dauer)}`,
               `Position: ${fmtZeit(pos)}`,
-              modeRef.current === "direct" ? "Direkt abgespielt" : "Wird für dieses Gerät umgewandelt",
+              modeRef.current === "direct" ? "Wird direkt abgespielt" : "Wird für dieses Gerät umgewandelt",
               info?.width ? `Auflösung: ${info.width}×${info.height}` : null,
-              info?.vcodec ? `Video: ${info.vcodec}` : null,
-              info?.acodec ? `Ton: ${info.acodec}` : null,
+              info?.vcodec ? `Video: ${String(info.vcodec).toUpperCase()}` : null,
+              info?.acodec ? `Ton: ${String(info.acodec).toUpperCase()}` : null,
+              tonListe.length ? `Tonspuren: ${tonListe.length}` : null,
+              info?.spuren?.sub?.length ? `Untertitel: ${info.spuren.sub.length}` : null,
             ].filter(Boolean).join("\n")}
           </Text>
           <View style={{ height: 16 }} />
@@ -433,7 +632,7 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
 }
 
 /** Knopf der Bedienleiste. */
-function PKnopf({ spalte, text, symbol, haupt, onPress, gross: grossKnopf }) {
+function PKnopf({ spalte, text, symbol, haupt, onPress, grossKnopf }) {
   return (
     <FKnopf
       spalte={spalte}

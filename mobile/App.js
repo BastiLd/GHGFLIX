@@ -32,13 +32,15 @@ import { Seitenleiste } from "./src/seitenleiste.js";
 import { PlayerScreen } from "./src/player.js";
 import { VerbindungsScreen } from "./src/verbindung.js";
 import { normUrl, ping } from "./src/netzsuche.js";
+import { pruefeUpdate, starteUpdate } from "./src/update.js";
+import { laden as ladeEinstellungen } from "./src/einstellungen.js";
 import { C, M, st } from "./src/stile.js";
 import {
   EinstellungenSeite, FilmSeite, ProfilSeite, RasterSeite,
   SerienSeite, StartSeite, SuchSeite,
 } from "./src/seiten.js";
 
-const APP_VERSION = "3.0.0";
+const APP_VERSION = "3.1.0";
 
 /* ══ Absturzfang ═════════════════════════════════════════════════════════
  * Stürzt irgendwo etwas ab, soll der Bildschirm nicht schwarz bleiben,
@@ -108,6 +110,7 @@ function AppInner() {
   const [verlauf, setVerlauf] = useState([]);
   const [favoriten, setFavoriten] = useState([]);
   const [profile, setProfile] = useState([]);
+  const [appAktuell, setAppAktuell] = useState(null);
 
   const oben = stapel[stapel.length - 1] || null;
   const push = useCallback((s) => setStapel((alt) => [...alt, s]), []);
@@ -142,8 +145,20 @@ function AppInner() {
   }, []);
 
   useEffect(() => {
+    // Einstellungen zuerst laden — der Player greift ohne Warten darauf zu
+    ladeEinstellungen().catch(() => {});
     ladeConn().then((c) => { setConn(c); verbinden(c); });
   }, [verbinden]);
+
+  /* Beim Start nachsehen, ob auf dem Server eine neuere App-Fassung liegt.
+     Damit entfaellt das laestige Eintippen der Adresse im Downloader. */
+  useEffect(() => {
+    if (!basis) return;
+    ladeEinstellungen().then((E) => {
+      if (E.updatePruefen === false) return;
+      pruefeUpdate(api, APP_VERSION).then(setAppAktuell).catch(() => {});
+    });
+  }, [basis, api]);
 
   /* ── Serverzugriff ────────────────────────────────────────────────── */
   const api = useCallback(
@@ -195,7 +210,7 @@ function AppInner() {
   useEffect(datenLaden, [datenLaden]);
 
   /* Nach dem Verlassen einer Detailseite den Fortschritt auffrischen,
-     damit „Weiterschauen" sofort stimmt. */
+     damit „Weiterschauen“ sofort stimmt. */
   const stapelHoehe = stapel.length;
   useEffect(() => {
     if (stapelHoehe !== 0 || !basis || !conn?.profile) return;
@@ -215,7 +230,7 @@ function AppInner() {
 
   const aufAbspielen = useCallback(
     (x) => {
-      // Aus „Weiterschauen"/Verlauf kommen Einträge mit mediaType/refId
+      // Aus „Weiterschauen“/Verlauf kommen Einträge mit mediaType/refId
       if (x.mediaType && x.refId != null) {
         push({
           name: "play", type: x.mediaType, id: x.refId, title: x.title,
@@ -314,7 +329,7 @@ function AppInner() {
     inhalt = (
       <RasterSeite
         titel="Meine Liste" items={meine} img={img} aufTitel={aufTitel}
-        leerText={'Noch nichts vorgemerkt.\nAuf einer Detailseite „Zu meiner Liste" wählen.'}
+        leerText={'Noch nichts vorgemerkt.\nAuf einer Detailseite „Zu meiner Liste“ wählen.'}
       />
     );
   } else if (seite === "search") {
@@ -331,7 +346,8 @@ function AppInner() {
     inhalt = (
       <EinstellungenSeite
         conn={conn} base={basis} serverInfo={serverInfo}
-        profilName={profilName} version={APP_VERSION}
+        profilName={profilName} version={APP_VERSION} appAktuell={appAktuell}
+        aufUpdate={() => starteUpdate(basis, appAktuell?.url || "/apk", conn?.token)}
         aufServerAendern={() => setSeite("verbindung")}
         aufProfilWechseln={() => setSeite("profiles")}
         aufNeuEinlesen={() => api("/api/scan", { method: "POST", body: {} }).catch(() => {})}

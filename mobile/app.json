@@ -2,7 +2,7 @@
   "expo": {
     "name": "GHGFlix",
     "slug": "ghgflix",
-    "version": "3.0.0",
+    "version": "3.1.0",
     "orientation": "default",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0b0b0f",
@@ -26,7 +26,7 @@
     "android": {
       "usesCleartextTraffic": true,
       "package": "com.bastild.ghgflix",
-      "versionCode": 12
+      "versionCode": 13
     },
     "extra": {
       "eas": {

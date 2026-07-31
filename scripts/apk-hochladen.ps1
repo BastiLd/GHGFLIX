@@ -106,9 +106,27 @@ Write-Host "     angemeldet"
 
 # -- 4) Hochladen ------------------------------------------------------------
 Schritt "4/4  Hochladen (kann bei grossen Dateien etwas dauern)"
+
+# Versionsnummer aus mobile/app.json mitschicken. Damit kann die App auf dem
+# Fernseher spaeter selbst erkennen, dass eine neuere Fassung bereitliegt -
+# und man muss die Adresse nie wieder von Hand eintippen.
+$Version = ""
+$AppJson = Join-Path $PSScriptRoot "..\mobile\app.json"
+if (Test-Path $AppJson) {
+  try {
+    $Version = (Get-Content $AppJson -Raw | ConvertFrom-Json).expo.version
+    Write-Host "     Version laut app.json: $Version"
+  } catch {
+    Write-Host "     (Version konnte nicht gelesen werden - nicht schlimm)" -ForegroundColor Yellow
+  }
+}
+
+$Ziel = "$Server/api/apk?token=$($login.token)"
+if ($Version) { $Ziel = $Ziel + "&version=" + $Version }
+
 $bytes = [System.IO.File]::ReadAllBytes($Datei)
 try {
-  $antwort = Invoke-RestMethod -Uri "$Server/api/apk?token=$($login.token)" -Method Post `
+  $antwort = Invoke-RestMethod -Uri $Ziel -Method Post `
                -ContentType "application/octet-stream" -Body $bytes -TimeoutSec 600
 } catch {
   throw "Hochladen fehlgeschlagen: $($_.Exception.Message)"

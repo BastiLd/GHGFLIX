@@ -12,7 +12,7 @@
  * Zeilennummer, jede Kachel eine Spaltennummer, und der Fokus-Kern führt
  * daran entlang. Zeilennummern werden fortlaufend vergeben — deshalb steht
  * bei den Startseiten-Reihen `zeile={z++}` statt einer festen Zahl: Reihen,
- * die gerade leer sind (z. B. „Weiterschauen" bei einem frischen Profil),
+ * die gerade leer sind (z. B. „Weiterschauen“ bei einem frischen Profil),
  * werden gar nicht gezeichnet und dürfen dann auch keine Zeile verbrauchen.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -23,6 +23,7 @@ import {
   PosterReihe, Verlauf, fmtZeit, parseGenres, se,
 } from "./bausteine.js";
 import { C, M, gross, st } from "./stile.js";
+import { FELDER, laden as ladeEinstellungen, sichern as sichereEinstellungen } from "./einstellungen.js";
 
 /* ══ Hilfen ══════════════════════════════════════════════════════════════ */
 
@@ -599,12 +600,29 @@ export function ProfilSeite({ api, aufWahl, aufZurueck }) {
 /* ══ Einstellungen ═══════════════════════════════════════════════════════ */
 
 export function EinstellungenSeite({
-  conn, base, serverInfo, profilName, version,
-  aufServerAendern, aufProfilWechseln, aufNeuEinlesen, aufAbmelden,
+  conn, base, serverInfo, profilName, version, appAktuell,
+  aufServerAendern, aufProfilWechseln, aufNeuEinlesen, aufAbmelden, aufUpdate,
 }) {
+  const [werte, setWerte] = useState(null);
   const [meldung, setMeldung] = useState("");
+  const [offenerDialog, setOffenerDialog] = useState(null);   // { name, titel, ... }
 
-  const zeigen = (t) => { setMeldung(t); setTimeout(() => setMeldung(""), 3500); };
+  useEffect(() => { ladeEinstellungen().then(setWerte); }, []);
+  useDialog(!!offenerDialog);
+
+  const zeigen = (t) => { setMeldung(t); setTimeout(() => setMeldung(""), 4000); };
+
+  const setzen = async (name, wert) => {
+    const neu = { ...werte, [name]: wert };
+    setWerte(neu);
+    await sichereEinstellungen(neu);
+    setOffenerDialog(null);
+  };
+
+  if (!werte) return <Laden />;
+
+  // Zeilennummern fortlaufend vergeben — jede Karte bekommt ihren Block
+  let z = 0;
 
   return (
     <Seite>
@@ -620,33 +638,51 @@ export function EinstellungenSeite({
           </View>
         )}
 
-        {/* ── Server ──────────────────────────────────────────────── */}
+        {/* ── App-Aktualisierung ─────────────────────────────────────── */}
+        {!!appAktuell && appAktuell.neuer && (
+          <View style={[st.karte, { marginBottom: 14, borderColor: C.red }]}>
+            <Text style={[st.h2, { marginBottom: 4 }]}>Neue Fassung verfügbar</Text>
+            <Text style={[st.gedaempft, { marginBottom: 14 }]}>
+              Auf dem Server liegt Version {appAktuell.version}
+              {appAktuell.groesse ? ` (${appAktuell.groesse})` : ""}.
+              {"\n"}Installiert ist {version}.
+            </Text>
+            <FokusReihe zeile={z++}>
+              <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
+                <Knopf
+                  text="Jetzt aktualisieren" symbol="⬇" haupt spalte={0}
+                  onPress={() => { aufUpdate?.(); zeigen("Wird heruntergeladen — danach die Installation bestätigen."); }}
+                />
+              </View>
+            </FokusReihe>
+          </View>
+        )}
+
+        {/* ── Server ────────────────────────────────────────────────── */}
         <View style={[st.karte, { marginBottom: 14 }]}>
           <Text style={[st.h2, { marginBottom: 10 }]}>Server</Text>
           <Zeile name="Adresse" wert={base || "nicht verbunden"} />
           <Zeile name="Version" wert={serverInfo?.version || "unbekannt"} />
           <Zeile name="Anmeldung" wert={conn?.token ? "angemeldet" : serverInfo?.auth ? "Passwort nötig" : "kein Passwort"} />
           <View style={{ height: 14 }} />
-          <FokusReihe zeile={0}>
+          <FokusReihe zeile={z++}>
             <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
               <Knopf text="Server wechseln" symbol="⟳" spalte={0} onPress={aufServerAendern} />
               <Knopf
-                text="Bibliothek neu einlesen"
-                symbol="⟳"
-                spalte={1}
+                text="Bibliothek neu einlesen" symbol="⟳" spalte={1}
                 onPress={() => { aufNeuEinlesen(); zeigen("Suchlauf gestartet — das kann einige Minuten dauern."); }}
               />
             </View>
           </FokusReihe>
         </View>
 
-        {/* ── Profil ──────────────────────────────────────────────── */}
+        {/* ── Profil ────────────────────────────────────────────────── */}
         <View style={[st.karte, { marginBottom: 14 }]}>
           <Text style={[st.h2, { marginBottom: 10 }]}>Profil</Text>
           <Zeile name="Aktuell" wert={profilName || `Profil ${conn?.profile}`} />
           <Zeile name="Fortschritt" wert="wird mit allen Geräten abgeglichen" />
           <View style={{ height: 14 }} />
-          <FokusReihe zeile={1}>
+          <FokusReihe zeile={z++}>
             <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
               <Knopf text="Profil wechseln" symbol="👤" spalte={0} onPress={aufProfilWechseln} />
               {!!aufAbmelden && <Knopf text="Abmelden" spalte={1} onPress={aufAbmelden} />}
@@ -654,16 +690,54 @@ export function EinstellungenSeite({
           </FokusReihe>
         </View>
 
-        {/* ── Bedienung ───────────────────────────────────────────── */}
+        {/* ── Alle einstellbaren Werte ──────────────────────────────── */}
+        {FELDER.map((gruppe) => (
+          <View key={gruppe.gruppe} style={[st.karte, { marginBottom: 14 }]}>
+            <Text style={[st.h2, { marginBottom: 12 }]}>{gruppe.gruppe}</Text>
+            {gruppe.eintraege.map((f) => {
+              const zeile = z++;
+              const zeige = f.anzeige || ((v) => String(v) + (f.einheit ? " " + f.einheit : ""));
+              return (
+                <FokusReihe key={f.name} zeile={zeile}>
+                  <FKnopf
+                    spalte={0}
+                    onPress={() => setOffenerDialog(f)}
+                    style={[
+                      st.kachel,
+                      { flexDirection: "row", alignItems: "center", padding: 10, marginBottom: 4 },
+                    ]}
+                    fokusStil={st.fokus}
+                  >
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ color: C.text, fontSize: gross ? 15.5 : 13, fontWeight: "700" }}>
+                        {f.titel}
+                      </Text>
+                      {!!f.hinweis && (
+                        <Text style={[st.gedaempft, { fontSize: M.klein, marginTop: 2 }]}>{f.hinweis}</Text>
+                      )}
+                    </View>
+                    <Text style={{ color: C.red, fontSize: gross ? 15 : 12.5, fontWeight: "800", marginLeft: 12 }}>
+                      {zeige(werte[f.name])}  ▾
+                    </Text>
+                  </FKnopf>
+                </FokusReihe>
+              );
+            })}
+          </View>
+        ))}
+
+        {/* ── Bedienung ─────────────────────────────────────────────── */}
         <View style={[st.karte, { marginBottom: 14 }]}>
-          <Text style={[st.h2, { marginBottom: 10 }]}>Bedienung mit der Fernbedienung</Text>
+          <Text style={[st.h2, { marginBottom: 10 }]}>Tasten der Fernbedienung</Text>
           {[
             ["Steuerkreuz", "Auswahl bewegen — das Gewählte ist weiß umrandet"],
             ["OK", "Auswahl bestätigen"],
             ["OK gedrückt halten", "Folge als gesehen markieren"],
             ["Zurück", "eine Ebene zurück"],
-            ["⏯ / ⏪ / ⏩", "im Player: Pause, 10 Sek zurück, 30 Sek vor"],
+            ["⏯ / ⏪ / ⏩", "im Player: Pause, zurück, vor"],
             ["← / →  im Player", "auf dem Fortschrittsbalken springen"],
+            ["⏭", "nächste Folge"],
+            ["ℹ", "Infos zum laufenden Titel"],
           ].map(([a, b]) => (
             <View key={a} style={{ flexDirection: "row", marginBottom: 7 }}>
               <Text style={{ color: C.text, fontSize: gross ? 14 : 12, fontWeight: "700", width: gross ? 190 : 140 }}>
@@ -678,6 +752,23 @@ export function EinstellungenSeite({
           GHGFlix · ZickZack Edition
         </Text>
       </View>
+
+      {/* ── Auswahl-Dialog ────────────────────────────────────────────── */}
+      {offenerDialog && (
+        <Dialog titel={offenerDialog.titel}>
+          {!!offenerDialog.hinweis && (
+            <Text style={[st.gedaempft, { marginBottom: 12 }]}>{offenerDialog.hinweis}</Text>
+          )}
+          <DialogListe
+            aktiv={werte[offenerDialog.name]}
+            aufWahl={(v) => setzen(offenerDialog.name, v)}
+            eintraege={[...new Set(offenerDialog.werte)].map((v) => ({
+              wert: v,
+              text: (offenerDialog.anzeige || ((x) => String(x) + (offenerDialog.einheit ? " " + offenerDialog.einheit : "")))(v),
+            }))}
+          />
+        </Dialog>
+      )}
     </Seite>
   );
 }

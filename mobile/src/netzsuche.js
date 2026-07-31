@@ -6,7 +6,7 @@
  * DAS PROBLEM
  * „Ich kann diese URL nicht noch mal über die TV-Fernbedienung eingeben."
  *
- * Völlig berechtigt: „http://192.168.68.157:8484" über eine Bildschirm-
+ * Völlig berechtigt: „http://192.168.68.157:8484“ über eine Bildschirm-
  * tastatur mit dem Steuerkreuz zu tippen, ist eine Zumutung — jeder Punkt
  * und jeder Doppelpunkt bedeutet Herumnavigieren.
  *

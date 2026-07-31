@@ -1238,3 +1238,198 @@ und Laden gibt Sicherheit — deshalb der Ladetest.
 Die Servertests (Parser, Scanner, Profile) laufen unverändert durch; alle 14
 Endpunkte, die die neue App benutzt, wurden gegen `server/src/index.js`
 gegengeprüft.
+
+---
+
+## Nachtrag 14 — Ton, Untertitel, Einstellungen, QR-Kopplung, Selbst-Update
+### (App 3.1.0 · Server 2.4.0)
+
+### Vier Wünsche, vier Antworten
+
+> „Ton, Untertitel, alles soll gehen! Und alles im Player, Einstellungen und
+>  alles rein! QR-Code wäre gut, weil dann muss ich die Infos nicht per
+>  Fernseher eingeben. Können wir das Updaten auch leichter machen — ohne
+>  dass ich schon wieder die URL eingeben muss im Downloader?"
+
+---
+
+### 1 · Ton- und Untertitelspuren
+
+**Am Server.** `ffprobe` liest jetzt alle Spuren einer Datei aus und der
+Server merkt sie sich (neue Spalte `tracks`), damit das nicht bei jedem
+Abspielen erneut laufen muss. Aufbereitet wird gleich mit:
+
+| Rohdaten von ffprobe | was die App zeigt |
+|---|---|
+| `language=ger, title=Kommentar, channels=6` | **Deutsch · Kommentar · 5.1 · AC3** |
+| `language=eng, disposition.forced=1` | **Englisch · erzwungen** |
+
+Untertiteldateien **neben dem Video** werden ebenfalls gefunden — das ist
+gängige Praxis und Plex wie Jellyfin machen es genauso:
+
+```
+Film.mkv
+Film.de.srt              → Deutsch · Datei
+Film.eng.srt             → Englisch · Datei
+Film.de.forced.srt       → Deutsch · erzwungen · Datei
+Subs/3_German.srt        → auch der Unterordner wird durchsucht
+```
+
+**Warum Untertitel nicht eingebrannt werden.** ffmpeg könnte sie ins Bild
+rendern. Das erzwingt aber eine Neukodierung des Videos (Last auf dem NAS),
+jedes Umschalten dauert Sekunden, und Größe und Farbe wären festgelegt. Der
+Server liefert sie stattdessen als **WebVTT-Text**, die App zeichnet sie
+selbst: sofortiges Umschalten, praktisch keine Last — und einstellbar.
+
+Ausnahme sind **Bild-Untertitel** (PGS von Blu-ray, VOBSUB von DVD). Die
+enthalten Grafiken statt Text. Sie werden erkannt und gar nicht erst
+angeboten, mit einem erklärenden Hinweis — besser als eine leere Anzeige.
+
+**Umschalten im Player:**
+
+| Fall | Weg |
+|---|---|
+| Ton, Direktwiedergabe | expo-video schaltet die eingebettete Spur um — ohne Aussetzer |
+| Ton, beim Umwandeln | Server bekommt `&a=<Nummer>`, Strom wird an derselben Stelle neu aufgebaut |
+| Untertitel | immer als Text vom Server, sofort umschaltbar |
+
+---
+
+### 2 · Alles im Player einstellbar
+
+Die Bedienleiste hat jetzt neben ⏪ ⏯ ⏩ ⏭ auch **Ton**, **Untertitel**,
+**Tempo**, **Bildanpassung** und **Info**. Dazu eine vollständige
+Einstellungsseite:
+
+**Wiedergabe** — Sprungweite vor und zurück (je einzeln), Geschwindigkeit,
+nächste Folge automatisch, Bildanpassung (Einpassen / Füllen / Verzerren),
+ab wann fortgesetzt wird.
+
+**Untertitel** — beim Start einschalten, bevorzugte Sprache, Schriftgröße
+(sechs Stufen bis „Riesig"), Schriftfarbe, Hintergrundkasten, schwarze
+Kontur, Höhe über dem Rand, Zeitversatz von −3 bis +3 Sekunden für den Fall,
+dass sie zu früh oder zu spät kommen.
+
+**Bedienung** — wie lange die Bedienleiste stehen bleibt (auch „Nie"), ob
+beim Start nach Updates gesehen wird.
+
+Jede Einstellung trägt ihre Erklärung direkt darunter. Beim Abspielen wird
+die passende Ton- und Untertitelspur automatisch nach den Vorlieben gewählt —
+gewünschte Sprache, sonst die als Standard markierte, sonst die erste.
+`ger`, `de` und `deu` gelten dabei als dieselbe Sprache.
+
+---
+
+### 3 · QR-Kopplung — kein Passwort mehr am Fernseher
+
+Den Server findet die App seit 3.0.0 selbst. Was fehlte, war das Passwort.
+
+```
+1. Fernseher fordert einen Code an        POST /api/pair/start   →  K7M2QX
+2. Fernseher zeigt ihn als QR-Code        http://server/koppeln?code=K7M2QX
+3. Handy scannt, öffnet die Seite, gibt dort das Passwort ein
+4. Fernseher fragt nach und bekommt sein Token    /api/pair/check
+```
+
+Der Code besteht aus sechs Zeichen eines Alphabets **ohne verwechselbare
+Zeichen** (kein 0/O, kein 1/I/L, kein 2/Z, 5/S, 8/B) — aus zwei Metern
+eindeutig ablesbar. Er gilt zehn Minuten, lässt sich genau einmal einlösen
+und wird danach gelöscht. Wer ihn errät, braucht immer noch das Passwort: Die
+Kopplung ersetzt keine Sicherheit, sie verlagert nur die Eingabe aufs Handy.
+
+Die Seite, die das Handy öffnet, ist bewusst schlichtes HTML **ohne
+JavaScript** — sie muss auf jedem Handy-Browser sofort funktionieren.
+
+**Der QR-Code ist selbst geschrieben** (`mobile/src/qr.js`, nach
+ISO/IEC 18004, Byte-Modus, Fehlerkorrektur M, Versionen 1–10). Die üblichen
+Pakete bringen `react-native-svg` mit, also ein weiteres natives Modul — und
+genau so eines hat die Fernseh-App wochenlang beim Start abstürzen lassen.
+Ein QR-Code ist am Ende ein Schwarz-Weiß-Raster; das lässt sich aus
+Rechtecken zeichnen, die React Native ohnehin kann.
+
+> **Ein Fehler, den nur der Test gefunden hat.** Im Erzeugerpolynom für die
+> Reed-Solomon-Fehlerkorrektur waren zwei Anteile vertauscht. Das Ergebnis
+> sah völlig normal aus, der Text ließ sich sogar zurücklesen — nur die
+> Fehlerkorrekturbytes waren Unsinn, und ein echtes Lesegerät hätte den Code
+> verweigert. Sichtbar wurde es erst dadurch, dass der Test die
+> **Reed-Solomon-Syndrome** nachrechnet: Bei korrekter Kodierung müssen sie
+> alle null sein. Ohne diese Prüfung wäre der Fehler erst am Fernseher
+> aufgefallen — als „das Handy erkennt nichts", ohne jeden Hinweis auf die
+> Ursache.
+
+---
+
+### 4 · Updates ohne URL-Tippen
+
+Die App kennt ihren Server. Sie fragt beim Start nach, ob dort eine neuere
+Fassung liegt, und zeigt in den Einstellungen einen Knopf. Ein Druck startet
+den Download — niemand tippt mehr eine Adresse.
+
+Damit der Vergleich möglich ist, schickt `apk-hochladen.ps1` die
+Versionsnummer aus `mobile/app.json` mit; der Server legt sie neben der Datei
+ab und meldet sie unter `/api/apk/status`.
+
+Verglichen wird **zahlenweise**, nicht als Text: `3.10.0` ist neuer als
+`3.9.0` — ein Textvergleich käme hier zum falschen Ergebnis, weil „9" nach
+„1" kommt. Genau daran scheitern Selbst-Updates in der Praxis am häufigsten,
+deshalb prüfen das fünf eigene Tests.
+
+Ist `expo-intent-launcher` vorhanden, wird die Installation direkt
+angestoßen; fehlt es, übernimmt Android den Download wie bei einem
+angetippten Link. Beide Wege kommen ohne Tipparbeit aus.
+
+---
+
+### Neue Tests — 220 in der App, 73 im Server
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix\mobile"
+node test\fokus.test.mjs          # 43  Auswahl mit der Fernbedienung
+node test\untertitel.test.mjs     # 39  WebVTT lesen und anzeigen
+node test\qr.test.mjs             # 33  QR-Code, mit Rücklesen
+node test\update.test.mjs         # 23  Versionsvergleich
+node test\netzsuche.test.mjs      # 20  Serversuche mit echtem Testserver
+node test\laden.test.mjs          # 28  alle Module laden
+node test\oberflaeche.test.mjs    # 34  echtes Rendern + Fernbedienung
+```
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix\server"
+node test\spuren.test.mjs         # 41  Ton/Untertitel, mit echter Videodatei
+node test\koppeln.test.mjs        # 32  Kopplung, Ablauf und Fehlerfälle
+node test\scan.test.mjs           #     Bibliothekssuche
+node test\profile.test.mjs        #     Profile und Cloud-Abgleich
+node src\parser.js --test         #     Titelerkennung
+```
+
+Zwei davon prüfen mit **echten Dateien** statt mit Attrappen:
+
+- `spuren.test.mjs` baut per ffmpeg eine Videodatei mit zwei Tonspuren
+  (deutsch mit Titel, englisch) und zwei Untertitelspuren, lässt den Server
+  sie erkennen, holt eine eingebettete Spur als WebVTT heraus und prüft den
+  Inhalt.
+- `netzsuche.test.mjs` startet einen echten HTTP-Server und lässt die Suche
+  ihn finden — samt der Gegenprobe, dass fremde Geräte (ein Drucker, eine
+  Fritzbox) **nicht** fälschlich für den GHGFlix-Server gehalten werden.
+
+Die Untertitel-Anzeige wurde auch auf Geschwindigkeit geprüft: 14 400
+Abfragen über einen zweistündigen Film mit 1800 Untertiteln brauchen 11 ms.
+Möglich macht das eine halbierende Suche mit gemerkter Fundstelle statt eines
+Durchlaufs über alle Blöcke.
+
+### Nachtrag zu einem selbstverschuldeten Fehler
+
+Beim Schreiben der Einstellungen ist ein deutsches Anführungszeichen nicht
+geschlossen worden (`„Füllen"` statt `„Füllen“`), wodurch eine Zeichenkette
+mitten im Text endete. Der Ladetest hat es sofort gemeldet — genau dafür ist
+er da. Alle Dateien wurden daraufhin durchgesehen und die Paare korrigiert.
+
+### Versionen
+
+| Teil | Version | Grund |
+|---|---|---|
+| **Server** | **2.4.0** | neue Endpunkte: Spuren, Untertitel, Kopplung |
+| App | 3.1.0 | Ton, Untertitel, Einstellungen, QR, Selbst-Update |
+
+**Der Server muss diesmal aktualisiert werden** — in ZimaOS auf `2.4.0`
+stellen. Ohne ihn gibt es keine Spuren und keine Kopplung.

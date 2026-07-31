@@ -213,6 +213,10 @@ export function openDb() {
   // Serien-Gruppierungsschlüssel direkt an der Zeile (schneller als Join)
   addCol("shows", "show_key TEXT");
   addCol("shows", "overview_de TEXT");
+  // Ton- und Untertitelspuren als JSON, damit ffprobe nicht bei jedem
+  // Abspielen erneut laufen muss (siehe src/spuren.js)
+  addCol("movies", "tracks TEXT");
+  addCol("episodes", "tracks TEXT");
   // Reihenfolge/Extras
   addCol("movies", "tagline TEXT");
   addCol("shows", "tagline TEXT");

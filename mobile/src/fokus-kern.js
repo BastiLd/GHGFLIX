@@ -19,7 +19,7 @@
  * Spalte es sitzt. Die Richtungstasten bewegen sich dann durch dieses Raster.
  *
  * Das hat drei handfeste Vorteile:
- *   1. Es ist völlig vorhersehbar — kein „warum springt er jetzt dorthin?"
+ *   1. Es ist völlig vorhersehbar — kein „warum springt er jetzt dorthin?“
  *   2. Es ist ohne Gerät testbar (siehe test/fokus.test.mjs), weil überhaupt
  *      kein React und kein Bildschirm nötig ist
  *   3. Es ist schnell: kein Messen von Views bei jedem Tastendruck

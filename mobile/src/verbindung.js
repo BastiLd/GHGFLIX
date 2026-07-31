@@ -10,7 +10,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import { FKnopf, FokusReihe } from "./fokus.js";
-import { FFeld, Knopf } from "./bausteine.js";
+import { FFeld, Knopf, QrBild } from "./bausteine.js";
 import { C, M, gross, st } from "./stile.js";
 import { normUrl, ping, sucheServer } from "./netzsuche.js";
 
@@ -22,7 +22,9 @@ export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
   const [passwort, setPasswort] = useState("");
   const [hinweis, setHinweis] = useState("");
   const [beschaeftigt, setBeschaeftigt] = useState(false);
+  const [kopplung, setKopplung] = useState(null);   // { code, url }
   const abbruchRef = useRef(false);
+  const pollRef = useRef(null);
 
   const bekannte = [
     ...(conn?.list || []).map((e) => e.url),
@@ -50,6 +52,53 @@ export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
     suchen();
     return () => { abbruchRef.current = true; };
   }, [suchen]);
+
+  /* ── Kopplung: Passwort am Handy eingeben statt am Fernseher ───────
+     Der Server gibt einen kurzen Code aus, der als QR-Code angezeigt wird.
+     Wer ihn mit dem Handy scannt, landet auf einer schlichten Seite des
+     Servers, gibt dort das Passwort ein — und der Fernseher bekommt sein
+     Zugangs-Token von selbst. Details in server/src/koppeln.js. */
+  const kopplungStarten = useCallback(async (serverUrl) => {
+    const basis = normUrl(serverUrl);
+    try {
+      const r = await fetch(`${basis}/api/pair/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ geraet: "Fernseher" }),
+      }).then((x) => x.json());
+      if (!r?.code) { setHinweis(r?.error || "Der Server bietet keine Kopplung an."); return; }
+      setKopplung({ code: r.code, url: `${basis}/koppeln?code=${r.code}`, basis });
+      setZustand("koppeln");
+    } catch {
+      setHinweis("Der Server antwortet nicht mehr.");
+    }
+  }, []);
+
+  // Regelmäßig nachsehen, ob am Handy bestätigt wurde
+  useEffect(() => {
+    if (zustand !== "koppeln" || !kopplung) return;
+    let gestoppt = false;
+    const sehen = async () => {
+      try {
+        const r = await fetch(`${kopplung.basis}/api/pair/check?code=${kopplung.code}`)
+          .then((x) => x.json());
+        if (gestoppt) return;
+        if (r?.status === "fertig" && r.token) {
+          const liste = [{ name: "Gefunden", url: kopplung.basis }];
+          aufSpeichern({ mode: "auto", list: liste, manualUrl: kopplung.basis, token: r.token });
+          return;
+        }
+        if (r?.status === "unbekannt") {
+          setHinweis("Der Code ist abgelaufen. Bitte einen neuen anzeigen lassen.");
+          setZustand("gefunden");
+          return;
+        }
+      } catch { /* Netz kurz weg — beim nächsten Mal wieder */ }
+      if (!gestoppt) pollRef.current = setTimeout(sehen, 2000);
+    };
+    pollRef.current = setTimeout(sehen, 1500);
+    return () => { gestoppt = true; if (pollRef.current) clearTimeout(pollRef.current); };
+  }, [zustand, kopplung, aufSpeichern]);
 
   /* ── Übernehmen ───────────────────────────────────────────────────── */
   const uebernehmen = async (url, pw) => {
@@ -171,8 +220,50 @@ export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
                   spalte={0}
                   onPress={() => !beschaeftigt && uebernehmen(gefunden.url, passwort)}
                 />
-                <Knopf text="Erneut suchen" spalte={1} onPress={suchen} />
-                <Knopf text="Von Hand" spalte={2} onPress={() => { setAdresse(gefunden.url); setZustand("hand"); }} />
+                {gefunden.info?.auth && !conn?.token && (
+                  <Knopf text="Mit Handy verbinden" symbol="📱" spalte={1}
+                         onPress={() => kopplungStarten(gefunden.url)} />
+                )}
+                <Knopf text="Erneut suchen" spalte={2} onPress={suchen} />
+                <Knopf text="Von Hand" spalte={3} onPress={() => { setAdresse(gefunden.url); setZustand("hand"); }} />
+              </View>
+            </FokusReihe>
+          </View>
+        )}
+
+        {/* ── Kopplung mit dem Handy ───────────────────────────────── */}
+        {zustand === "koppeln" && kopplung && (
+          <View style={[st.karte, { alignItems: "center" }]}>
+            <Text style={[st.h2, { marginBottom: 6 }]}>Mit dem Handy verbinden</Text>
+            <Text style={[st.gedaempft, { marginBottom: 18, textAlign: "center" }]}>
+              Scanne den Code mit der Handy-Kamera.{"\n"}
+              Dort einmal das Server-Passwort eingeben — fertig.
+            </Text>
+
+            <QrBild text={kopplung.url} />
+
+            <Text style={{
+              color: C.text, fontSize: gross ? 30 : 22, fontWeight: "900",
+              letterSpacing: 6, marginTop: 18,
+            }}>
+              {kopplung.code}
+            </Text>
+            <Text style={[st.gedaempft, { fontSize: M.klein, marginTop: 4, textAlign: "center" }]}>
+              Falls die Kamera nichts erkennt, am Handy diese Adresse öffnen:{"\n"}
+              {kopplung.basis}/koppeln
+            </Text>
+
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 18 }}>
+              <ActivityIndicator color={C.red} />
+              <Text style={st.gedaempft}>Warte auf die Bestätigung …</Text>
+            </View>
+
+            <View style={{ height: 18 }} />
+            <FokusReihe zeile={0}>
+              <View style={{ flexDirection: "row", gap: 10 }}>
+                <Knopf text="Abbrechen" spalte={0} onPress={() => setZustand("gefunden")} />
+                <Knopf text="Passwort selbst eingeben" spalte={1}
+                       onPress={() => { setAdresse(kopplung.basis); setZustand("hand"); }} />
               </View>
             </FokusReihe>
           </View>
@@ -183,7 +274,7 @@ export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
           <View style={st.karte}>
             <Text style={[st.h2, { marginBottom: 4 }]}>Adresse eingeben</Text>
             <Text style={[st.gedaempft, { marginBottom: 16 }]}>
-              Zum Beispiel 192.168.1.50:8484 — „http://" wird von selbst ergänzt.
+              Zum Beispiel 192.168.1.50:8484 — „http://“ wird von selbst ergänzt.
             </Text>
 
             <Text style={[st.gedaempft, { marginBottom: 6 }]}>Server-Adresse</Text>
