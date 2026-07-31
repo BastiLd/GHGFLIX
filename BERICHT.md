@@ -1,6 +1,6 @@
 # GHGFlix — Bericht: Server-Überholung, Erkennung, Vorschaubilder, Cloud-Sync
 
-**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.1** · Handy **1.3.0**
+**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.1** · Handy **1.4.0**
 
 ---
 
@@ -111,6 +111,63 @@ Jetzt misst die App das echte Seitenverhältnis des geladenen Bildes und setzt
 den Rahmen darauf: **keine Balken, und abgeschnitten wird auch nichts.** Die
 Breite bleibt fest, damit das Layout ruhig steht; die Höhe folgt dem Bild
 (sanft begrenzt, damit ein extrem breites Banner die Seite nicht sprengt).
+
+---
+
+## ⚠️ NACHTRAG 3 — „installiert, aber nicht da" am Fernseher
+
+### 8. Die App war unsichtbar, nicht fehlgeschlagen
+
+Symptom: Download klappt, „Installieren" drücken, kurz schwarz, zurück — und
+nichts ist zu finden. Beim zweiten Versuch fragt Android nach einem „Update".
+
+**Genau dieses „Update" war der Beweis: Die App WAR installiert.** Sie wurde nur
+nicht angezeigt.
+
+Der Startbildschirm von Android TV / Google TV zeigt ausschließlich Apps mit
+
+```xml
+<category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+```
+
+Eine normale Handy-App hat nur `LAUNCHER` — und ist damit auf dem Fernseher
+unsichtbar. Behoben durch eine kleine Erweiterung beim App-Bau
+(`mobile/plugins/withAndroidTv.js`), die dem Manifest hinzufügt:
+
+1. **LEANBACK_LAUNCHER** an der Haupt-Activity → App erscheint im TV-Menü
+2. **`uses-feature`** für Leanback und Touchscreen jeweils „nicht erforderlich"
+   → Android hält die App auf einem Gerät ohne Touchscreen für zulässig
+3. **Kachelbild** (320×180, rotes GHGFlix-Banner) → manche Launcher zeigen
+   Apps ohne Banner gar nicht erst an
+
+Die Erweiterung ist gegen ein echtes Manifest getestet: Leanback wird ergänzt,
+die normale Handy-Kategorie bleibt erhalten, und mehrfaches Ausführen erzeugt
+keine Doppel-Einträge.
+
+**Wichtig:** Vorher am TV unter *Einstellungen → Apps → Alle Apps anzeigen* die
+alte, unsichtbare GHGFlix-Installation **deinstallieren** — dann die neue
+Version 1.4.0 installieren.
+
+### 9. Studio-Klon scheiterte an eigenen Bau-Dateien
+
+```
+error: Your local changes to the following files would be overwritten by checkout:
+        mobile/app.json
+error: The following untracked working tree files would be overwritten:
+        mobile/package-lock.json
+```
+
+Der Bau-Ordner im Studio ist ein reiner Arbeits-Klon — trotzdem entstehen dort
+beim Bauen Dateien (`package-lock.json`), und EAS ändert `app.json`. Ein
+normales `checkout` scheitert daran.
+
+Jetzt wird hart auf den Server-Stand zurückgesetzt und aufgeräumt. Wichtig:
+`git clean -fd` fasst per `.gitignore` ausgeschlossene Ordner **nicht** an —
+`node_modules` bleibt also erhalten und es gibt keinen unnötigen Neu-Install.
+Nachgestellt und geprüft: Der alte Befehl bricht mit genau deiner Meldung ab,
+der neue läuft durch.
+
+---
 
 > Der vorherige Bericht zur Masterplan-Umsetzung (16.07.2026) steht in
 > [`PLAN_STATUS.md`](PLAN_STATUS.md).

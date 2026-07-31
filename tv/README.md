@@ -215,6 +215,38 @@ adb install -r GHGFlix.apk
 
 ## Häufige Stolpersteine
 
+### ⭐ „Installiert, aber die App ist nirgends zu finden"
+
+Das häufigste und verwirrendste Problem — und es lag **nicht** an dir:
+
+> Download läuft, „Installieren" drücken, Bildschirm wird kurz schwarz, dann
+> ist man zurück und **nichts** ist da. Beim zweiten Versuch fragt Android
+> sogar nach einem „Update" — die App ist also installiert, nur unsichtbar.
+
+**Ursache:** Der Startbildschirm von Android TV zeigt ausschließlich Apps, die
+im Manifest die Kategorie `LEANBACK_LAUNCHER` tragen. Eine normale Handy-App
+hat nur `LAUNCHER` — und wird deshalb komplett ausgeblendet, obwohl sie
+sauber installiert ist.
+
+**Behoben ab App-Version 1.4.0.** Ergänzt wurden Leanback-Kategorie,
+`uses-feature`-Einträge („Touchscreen nicht erforderlich") und ein
+320×180-Kachelbild für das TV-Menü.
+
+Damit die neue Fassung greift:
+
+1. Am TV **Einstellungen → Apps → Alle Apps anzeigen** öffnen
+2. Falls dort ein Eintrag **GHGFlix** steht: **Deinstallieren**
+   (das ist die alte, unsichtbare Fassung)
+3. Neue APK bauen (Version 1.4.0 oder höher), auf den Server legen
+4. In Downloader wieder `…:8484/apk` → **Go** → **Installieren**
+
+Danach liegt GHGFlix mit rotem Kachelbild auf dem Startbildschirm.
+
+> Prüfen, welche Fassung du hast: Die App-Version steht in GHGFlix unter
+> **Einstellungen**. Alles unter 1.4.0 ist noch die unsichtbare.
+
+### Weitere Fälle
+
 | Problem | Ursache | Lösung |
 |---|---|---|
 | Downloader zeigt „404" / „nicht gefunden" | keine APK auf dem Server | Schritt 2.1 machen, dann `http://<ip>:8484/app` prüfen |
