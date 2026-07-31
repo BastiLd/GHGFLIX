@@ -1028,3 +1028,213 @@ unter einer Sekunde; ein Cloud-Build dauert eine Viertelstunde.
 | Stile: 59 benutzt, 57 definiert, keine fehlend, keine ungenutzt | sauber |
 | Layout-Rechnung Kachel mit/ohne Fokus | 132 px = 132 px, kein Springen |
 | Server-Tests (Parser, Scanner, Profile) | alle bestanden |
+
+---
+
+## Nachtrag 13 — Handy und Fernseher komplett neu gebaut (App 3.0.0)
+
+### Die Rückmeldung, um die es ging
+
+> „Der Rahmen ist bei mehr, aber immer noch nicht überall — z. B. bei Filmen
+> und Serien. Und im Videoplayer.
+> Beim Videoplayer kann ich ihn überhaupt nicht steuern. Es ist ganz schwer,
+> in diese Oberfläche reinzukommen, und dann kann man nichts machen.
+> Ich hab immer noch nicht links diese Tabs wie am PC mit Startseite, Filme,
+> Serien, Einstellungen.
+> Ich kann diese URL nicht noch mal über die TV-Fernbedienung eingeben.
+> Es soll bitte wirklich eins zu eins ausschauen wie in der Desktop-App und
+> Plex und Jellyfin."
+
+Alle fünf Punkte sind erledigt. Der Reihe nach — und warum es beim ersten
+Versuch nur halb geklappt hat.
+
+---
+
+### Warum der Rahmen bei Postern fehlte, obwohl er bei Knöpfen kam
+
+Der erste Versuch (Nachtrag 12) hat Androids **eigenen** View-Fokus benutzt
+und nur die Markierung selbst gezeichnet. Bei einzelnen Knöpfen ging das gut.
+Bei Postern nicht — und der Grund ist grundsätzlicher Natur:
+
+Androids Fokus-Suche arbeitet **geometrisch**. Sie sucht die nächste
+fokussierbare View in Richtung des Tastendrucks, anhand von
+Bildschirmkoordinaten. In waagerechten Listen werden Kacheln aber recycelt,
+liegen teils außerhalb des sichtbaren Bereichs oder überlappen sich mit
+Verläufen. Damit wird die Suche unvorhersehbar: mal springt sie über eine
+Reihe hinweg, mal gar nicht, mal in ein unsichtbares Element. Über einem
+formatfüllenden Video — dem Player — findet sie oft überhaupt keinen Weg zur
+Bedienleiste. Genau das war zu beobachten.
+
+**Die Lösung: die App bestimmt den Fokus selbst.** Das machen Netflix, Plex
+und Jellyfin auf Fernsehern genauso. Der neue Fokus-Kern rechnet nicht mit
+Koordinaten, sondern mit einem **logischen Raster**: jedes auswählbare Element
+meldet Bereich, Zeile und Spalte an. Die Richtungstasten bewegen sich dann
+durch dieses Raster.
+
+```
+Bereich "nav"      Bereich "inhalt"
+┌──────────┐       Zeile 0  [ Ansehen ] [ Mehr Infos ]
+│ Start    │       Zeile 1  [▣][▣][▣][▣][▣][▣][▣][▣]   Weiterschauen
+│ Filme    │  ←→   Zeile 2  [▣][▣][▣][▣][▣][▣][▣][▣]   Neu hinzugefügt
+│ Serien   │       Zeile 3  [▣][▣][▣][▣][▣][▣][▣][▣]   Meine Liste
+│ …        │       …
+└──────────┘
+```
+
+Drei Vorteile, die den Ausschlag gaben:
+
+1. **Vorhersehbar.** Kein „warum springt er jetzt dorthin?"
+2. **Ohne Gerät prüfbar.** Der Kern kennt weder React noch einen Bildschirm —
+   43 Tests laufen in Millisekunden statt in einer Viertelstunde Cloud-Build.
+3. **Schnell.** Kein Ausmessen von Views bei jedem Tastendruck.
+
+Damit Androids Fokus-Suche nicht mehr dazwischenfunkt, sind alle Kacheln und
+Knöpfe jetzt `focusable={false}`. Ein einziges unsichtbares Textfeld — der
+**Anker** — hält den Android-Fokus fest, damit die Tasten überhaupt ankommen
+(`ReactRootView.dispatchKeyEvent` läuft nur an, wenn irgendwo Fokus liegt).
+Angenehmer Nebeneffekt: Weil nichts sonst fokussierbar ist, löst Android bei
+OK auch keinen zweiten Klick mehr aus — keine doppelte Auslösung. Tippen am
+Handy funktioniert unverändert, denn `focusable` betrifft nur das Steuerkreuz.
+
+**Das Spalten-Gedächtnis** ist der Feinschliff, den man erst merkt, wenn er
+fehlt: Wer in „Serien" bis zur siebten Kachel navigiert, eine Reihe runter
+geht und wieder hoch, landet wieder auf der siebten — nicht auf der ersten.
+
+---
+
+### Der Videoplayer
+
+Er benutzt jetzt dasselbe Fokus-System, mit einem festen Raster:
+
+```
+Zeile 0   ├──────────── Fortschrittsbalken ────────────┤
+Zeile 1   [ ⏪10 ] [ ⏸ ] [ ⏩30 ] [ ⏭ Nächste ] [ 1× ] [ ℹ ]
+```
+
+← → **auf dem Balken** springen im Video statt den Fokus zu verschieben —
+dafür kann ein Element im Kern die Richtungstasten für sich behalten
+(`aufRichtung`). ↑ ↓ wechseln zwischen Balken und Knöpfen.
+
+Zusätzlich wirken die Medientasten der Fernbedienung **immer**, auch bei
+ausgeblendeter Leiste: ⏯ Pause, ⏪ 10 Sek, ⏩ 30 Sek, ⏭ nächste Folge,
+⏹ beenden, ℹ Infos. Ist die Leiste aus, holt jede andere Taste sie zurück —
+dafür reicht der Fokus unverbrauchte Tasten an den Bildschirm weiter.
+
+Neu sind außerdem Geschwindigkeit (0,75× bis 2×) und eine Infoanzeige mit
+Auflösung, Codec und Laufzeit.
+
+**Bewusst beibehalten** wurde die Absicherung gegen
+`NativeSharedObjectNotFoundException` (Position und Dauer laufen über Refs,
+jeder Zugriff über `safe()`) und der **Rückfall auf Umwandeln**, wenn die
+Direktwiedergabe scheitert. Ohne den bliebe bei DTS-Ton oder HEVC auf
+schwächeren Geräten nur ein schwarzes Bild.
+
+---
+
+### Die Seitenleiste
+
+Die Einträge sind exakt die der Desktop-App (`Layout.tsx`, Liste `NAV`):
+**Start · Filme · Serien · Meine Liste · Suche · Einstellungen**, mit Zählern
+hinter Filme und Serien und dem Profil-Knopf unten.
+
+Im Ruhezustand ist sie schmal und zeigt nur Symbole; sobald die Auswahl
+hineinwandert, fährt sie aus und zeigt die Beschriftungen. Genau wie bei Plex
+und Jellyfin — und aus gutem Grund: Symbole allein sind aus drei Metern nicht
+eindeutig, eine dauerhaft breite Leiste kostet aber ein Sechstel des Bildes.
+
+Dazu kommen die Seiten, die vorher fehlten: **Filme** und **Serien** als
+Raster über die ganze Sammlung, **Meine Liste**, eine eigene **Suche** und
+**Einstellungen** mit Serverangaben, Profil und einer Übersicht der
+Fernbedienungstasten.
+
+---
+
+### Keine URL mehr eintippen
+
+Der berechtigte Einwand war: „http://192.168.68.157:8484" über eine
+Bildschirmtastatur mit dem Steuerkreuz zu tippen, ist eine Zumutung.
+
+**Die App sucht den Server jetzt selbst.** Im Heimnetz haben alle Geräte
+dieselben ersten drei Zahlen, es sind also nur 254 Adressen zu prüfen; ein
+`/api/ping` dauert im eigenen Netz wenige Millisekunden. Der Ablauf:
+
+1. Antwortet eine **bereits bekannte** Adresse? → fertig in unter einer Sekunde
+2. Sonst deren **Netz** durchsuchen — der Server ist meist noch da, nur unter
+   neuer Nummer
+3. Sonst die im Heimgebrauch üblichen Netze (Fritzbox, Telekom, Google Nest,
+   Speedport …)
+
+Erkannt wird der Server daran, dass `/api/ping` mit `app: "ghgflix-server"`
+antwortet — eine Verwechslung mit einem Drucker oder Router ist ausgeschlossen
+(zwei Tests decken genau das ab).
+
+**Warum nicht `expo-network`?** Damit ließe sich die eigene IP direkt abfragen.
+Das wäre aber ein weiteres natives Modul — und genau so eines (`expo-asset`)
+hat die Fernseh-App wochenlang beim Start abstürzen lassen, weil es nur
+mittelbar installiert war. Der Weg ohne kommt zum selben Ergebnis.
+
+Die Eingabe von Hand bleibt als Rückfalltür: am Handy oft schneller, und für
+einen Server außerhalb des Heimnetzes der einzige Weg.
+
+---
+
+### Aufbau
+
+Aus einer Datei mit 1650 Zeilen sind neun übersichtliche geworden:
+
+| Datei | Inhalt | Zeilen |
+|---|---|---|
+| `src/fokus-kern.js` | Auswahl-Logik, ohne React, voll testbar | ~290 |
+| `src/fokus.js` | Verbindung mit React Native, Anker, Tasten | ~300 |
+| `src/stile.js` | Farben und Maße aus der Desktop-App | ~250 |
+| `src/bausteine.js` | Kacheln, Reihen, Kopfbild, Dialoge | ~330 |
+| `src/seitenleiste.js` | die Navigation links | ~120 |
+| `src/seiten.js` | alle Seiten | ~600 |
+| `src/player.js` | Wiedergabe | ~400 |
+| `src/netzsuche.js` | Serversuche im Heimnetz | ~170 |
+| `src/verbindung.js` | erster Bildschirm | ~240 |
+
+Die Maße skalieren über einen einzigen Schalter: Ab 900 Punkten Bildschirm-
+breite — also auf praktisch jedem Fernseher — werden Kacheln, Schriften und
+Abstände größer. Ein Satz Stile bedient damit Handy und Fernseher.
+
+---
+
+### Getestet — 117 Prüfungen, alle bestanden
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix\mobile"
+node test\fokus.test.mjs         # 43  Auswahl-Logik
+node test\netzsuche.test.mjs     # 20  Serversuche (mit echtem Testserver)
+node test\laden.test.mjs         # 20  alle Module laden, Exporte vollständig
+node test\oberflaeche.test.mjs   # 34  echtes Rendern + Fernbedienung
+```
+
+Der letzte ist der aussagekräftigste: Er **rendert die Oberfläche wirklich**
+und drückt danach die Tasten der Fernbedienung. Damit ist belegt, was am Gerät
+nicht ging:
+
+| Prüfung | Ergebnis |
+|---|---|
+| Poster-Kacheln melden sich beim Fokus an | 7 Reihen, jede Kachel eigene Spalte |
+| Startbildschirm-Zeilen lückenlos | 0 – 8, keine Lücke |
+| Seitenleiste erreichen und verlassen | ← hinein, → heraus |
+| OK löst wirklich aus | `titel:Dune`, `nav:movies` |
+| Player-Bedienleiste erreichbar | Balken + 6 Knöpfe + Zurück |
+| ← → auf dem Balken springt statt Fokus zu bewegen | bestätigt |
+| Filme-Raster mit 23 Titeln | 23 auswählbar, 4 Zeilen, Spalten eindeutig |
+| Leere Bibliothek / Titel ohne Bild | stürzt nicht ab |
+
+Weil `react-test-renderer` nicht nachinstallierbar ist (Paketquelle gesperrt),
+liegt in `test/mini-renderer.mjs` ein kleiner eigener Renderer: er ruft die
+Komponenten auf, bedient die benutzten Hooks und läuft durch den Elementbaum.
+Layout und Bilder kann er nicht — dafür gibt es das Gerät. Für Logik reicht er.
+
+**Eine Falle, die dabei auffiel:** `node --check` prüft Dateien mit
+`import`/`export` als ES-Modul und meldet **JSX-Fehler nicht**. Eine Datei
+voller kaputtem JSX kommt dort als „in Ordnung" durch. Nur echtes Übersetzen
+und Laden gibt Sicherheit — deshalb der Ladetest.
+
+Die Servertests (Parser, Scanner, Profile) laufen unverändert durch; alle 14
+Endpunkte, die die neue App benutzt, wurden gegen `server/src/index.js`
+gegengeprüft.
