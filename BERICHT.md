@@ -1,6 +1,6 @@
 # GHGFlix — Bericht: Server-Überholung, Erkennung, Vorschaubilder, Cloud-Sync
 
-**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.2** · Handy **1.7.0**
+**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.2** · Handy **1.8.0**
 
 ---
 
@@ -249,6 +249,61 @@ Ein Foto vom Bildschirm reicht zur Auswertung. Kein PC, kein adb.
 Ebenfalls wichtig: Beim ersten Verbindungsversuch war **USB-Debugging noch
 ausgeschaltet**. Manche Android-TVs öffnen Port 5555 erst, wenn es an ist —
 ein erneuter Versuch kostet nichts und könnte den adb-Weg doch noch öffnen.
+
+---
+
+## ✅ NACHTRAG 4 — Der TV-Absturz ist gefunden
+
+Das Systemlog vom Fernseher hat es in einer Zeile gezeigt:
+
+```
+FATAL EXCEPTION: mqt_native_modules
+com.facebook.react.common.JavascriptException:
+Error: Cannot find native module 'ExpoAsset'
+```
+
+### Was dahintersteckt
+
+`expo-asset` lag in `node_modules/expo/node_modules/expo-asset` — also
+**verschachtelt** unter dem expo-Paket statt auf oberster Ebene. Es stand nicht
+in den Abhängigkeiten der App, sondern kam nur als Beiwerk von `expo` mit.
+
+Expos Autolinking bindet den **nativen** Teil eines Moduls aber nur ein, wenn
+es eine **direkte** Abhängigkeit ist. Ergebnis: Der JavaScript-Teil war da und
+wollte beim Start `ExpoAsset` aufrufen — den nativen Gegenpart gab es in der
+APK schlicht nicht. React Native bricht dann sofort ab: kurz schwarz, zurück
+ins Menü.
+
+**Warum es auf dem iPhone lief:** Expo Go bringt sämtliche Module fertig
+vorinstalliert mit. Der Fehler kann dort gar nicht auftreten — er zeigt sich
+ausschließlich in einem eigenen Build. Genau deshalb war er so schwer zu fassen.
+
+### Die Reparatur
+
+Vier Module sind jetzt **direkte** Abhängigkeiten, mit exakt den Versionen, die
+Expo SDK 53 mitbringt:
+
+| Modul | Version | wofür |
+|---|---|---|
+| `expo-asset` | ~11.1.7 | der eigentliche Übeltäter |
+| `expo-file-system` | ~18.1.11 | wird von expo-asset gebraucht |
+| `expo-constants` | ~17.1.8 | Geräte-Infos |
+| `expo-font` | ~13.3.2 | hängt mit dran |
+
+**Wichtig beim Bauen:** Erst `npm install` laufen lassen! Die Datei
+`package-lock.json` liegt im Repo, und der Cloud-Build hält sich strikt daran.
+Ohne aktualisierte Sperrdatei würde er die alte, kaputte Struktur erneut bauen.
+
+### Was ich daraus mitnehme
+
+Ich habe vier Runden lang geraten (neue Architektur, Banner-Ressource,
+Modul-Absicherung, Leanback) — und alle vier lagen daneben. Das Log hat die
+Sache in zwei Minuten geklärt. Bei einem Absturz, der vor dem ersten Bild
+passiert, führt an den Systemlogs kein Weg vorbei; alles davor war verlorene
+Zeit. Die Diagnose-Fassung und das Log-Skript bleiben im Projekt — beim
+nächsten Mal steht die Ursache innerhalb von Minuten fest.
+
+---
 
 ### 9. Studio-Klon scheiterte an eigenen Bau-Dateien
 

@@ -269,6 +269,11 @@ was passiert ist.
 Kommt gar nichts (auch kein Banner), war es ein Absturz **vor** dem Start der
 Oberfläche. Dann hilft nur Weg 2.
 
+> **Hinweis:** Port 5555 ist bei manchen Geräten erst offen, NACHDEM
+> **USB-Debugging** eingeschaltet wurde. Klappt `adb connect` beim ersten Mal
+> nicht, also erst USB-Debugging anschalten und es dann nochmal versuchen —
+> genau so hat es hier funktioniert, obwohl es kein „Drahtloses Debugging" gibt.
+
 #### Weg 1b: Diagnose-Fassung der App (kein PC nötig) ⭐
 
 Wenn dein Fernseher **kein „Drahtloses Debugging"** anbietet — bei vielen
@@ -406,6 +411,16 @@ Die interessanten Zeilen beginnen mit `FATAL EXCEPTION`, `AndroidRuntime` oder
 > React-Native-Architektur (Fabric), die Expo SDK 53 standardmäßig einschaltet.
 > Ab GHGFlix 1.5.0 ist sie bewusst abgeschaltet — allein das behebt den
 > Startabsturz in den meisten Fällen.
+
+### „Cannot find native module 'ExpoAsset'" (behoben in 1.8.0)
+
+Trat als Absturz direkt beim Start auf. Ursache: `expo-asset` war keine
+**direkte** Abhängigkeit, sondern lag verschachtelt unter `node_modules/expo/`.
+Expos Autolinking bindet den nativen Teil dann nicht in die APK ein.
+
+Merksatz für künftige Module: **Alles, was nativen Code mitbringt, gehört
+direkt in `mobile/package.json`.** In Expo Go fällt so etwas nie auf, weil dort
+alle Module vorinstalliert sind — der Fehler zeigt sich erst im eigenen Build.
 
 ### Weitere Fälle
 
