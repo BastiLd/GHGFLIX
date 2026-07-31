@@ -1,6 +1,6 @@
 # GHGFlix — Bericht: Server-Überholung, Erkennung, Vorschaubilder, Cloud-Sync
 
-**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.1** · Handy **1.4.0**
+**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.1** · Handy **1.5.0**
 
 ---
 
@@ -146,7 +146,28 @@ keine Doppel-Einträge.
 
 **Wichtig:** Vorher am TV unter *Einstellungen → Apps → Alle Apps anzeigen* die
 alte, unsichtbare GHGFlix-Installation **deinstallieren** — dann die neue
-Version 1.4.0 installieren.
+Version 1.5.0 installieren.
+
+### 8b. App startet am TV und stürzt sofort ab
+
+Die App ist jetzt sichtbar, bricht beim Öffnen aber ab (kurz schwarz, zurück
+ins Menü). Zwei Maßnahmen:
+
+**Ursache-Verdacht behoben:** Expo SDK 53 schaltet die **neue
+React-Native-Architektur** (Fabric) standardmäßig ein. Auf günstigen
+Android-TV-Geräten ist das eine bekannte Absturzquelle beim Start. Die
+bewährte Architektur ist in SDK 53 voll unterstützt — ab Version 1.5.0 ist
+sie deshalb bewusst abgeschaltet (`newArchEnabled: false`).
+
+**Und damit du es künftig selbst siehst:** Am Fernseher gibt es keine
+Entwicklerkonsole — ein Absturz ist einfach ein schwarzer Bildschirm. GHGFlix
+fängt Fehler jetzt ab, **speichert sie** und zeigt sie beim nächsten Start als
+rotes Banner mit Meldung und Fehlerspur. Kein PC nötig.
+
+Greift beides nicht (Absturz noch vor dem Start der Oberfläche), steht in
+[`tv/README.md`](tv/README.md) eine Schritt-für-Schritt-Anleitung, wie du per
+`adb` über WLAN die echten Systemlogs vom Fernseher holst — mit allen Befehlen
+zum Kopieren.
 
 ### 9. Studio-Klon scheiterte an eigenen Bau-Dateien
 

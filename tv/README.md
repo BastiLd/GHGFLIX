@@ -237,13 +237,89 @@ Damit die neue Fassung greift:
 1. Am TV **Einstellungen → Apps → Alle Apps anzeigen** öffnen
 2. Falls dort ein Eintrag **GHGFlix** steht: **Deinstallieren**
    (das ist die alte, unsichtbare Fassung)
-3. Neue APK bauen (Version 1.4.0 oder höher), auf den Server legen
+3. Neue APK bauen (Version 1.5.0 oder höher), auf den Server legen
 4. In Downloader wieder `…:8484/apk` → **Go** → **Installieren**
 
 Danach liegt GHGFlix mit rotem Kachelbild auf dem Startbildschirm.
 
 > Prüfen, welche Fassung du hast: Die App-Version steht in GHGFlix unter
-> **Einstellungen**. Alles unter 1.4.0 ist noch die unsichtbare.
+> **Einstellungen**. Alles unter 1.5.0 ist veraltet.
+
+### ⭐ „App startet, wird schwarz und springt zurück"
+
+Die App stürzt beim Start ab. So kommst du an die Ursache:
+
+#### Weg 1: Die App zeigt es dir selbst (ab Version 1.5.0)
+
+GHGFlix fängt Fehler jetzt ab und **speichert sie**. Beim nächsten Start steht
+oben ein rotes Banner mit der Meldung und den ersten Zeilen der Fehlerspur.
+Einfach die App nochmal öffnen — wenn sie so weit kommt, siehst du dort direkt,
+was passiert ist.
+
+Kommt gar nichts (auch kein Banner), war es ein Absturz **vor** dem Start der
+Oberfläche. Dann hilft nur Weg 2.
+
+#### Weg 2: Echte Logs per adb vom PC
+
+1. **Am Fernseher** Entwickleroptionen freischalten:
+   *Einstellungen → System → Info* → 7-mal auf **Build** drücken
+2. *Einstellungen → System → Entwickleroptionen* → **USB-Debugging** einschalten
+   und, falls vorhanden, **Debugging über WLAN / Netzwerk-Debugging**
+3. IP des Fernsehers notieren: *Einstellungen → Netzwerk & Internet* → dein WLAN
+
+4. **Am PC** die Android-Platform-Tools installieren (einmalig):
+
+   ```powershell
+   winget install --id Google.PlatformTools -e
+   ```
+
+   Klappt winget nicht: [developer.android.com/tools/releases/platform-tools](https://developer.android.com/tools/releases/platform-tools)
+   herunterladen, entpacken, z. B. nach `C:\platform-tools`, und dorthin wechseln.
+
+5. **Verbinden und mitlesen** (TV-IP anpassen):
+
+   ```powershell
+   adb connect 192.168.68.55:5555
+   adb devices
+   ```
+
+   Am Fernseher erscheint „USB-Debugging zulassen?" → **Immer zulassen** →
+   **OK**.
+
+6. Log leeren, App am TV starten, Log ansehen:
+
+   ```powershell
+   adb logcat -c
+   # jetzt am Fernseher GHGFlix oeffnen, ca. 10 Sekunden warten, dann:
+   adb logcat -d *:E > "$env:USERPROFILE\Desktop\ghgflix-log.txt"
+   notepad "$env:USERPROFILE\Desktop\ghgflix-log.txt"
+   ```
+
+   Nur die GHGFlix-Zeilen, live mitlaufend:
+
+   ```powershell
+   adb logcat --pid=$(adb shell pidof -s com.bastild.ghgflix)
+   ```
+
+   Nach dem Absturz die Ursache direkt anzeigen:
+
+   ```powershell
+   adb logcat -d -b crash
+   ```
+
+7. Fertig? Verbindung trennen:
+
+   ```powershell
+   adb disconnect
+   ```
+
+Die interessanten Zeilen beginnen mit `FATAL EXCEPTION`, `AndroidRuntime` oder
+`ReactNativeJS`.
+
+> **Häufigste Ursache** bei günstigen Android-TV-Geräten: die neue
+> React-Native-Architektur (Fabric), die Expo SDK 53 standardmäßig einschaltet.
+> Ab GHGFlix 1.5.0 ist sie bewusst abgeschaltet — allein das behebt den
+> Startabsturz in den meisten Fällen.
 
 ### Weitere Fälle
 

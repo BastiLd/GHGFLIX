@@ -21,6 +21,103 @@ import {
   View,
 } from "react-native";
 
+// ── Absturz-Anzeige ─────────────────────────────────────────────────────────
+//
+// Am Fernseher gibt es keine Entwicklerkonsole: Stürzt die App ab, wird der
+// Bildschirm schwarz und man landet wieder im Menü — ohne jeden Hinweis.
+// Deshalb wird JEDER Fehler hier abgefangen und gespeichert; beim nächsten
+// Start zeigt die App ihn an. So ist die Ursache auch ohne PC ablesbar.
+const CRASH_KEY = "ghgflix.lastCrash";
+
+async function saveCrash(err, wo) {
+  try {
+    await AsyncStorage.setItem(
+      CRASH_KEY,
+      JSON.stringify({
+        at: Date.now(),
+        wo,
+        text: String(err?.message || err),
+        stack: String(err?.stack || "").split("\n").slice(0, 12).join("\n"),
+      }),
+    );
+  } catch {
+    /* Speicher voll o. Ä. — dann eben nicht */
+  }
+}
+
+// Fehler außerhalb von React (z. B. in einem Timer) ebenfalls festhalten
+if (typeof global !== "undefined" && global.ErrorUtils) {
+  const vorher = global.ErrorUtils.getGlobalHandler?.();
+  global.ErrorUtils.setGlobalHandler((e, fatal) => {
+    saveCrash(e, fatal ? "schwerer Fehler" : "Fehler");
+    vorher?.(e, fatal);
+  });
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { err: null };
+  }
+  static getDerivedStateFromError(err) {
+    return { err };
+  }
+  componentDidCatch(err) {
+    saveCrash(err, "Oberfläche");
+  }
+  render() {
+    if (!this.state.err) return this.props.children;
+    return (
+      <ScrollView style={{ flex: 1, backgroundColor: "#0b0b0f" }} contentContainerStyle={{ padding: 24 }}>
+        <Text style={{ color: "#e50914", fontSize: 22, fontWeight: "800", marginBottom: 10 }}>
+          GHGFlix ist auf einen Fehler gestoßen
+        </Text>
+        <Text style={{ color: "#f2f2f5", fontSize: 14, marginBottom: 14 }}>
+          {String(this.state.err?.message || this.state.err)}
+        </Text>
+        <Text style={{ color: "#9a9aa5", fontSize: 11, fontFamily: "monospace" }}>
+          {String(this.state.err?.stack || "").split("\n").slice(0, 12).join("\n")}
+        </Text>
+        <Pressable
+          onPress={() => this.setState({ err: null })}
+          style={{ backgroundColor: "#e50914", borderRadius: 10, padding: 14, marginTop: 20, alignItems: "center" }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "700" }}>Nochmal versuchen</Text>
+        </Pressable>
+      </ScrollView>
+    );
+  }
+}
+
+/** Banner mit dem zuletzt gespeicherten Absturz (erscheint nach einem Neustart). */
+function CrashBanner() {
+  const [crash, setCrash] = useState(null);
+  useEffect(() => {
+    AsyncStorage.getItem(CRASH_KEY)
+      .then((v) => v && setCrash(JSON.parse(v)))
+      .catch(() => {});
+  }, []);
+  if (!crash) return null;
+  const verwerfen = () => {
+    AsyncStorage.removeItem(CRASH_KEY).catch(() => {});
+    setCrash(null);
+  };
+  return (
+    <View style={{ backgroundColor: "#3b0d10", borderBottomWidth: 1, borderBottomColor: "#e50914", padding: 12 }}>
+      <Text style={{ color: "#ff6b73", fontWeight: "700", fontSize: 13 }}>
+        Letzter Absturz ({crash.wo}) — {new Date(crash.at).toLocaleString("de-DE")}
+      </Text>
+      <Text style={{ color: "#f2f2f5", fontSize: 12, marginTop: 4 }}>{crash.text}</Text>
+      {!!crash.stack && (
+        <Text style={{ color: "#9a9aa5", fontSize: 10, marginTop: 4, fontFamily: "monospace" }}>{crash.stack}</Text>
+      )}
+      <Pressable onPress={verwerfen} style={{ alignSelf: "flex-start", marginTop: 8, backgroundColor: "#ffffff22", borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}>
+        <Text style={{ color: "#f2f2f5", fontSize: 12 }}>Verstanden, ausblenden</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 const C = {
   bg: "#0b0b0f",
   bg2: "#14141a",
@@ -86,7 +183,7 @@ const normUrl = (u) => {
   return u.replace(/\/$/, "");
 };
 
-export default function App() {
+function AppInner() {
   const [conn, setConn] = useState(null);
   const [base, setBase] = useState(null); // active server URL
   const [checking, setChecking] = useState(true);
@@ -967,3 +1064,21 @@ const st = StyleSheet.create({
   seekKnob: { position: "absolute", width: 14, height: 14, borderRadius: 7, backgroundColor: C.red, borderWidth: 2, borderColor: "#fff", marginLeft: -7 },
   timeText: { color: C.text, fontSize: 12, fontVariant: ["tabular-nums"], minWidth: 46, textAlign: "center" },
 });
+
+/**
+ * Der eigentliche Einstieg: Fehlerfänger drumherum, darüber das Banner mit dem
+ * zuletzt gespeicherten Absturz. Am Fernseher ist das die einzige Möglichkeit,
+ * überhaupt zu sehen, WAS schiefgelaufen ist.
+ */
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <View style={{ flex: 1, backgroundColor: C.bg }}>
+        <CrashBanner />
+        <View style={{ flex: 1 }}>
+          <AppInner />
+        </View>
+      </View>
+    </ErrorBoundary>
+  );
+}

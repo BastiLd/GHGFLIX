@@ -2,10 +2,12 @@
   "expo": {
     "name": "GHGFlix",
     "slug": "ghgflix",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "orientation": "default",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0b0b0f",
+    "_hinweis_newArch": "Expo SDK 53 aktiviert die neue React-Native-Architektur (Fabric) standardmaessig. Auf guenstigen Android-TV-Geraeten fuehrt das haeufig zu einem sofortigen Absturz beim Start (Bildschirm kurz schwarz, dann zurueck ins Menue). Die bewaehrte Architektur ist in SDK 53 voll unterstuetzt - deshalb hier bewusst abgeschaltet.",
+    "newArchEnabled": false,
     "splash": {
       "backgroundColor": "#0b0b0f"
     },
@@ -24,7 +26,7 @@
     "android": {
       "usesCleartextTraffic": true,
       "package": "com.bastild.ghgflix",
-      "versionCode": 5
+      "versionCode": 6
     },
     "extra": {
       "eas": {
