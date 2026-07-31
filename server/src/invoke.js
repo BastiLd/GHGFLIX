@@ -6,7 +6,10 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, normalize, basename, dirname } from "node:path";
 import { spawn } from "node:child_process";
-import { openDb, getSetting, setSetting, listLibraries, addLibrary, removeLibrary, DATA_DIR, setPlacement } from "./db.js";
+import {
+  openDb, getSetting, setSetting, listLibraries, addLibrary, removeLibrary, DATA_DIR, setPlacement,
+  resolveProfile,
+} from "./db.js";
 import {
   scanLibrary, scanState, removeLibraryContent, detectLibraries, primaryRoot, isSystemDir, BROWSE_ROOTS,
   applyPendingProgress, refreshAllMetadata, applyShowMatch, applyMovieMatch, refreshEpisodeMeta,
@@ -558,17 +561,17 @@ export async function handleInvoke(cmd, a = {}) {
       d.prepare(
         `INSERT INTO progress (profile_id, media_type, ref_id, position, duration, watched, updated_at) VALUES (?,?,?,?,?,?,?)
          ON CONFLICT(profile_id, media_type, ref_id) DO UPDATE SET position=excluded.position, duration=excluded.duration, watched=excluded.watched, updated_at=excluded.updated_at`,
-      ).run(String(a.profileId), a.mediaType, Number(a.refId), Number(a.positionSec) || 0, Number(a.durationSec) || 0, a.watched ? 1 : 0, now());
+      ).run(resolveProfile(a.profileId), a.mediaType, Number(a.refId), Number(a.positionSec) || 0, Number(a.durationSec) || 0, a.watched ? 1 : 0, now());
       return null;
     }
     case "get_progress": {
       const r = d
         .prepare("SELECT * FROM progress WHERE profile_id=? AND media_type=? AND ref_id=?")
-        .get(String(a.profileId), a.mediaType, Number(a.refId));
+        .get(resolveProfile(a.profileId), a.mediaType, Number(a.refId));
       return r ? progressOut(r) : null;
     }
     case "list_progress":
-      return d.prepare("SELECT * FROM progress WHERE profile_id=?").all(String(a.profileId)).map(progressOut);
+      return d.prepare("SELECT * FROM progress WHERE profile_id=?").all(resolveProfile(a.profileId)).map(progressOut);
     case "continue_watching":
     case "recently_watched": {
       const recent = cmd === "recently_watched";
@@ -587,7 +590,7 @@ export async function handleInvoke(cmd, a = {}) {
              ${recent ? "" : "AND pr.watched=0 AND pr.position > 30 AND pr.duration > 0"}
            ORDER BY pr.updated_at DESC LIMIT ?`,
         )
-        .all(String(a.profileId), Number(a.limit) || 20);
+        .all(resolveProfile(a.profileId), Number(a.limit) || 20);
       return rows.map((r) => {
         const isMovie = r.media_type === "movie";
         const pad = (n) => String(n).padStart(2, "0");
@@ -625,7 +628,7 @@ export async function handleInvoke(cmd, a = {}) {
       );
       for (const r of rows) {
         if (!r?.tmdbId) continue;
-        up.run(String(a.profileId), r.mediaType, r.tmdbId, r.season ?? -1, r.episode ?? -1, r.positionSec ?? 0, r.durationSec ?? 0, r.watched ? 1 : 0, r.updatedAt ?? now());
+        up.run(resolveProfile(a.profileId), r.mediaType, r.tmdbId, r.season ?? -1, r.episode ?? -1, r.positionSec ?? 0, r.durationSec ?? 0, r.watched ? 1 : 0, r.updatedAt ?? now());
       }
       applyPendingProgress(d);
       return null;
@@ -633,7 +636,7 @@ export async function handleInvoke(cmd, a = {}) {
 
     // ===== favorites / watched / stats / extras =====
     case "toggle_favorite": {
-      const args = [String(a.profileId), a.mediaType, Number(a.refId)];
+      const args = [resolveProfile(a.profileId), a.mediaType, Number(a.refId)];
       const existing = d.prepare("SELECT 1 FROM favorites WHERE profile_id=? AND media_type=? AND ref_id=?").get(...args);
       if (existing) {
         d.prepare("DELETE FROM favorites WHERE profile_id=? AND media_type=? AND ref_id=?").run(...args);
@@ -645,7 +648,7 @@ export async function handleInvoke(cmd, a = {}) {
     case "list_favorites":
       return d
         .prepare("SELECT media_type mediaType, ref_id refId, added_at addedAt FROM favorites WHERE profile_id=? ORDER BY added_at DESC")
-        .all(String(a.profileId));
+        .all(resolveProfile(a.profileId));
     case "set_watched": {
       const row = a.mediaType === "movie"
         ? d.prepare("SELECT duration FROM movies WHERE id=?").get(Number(a.refId))
@@ -653,7 +656,7 @@ export async function handleInvoke(cmd, a = {}) {
       d.prepare(
         `INSERT INTO progress (profile_id, media_type, ref_id, position, duration, watched, updated_at) VALUES (?,?,?,0,?,?,?)
          ON CONFLICT(profile_id, media_type, ref_id) DO UPDATE SET watched=excluded.watched, position=0, updated_at=excluded.updated_at`,
-      ).run(String(a.profileId), a.mediaType, Number(a.refId), row?.duration ?? 0, a.watched ? 1 : 0, now());
+      ).run(resolveProfile(a.profileId), a.mediaType, Number(a.refId), row?.duration ?? 0, a.watched ? 1 : 0, now());
       return null;
     }
     case "set_show_watched":
@@ -666,11 +669,11 @@ export async function handleInvoke(cmd, a = {}) {
         `INSERT INTO progress (profile_id, media_type, ref_id, position, duration, watched, updated_at) VALUES (?, 'episode', ?, 0, ?, ?, ?)
          ON CONFLICT(profile_id, media_type, ref_id) DO UPDATE SET watched=excluded.watched, position=0, updated_at=excluded.updated_at`,
       );
-      for (const e of eps) up.run(String(a.profileId), e.id, e.duration ?? 0, a.watched ? 1 : 0, now());
+      for (const e of eps) up.run(resolveProfile(a.profileId), e.id, e.duration ?? 0, a.watched ? 1 : 0, now());
       return null;
     }
     case "get_stats": {
-      const p = String(a.profileId);
+      const p = resolveProfile(a.profileId);
       const r1 = d.prepare("SELECT COALESCE(SUM(CASE WHEN watched=1 THEN duration ELSE position END),0) s FROM progress WHERE profile_id=?").get(p);
       const r2 = d.prepare("SELECT COUNT(*) c FROM progress WHERE profile_id=? AND media_type='movie' AND watched=1").get(p);
       const r3 = d.prepare("SELECT COUNT(*) c FROM progress WHERE profile_id=? AND media_type='episode' AND watched=1").get(p);

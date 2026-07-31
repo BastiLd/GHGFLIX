@@ -1,6 +1,72 @@
 # GHGFlix — Bericht: Server-Überholung, Erkennung, Vorschaubilder, Cloud-Sync
 
-**Stand:** 30.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.0** · Handy **1.2.0**
+**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.1** · Handy **1.2.0**
+
+---
+
+## ⚠️ NACHTRAG 31.07. — vier Fehler aus dem ersten Test behoben
+
+Du hast vier Dinge gemeldet, alle vier sind gefunden und behoben:
+
+### 1. Das PowerShell-Skript ließ sich nicht starten
+
+`Unerwartetes Token "}"` — Ursache: Ich hatte Umlaute und Gedankenstriche in der
+`.ps1` verwendet. Windows PowerShell 5.1 liest `.ps1`-Dateien **nicht** als
+UTF-8, sondern in der ANSI-Codepage; dadurch wurde `—` zu `â€"` und die
+Klammerung zerbrach. Das Skript enthält jetzt **ausschließlich ASCII**.
+
+### 2. „0 gesendet, 0 empfangen" — der eigentliche Grund
+
+Das war **nicht** die Cloud, sondern ein Typkonflikt im Server:
+
+- Die Weboberfläche (und damit Fernseher und Handy-Browser) benutzt dieselbe
+  React-App wie der Desktop und schickt die Profil-ID **`"local"` als Text**.
+- Der Server führt seine Profile aber als **Zahlen**.
+- Folge: Der Fortschritt landete unter `profile_id = 'local'`; die Abfrage des
+  Cloud-Abgleichs verbindet `progress` mit `profiles.id` (Zahl) → **kein
+  Treffer → „0 gesendet"**.
+- Umgekehrt landeten aus der Cloud geholte Daten unter der Zahl, während die
+  Weboberfläche weiter `'local'` las → **„0 empfangen"**, und am Fernseher blieb
+  alles leer.
+
+Jetzt wird jede von außen kommende Profil-ID auf ein echtes Profil abgebildet,
+und vorhandene Text-Einträge werden beim ersten Start einmalig umgezogen.
+Zusätzlich verknüpft der Server sein Profil selbstständig mit dem Cloud-Profil
+(vorher passierte das nur beim Herunterladen — wer nur über die Weboberfläche
+schaute, sendete also nie etwas). **11 neue Tests** sichern das ab.
+
+> **Wichtig:** Auf dem PC lief noch die **alte** Windows-App (Version 0.9.9),
+> weil das Build-Skript ja abgestürzt ist. Deshalb kam auch von dort nichts an.
+> Nach dem Neubauen (Schritt 5) funktioniert es.
+
+### 3. Handy-App: „No such file or directory"
+
+Das Studio hat das GHGFlix-Repo geklont — aber den Branch **`main`**. Dort gibt
+es weder `mobile/` noch `server/`; dein gesamter Code liegt auf
+`feature/zimaos-docker-server`. Deshalb schlug `cd .../mobile` fehl.
+
+Das Studio kann jetzt einen **Branch** je App (`repoBranch`), GHGFlix ist darauf
+eingestellt, und bestehende Installationen bekommen neue Einstellungen
+automatisch nachgetragen (vorher wurden nur komplett neue Apps übernommen).
+
+### 4. „OrG! (Come & Play)" mit Daredevil-Folgen darin
+
+Gefunden: Ein Sammelordner einer Release-Seite — z. B. **`www.UIndex.org`** —
+wurde als Serienordner behandelt. Nach dem Entfernen von „www" und „uindex"
+blieb **„org"** übrig, und zu „org" findet TMDb tatsächlich die Serie
+„OrG! (Come & Play)".
+
+Drei Sicherungen dagegen:
+
+1. Solche Sammelordner werden erkannt und **übersprungen** — die echte Serie
+   steht eine Ebene tiefer.
+2. Bleibt kein brauchbarer Titel übrig, zählt der **Dateiname**
+   (`Daredevil.Born.Again.S02E06…` → „Daredevil Born Again").
+3. Bereits gespeicherte Müll-Schlüssel werden beim nächsten Scan **entfernt**,
+   damit die Fehlzuordnung nicht zurückkommt.
+
+> **Damit die falsche Serie verschwindet, muss einmal neu eingelesen werden** —
+> siehe Schritt 8 unten. Dein Gesehen-Stand geht dabei nicht verloren.
 
 > Der vorherige Bericht zur Masterplan-Umsetzung (16.07.2026) steht in
 > [`PLAN_STATUS.md`](PLAN_STATUS.md).
@@ -232,12 +298,12 @@ Minuten (es werden zwei Architekturen gebaut).
 
 ### Schritt 3 — ZimaOS aktualisieren
 
-**Die Version, die du brauchst: `2.3.0`**
+**Die Version, die du brauchst: `2.3.1`**
 
 Das Image heißt:
 
 ```
-ghcr.io/bastild/ghgflix-server:2.3.0
+ghcr.io/bastild/ghgflix-server:2.3.1
 ```
 
 Zwei Wege:
@@ -254,7 +320,7 @@ image: ghcr.io/bastild/ghgflix-server:latest
 ersetzen durch
 
 ```yaml
-image: ghcr.io/bastild/ghgflix-server:2.3.0
+image: ghcr.io/bastild/ghgflix-server:2.3.1
 ```
 
 und die App neu importieren.
@@ -265,7 +331,7 @@ und die App neu importieren.
 http://<server-ip>:8484/api/ping
 ```
 
-Dort muss `"version":"2.3.0"` stehen. Steht dort noch `2.2.0`, hat das Update
+Dort muss `"version":"2.3.1"` stehen. Steht dort noch `2.2.0` oder `2.3.0`, hat das Update
 nicht gegriffen (dann in ZimaOS/Portainer das Image neu ziehen und den Container
 neu erstellen — deine Daten in `/DATA/AppData/ghgflix/data` bleiben erhalten).
 
@@ -362,6 +428,37 @@ cd "$env:USERPROFILE\Documents\GHGFlix\mobile"
 npm install
 npx eas-cli build --platform android --profile preview
 ```
+
+### Schritt 8 — Bibliothek einmal neu einlesen (wegen „OrG!")
+
+Nötig, damit die falsch zugeordnete Serie verschwindet. Die Erkennung ist
+repariert, aber bereits eingelesene Dateien werden beim normalen Scan bewusst
+nicht neu zugeordnet (sonst wären deine manuellen Korrekturen jedes Mal weg).
+
+**Der sanfte Weg zuerst** — reicht meistens und ist ohne jedes Risiko:
+
+1. In GHGFlix die Serie **OrG! (Come & Play)** öffnen
+2. **Staffel → andere Serie** klicken
+3. „Daredevil Born Again" suchen und auswählen
+
+Das wird gemerkt und überlebt jeden weiteren Scan.
+
+**Der gründliche Weg**, falls mehrere Serien betroffen sind:
+
+Einstellungen → **Bibliothek** → **Bibliothek neu aufbauen**. Der Index wird
+verworfen und komplett neu erkannt. **Dein Gesehen-Stand bleibt erhalten** — er
+wird vorher in TMDb-Koordinaten gesichert und danach automatisch wieder
+zugeordnet. Bei 608 Folgen dauert das einige Minuten.
+
+### Schritt 9 — Prüfen, dass der Abgleich jetzt wirklich läuft
+
+1. Am PC (neu gebaute App) oder im Browser eine Folge ~2 Minuten anschauen
+2. Einstellungen → Konto & Sync → **Jetzt synchronisieren**
+3. In Supabase nachsehen: **Table Editor → `watch_progress`**
+
+Dort müssen jetzt Zeilen stehen. Vorher waren es 0 — bei Geräten
+(`sync_devices`) stand dagegen schon 1, das heißt: die Verbindung stand, es gab
+nur nichts zu senden. Genau das ist mit dem Profil-Fix behoben.
 
 ---
 

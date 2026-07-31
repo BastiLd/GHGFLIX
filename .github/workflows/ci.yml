@@ -29,6 +29,9 @@ jobs:
       - name: Scanner-Tests (echte Beispielbibliothek)
         working-directory: server
         run: node --experimental-sqlite test/scan.test.mjs
+      - name: Profil-Tests (Cloud-Abgleich der Weboberflaeche)
+        working-directory: server
+        run: node --experimental-sqlite test/profile.test.mjs
       - name: mobile/app.json valide
         run: node -e "JSON.parse(require('fs').readFileSync('mobile/app.json','utf8'))"
 

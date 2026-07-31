@@ -248,6 +248,9 @@ export function openDb() {
     seed("SHOWS_DIRS", "show");
     seed("MOVIES_DIRS", "movie");
   }
+  // `db` ist oben bereits gesetzt, openDb() ist also wiedereintrittsfähig —
+  // die Migration darf getSetting/setSetting gefahrlos benutzen.
+  migrateTextProfiles(db);
   return db;
 }
 
@@ -271,6 +274,77 @@ export function removeLibrary(id) {
   const row = d.prepare("SELECT * FROM libraries WHERE id = ?").get(id);
   if (row) d.prepare("DELETE FROM libraries WHERE id = ?").run(id);
   return row;
+}
+
+// ── Profil-Auflösung ────────────────────────────────────────────────────────
+//
+// DER FEHLER, DEN DAS HIER BEHEBT:
+// Die Weboberfläche (und damit Fernseher + Handy-Browser) benutzt dieselbe
+// React-App wie der Desktop und schickt die Profil-ID "local" — einen TEXT.
+// Der Server führt seine Profile aber als ZAHLEN. Dadurch:
+//   * schrieb die Weboberfläche den Fortschritt unter profile_id = 'local'
+//   * der Cloud-Abgleich verbindet progress mit profiles.id (Zahl) → kein
+//     Treffer → "0 gesendet"
+//   * aus der Cloud geholte Daten landeten unter der ZAHL → die Weboberfläche
+//     las weiter 'local' → "0 empfangen" und am Fernseher blieb alles leer.
+// Beides verschwindet, sobald jede Text-ID auf ein echtes Profil zeigt.
+
+/** Numerische ID des Profils, das für nicht-numerische IDs einspringt. */
+function fallbackProfileId(db) {
+  const linked = db.prepare("SELECT id FROM profiles WHERE supabase_id IS NOT NULL ORDER BY id LIMIT 1").get();
+  if (linked) return linked.id;
+  const first = db.prepare("SELECT id FROM profiles ORDER BY id LIMIT 1").get();
+  if (first) return first.id;
+  const info = db.prepare("INSERT INTO profiles (name, created_at) VALUES (?,?)").run("Standard", Date.now());
+  return Number(info.lastInsertRowid);
+}
+
+/**
+ * Jede von außen kommende Profil-ID auf eine echte Profilzeile abbilden.
+ * Zahlen bleiben Zahlen; "local" & Co. landen beim Standardprofil.
+ */
+export function resolveProfile(raw) {
+  const db = openDb();
+  const s = String(raw ?? "").trim();
+  if (/^\d+$/.test(s)) {
+    const hit = db.prepare("SELECT id FROM profiles WHERE id = ?").get(Number(s));
+    if (hit) return String(hit.id);
+  }
+  return String(fallbackProfileId(db));
+}
+
+/**
+ * Einmalige Bereinigung: Zeilen, die unter einer Text-Profil-ID gelandet sind,
+ * dem Standardprofil zuschlagen. Ohne das bliebe der bisher in der
+ * Weboberfläche gesammelte Fortschritt für immer unsichtbar.
+ */
+function migrateTextProfiles(db) {
+  if (getSetting("profile_ids_migrated") === "1") return;
+  const target = fallbackProfileId(db);
+  let moved = 0;
+  for (const table of ["progress", "favorites"]) {
+    let rows = [];
+    try {
+      rows = db.prepare(`SELECT DISTINCT profile_id FROM ${table}`).all();
+    } catch {
+      continue;
+    }
+    for (const r of rows) {
+      const pid = String(r.profile_id);
+      if (/^\d+$/.test(pid) && db.prepare("SELECT 1 FROM profiles WHERE id=?").get(Number(pid))) continue;
+      const res = db.prepare(`UPDATE OR IGNORE ${table} SET profile_id=? WHERE profile_id=?`).run(target, pid);
+      moved += res.changes;
+      // Reste, die wegen des Eindeutigkeits-Schlüssels nicht umziehen konnten
+      db.prepare(`DELETE FROM ${table} WHERE profile_id=?`).run(pid);
+    }
+  }
+  // pending_progress ebenfalls
+  try {
+    db.prepare("UPDATE OR IGNORE pending_progress SET profile_id=? WHERE profile_id NOT GLOB '[0-9]*'").run(target);
+    db.prepare("DELETE FROM pending_progress WHERE profile_id NOT GLOB '[0-9]*'").run();
+  } catch { /* Tabelle evtl. leer */ }
+  if (moved > 0) console.log(`[db] ${moved} Fortschritts-/Favoriten-Einträge dem Profil ${target} zugeordnet`);
+  setSetting("profile_ids_migrated", "1");
 }
 
 // ── Serien-Gruppierungsschlüssel (Desktop-Parität) ──────────────────────────

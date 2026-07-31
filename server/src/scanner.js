@@ -26,6 +26,7 @@ import {
 import {
   isVideo, isJunkClip, isExtrasDir, fileStem, parseEpisode, parseSeasonFromDir, isPureSeasonDir,
   parseTitleYear, cleanShowTitle, showKey, movieKey, episodeTitleFromFile, providerId,
+  isJunkTitle, isSiteDir,
 } from "./parser.js";
 import { ffprobe } from "./stream.js";
 import * as tmdb from "./tmdb.js";
@@ -195,10 +196,21 @@ function showSourceName(root, filePath) {
       const rn = basename(root);
       if (rn) return rn;
     }
+    // Sammelordner einer Release-Seite ("www.UIndex.org") ist KEINE Serie —
+    // die echte Serie steht eine Ebene tiefer. Ohne das wurde aus so einem
+    // Ordner der Titel "org" und damit die falsche TMDb-Serie "OrG!".
+    if (isSiteDir(first) && comps.length >= 3 && !isPureSeasonDir(comps[1])) {
+      return comps[1];
+    }
+    if (isSiteDir(first)) {
+      // nur noch die Datei übrig — deren Name trägt den echten Titel
+      return fileStem(basename(filePath));
+    }
     return first;
   }
   const rn = basename(root);
-  return rn || fileStem(basename(filePath));
+  if (rn && !isSiteDir(rn)) return rn;
+  return fileStem(basename(filePath));
 }
 
 // ── Indizieren: Filme ───────────────────────────────────────────────────────
@@ -298,7 +310,14 @@ function upsertEpisode(db, showId, season, episode, path, epTitle, episodeEnd, n
 function indexShows(db, root, now) {
   let n = 0;
   for (const f of walkVideos(root)) {
-    const sourceName = showSourceName(root, f.path);
+    let sourceName = showSourceName(root, f.path);
+    // LETZTE SICHERUNG gegen Müll-Titel: Ergibt der Ordner keinen brauchbaren
+    // Namen (Release-Seite, nur Ziffern, nur eine Domain-Endung), zählt der
+    // Dateiname — dort steht bei Szene-Releases immer der echte Serientitel.
+    if (isJunkTitle(cleanShowTitle(sourceName))) {
+      const fromFile = cleanShowTitle(f.stem);
+      if (!isJunkTitle(fromFile)) sourceName = f.stem;
+    }
     const key = showKey(sourceName);
 
     // 1) Pro-Datei-Platzierung schlägt ALLES und wird bei jedem Scan erneuert.
@@ -544,14 +563,44 @@ async function refreshEpisodeMeta(db, showId, tmdbId, force = false) {
  * (identity_map). Die werden jetzt zusätzlich als stabiler Namens-Key
  * abgelegt, damit sie ein Umbenennen und „Bibliothek neu aufbauen“ überleben.
  */
+/**
+ * Müll-Schlüssel wegwerfen. Beim alten Fehlverhalten konnte „org" (aus einem
+ * Sammelordner wie „www.UIndex.org") als Serien- oder Merk-Schlüssel landen.
+ * Bliebe der stehen, käme die falsche Zuordnung nach jedem Scan zurück.
+ */
+function cleanJunkKeys(db) {
+  let n = 0;
+  for (const r of db.prepare("SELECT key FROM show_keys").all()) {
+    if (isJunkTitle(r.key)) {
+      db.prepare("DELETE FROM show_keys WHERE key = ?").run(r.key);
+      n++;
+    }
+  }
+  for (const r of db.prepare("SELECT key, kind FROM identity_keys").all()) {
+    if (isJunkTitle(r.key)) {
+      db.prepare("DELETE FROM identity_keys WHERE key = ? AND kind = ?").run(r.key, r.kind);
+      n++;
+    }
+  }
+  // Serien, deren Titel selbst Müll ist und die (noch) keine Folgen haben
+  db.exec("DELETE FROM shows WHERE id NOT IN (SELECT DISTINCT show_id FROM episodes)");
+  if (n > 0) console.log(`[scan] ${n} unbrauchbare Schlüssel entfernt (z. B. aus Release-Seiten-Ordnern)`);
+}
+
 function migrateIdentityMap(db) {
+  cleanJunkKeys(db);
   if (getSetting("identity_map_migrated") === "1") return;
   let n = 0;
   for (const r of db.prepare("SELECT folder, kind, tmdb_id FROM identity_map").all()) {
     if (!r.folder || !r.tmdb_id) continue;
     if (r.kind === "show") {
-      rememberIdentityKey("tv", showKey(basename(r.folder)), r.tmdb_id);
-      n++;
+      const k = showKey(basename(r.folder));
+      // Müll-Schlüssel (Release-Seiten-Ordner) NICHT übernehmen — genau daraus
+      // entstand die falsche Zuordnung „OrG! (Come & Play)".
+      if (!isJunkTitle(k)) {
+        rememberIdentityKey("tv", k, r.tmdb_id);
+        n++;
+      }
     } else {
       // Film: der Key hängt am DATEInamen — über die bekannten Dateien im Ordner
       const prefix = r.folder.replace(/\\/g, "/").replace(/\/+$/, "") + "/";

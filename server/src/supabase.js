@@ -157,10 +157,38 @@ async function syncFavorites(db) {
   }
 }
 
+/**
+ * Sicherstellen, dass mindestens EIN lokales Profil mit der Cloud verknüpft ist.
+ *
+ * Ohne das sendet der Server nie etwas: gesendet werden nur Profile mit
+ * `supabase_id`, und die wird bisher ausschließlich beim Herunterladen gesetzt.
+ * Wer also (wie im Normalfall) nur über die Weboberfläche schaut, hatte
+ * dauerhaft „0 gesendet".
+ */
+async function ensureLinkedProfile(db) {
+  const linked = db.prepare("SELECT COUNT(*) c FROM profiles WHERE supabase_id IS NOT NULL").get().c;
+  if (linked > 0) return;
+  const params = { select: "id,name" };
+  if (userId()) params.user_id = `eq.${userId()}`;
+  const remote = await rest("profiles", { params });
+  if (!remote?.length) {
+    console.warn("[supabase] Kein Cloud-Profil vorhanden — in der App einmal anmelden und ein Profil anlegen");
+    return;
+  }
+  // Namensgleiches lokales Profil bevorzugen, sonst das erste lokale nehmen
+  const local =
+    db.prepare("SELECT id FROM profiles WHERE lower(name) = lower(?)").get(remote[0].name) ??
+    db.prepare("SELECT id FROM profiles ORDER BY id LIMIT 1").get();
+  if (!local) return;
+  db.prepare("UPDATE profiles SET supabase_id = ? WHERE id = ?").run(remote[0].id, local.id);
+  console.log(`[supabase] Lokales Profil ${local.id} mit Cloud-Profil „${remote[0].name}" verknüpft`);
+}
+
 /** Push local progress changed since the last push (only linked profiles). */
 export async function pushToSupabase() {
   if (!pushEnabled()) return { pushed: 0 };
   const db = openDb();
+  await ensureLinkedProfile(db);
   const since = parseInt(getSetting("supabase_last_push") ?? "0", 10);
   const rows = db
     .prepare(

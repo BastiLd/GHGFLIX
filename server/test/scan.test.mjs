@@ -46,6 +46,10 @@ file("tv", "Stranger Things", "Specials", "Stranger.Things.S00E01.Behind.mkv");
 file("tv", "Stranger Things", "Extras", "irgendwas.mkv"); // Extras-Ordner: ignorieren
 file("tv", "Firefly (2002)", "Season 1", "Firefly - s01e01-e02 - Serenity.mkv");
 file("tv", "www.UIndex.org - Loki", "Staffel 1", "Folge 3.mkv");
+// Regression: Sammelordner einer Release-Seite. Vorher wurde daraus der Titel
+// "org" und TMDb fand die völlig fremde Serie "OrG! (Come & Play)".
+file("tv", "www.UIndex.org", "Daredevil.Born.Again.S02E01.DSNP.DDP5.1.HDR.2160p.WEB-DL.mkv");
+file("tv", "www.UIndex.org", "Daredevil.Born.Again.S02E06.Requiem.DSNP.DDP5.1.HDR.2160p.WEB-DL.mkv");
 img("tv", "Stranger Things", "poster.jpg");
 img("tv", "Stranger Things", "fanart.jpg");
 img("tv", "Stranger Things", "season01-poster.jpg");
@@ -75,12 +79,22 @@ const check = (label, got, want) => {
 
 const shows = db.prepare("SELECT id, title, year, folder FROM shows ORDER BY title").all();
 const titles = shows.map((s) => s.title);
-check("Serien: 4 Einträge, Staffeln zusammengefasst", titles, [
+check("Serien: Staffeln zusammengefasst, kein Seiten-Ordner als Serie", titles, [
+  "Daredevil Born Again",
   "Firefly",
   "Loki",
   "Marvel's Daredevil",
   "Stranger Things",
 ]);
+
+// Regression zum "OrG!"-Fehler: der Sammelordner darf NIE eine Serie werden
+check("Kein Muell-Titel 'org' in der Bibliothek", titles.some((t) => /^org/i.test(t)), false);
+const dba = shows.find((s) => s.title === "Daredevil Born Again");
+check(
+  "Dateien aus dem Seiten-Ordner landen bei der richtigen Serie",
+  db.prepare("SELECT season, episode FROM episodes WHERE show_id=? ORDER BY episode").all(dba.id),
+  [{ season: 2, episode: 1 }, { season: 2, episode: 6 }],
+);
 
 const dd = shows.find((s) => s.title === "Marvel's Daredevil");
 const ddEps = db.prepare("SELECT season, episode FROM episodes WHERE show_id=? ORDER BY season, episode").all(dd.id);
@@ -125,8 +139,8 @@ check("Film: lokales Poster gefunden", !!inception.local_poster, true);
 
 // Zweiter Lauf muss stabil sein (keine Duplikate, keine Wanderung)
 await scanLibrary();
-check("Zweiter Scan: gleiche Serienanzahl", db.prepare("SELECT COUNT(*) c FROM shows").get().c, 4);
-check("Zweiter Scan: gleiche Folgenanzahl", db.prepare("SELECT COUNT(*) c FROM episodes").get().c, 8);
+check("Zweiter Scan: gleiche Serienanzahl", db.prepare("SELECT COUNT(*) c FROM shows").get().c, 5);
+check("Zweiter Scan: gleiche Folgenanzahl", db.prepare("SELECT COUNT(*) c FROM episodes").get().c, 10);
 check("Zweiter Scan: gleiche Filmanzahl", db.prepare("SELECT COUNT(*) c FROM movies").get().c, 3);
 
 // ── Regressionstests zu den im Review gefundenen Fehlern ───────────────────
@@ -134,7 +148,7 @@ check("Zweiter Scan: gleiche Filmanzahl", db.prepare("SELECT COUNT(*) c FROM mov
 // (a) Zweite Qualität derselben Folge = Variante, keine doppelte Folge
 file("tv", "Marvel's Daredevil Season 1", "Daredevil.S01E01.2160p.WEB-DL.mkv");
 await scanLibrary();
-check("Zweite Qualität erzeugt KEINE doppelte Folge", db.prepare("SELECT COUNT(*) c FROM episodes").get().c, 8);
+check("Zweite Qualität erzeugt KEINE doppelte Folge", db.prepare("SELECT COUNT(*) c FROM episodes").get().c, 10);
 check(
   "Zweite Qualität ist als Dateivariante hinterlegt",
   db.prepare("SELECT COUNT(*) c FROM episode_files ef JOIN episodes e ON e.id=ef.episode_id WHERE e.season=1 AND e.episode=1 AND e.show_id=?").get(dd.id).c,

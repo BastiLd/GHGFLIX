@@ -104,6 +104,46 @@ export function isJunkClip(stem) {
     .some((t) => t === "sample" || t === "trailer" || t === "proof");
 }
 
+// Wörter, die für sich allein NIE ein Serientitel sein können.
+const SITE_WORDS = new Set([
+  "www", "org", "com", "net", "info", "me", "cc", "tv", "io", "to", "se", "nu",
+  "xyz", "eu", "de", "us", "co", "uk", "uindex", "rarbg", "yts", "yify", "eztv",
+  "ettv", "phdteam", "psa", "galaxytv", "ethel", "mkvcage", "sparks", "ntb",
+  "torrentgalaxy", "anoxmous", "tgx", "index", "torrent", "torrents", "dl",
+  "downloads", "download", "release", "releases", "scene", "pack", "packs",
+]);
+
+/**
+ * Ist das ein wertloser „Titel"? Genau hier ist die Fehlerkennung entstanden,
+ * die aus dem Sammelordner „www.UIndex.org" die Serie „OrG! (Come & Play)"
+ * gemacht hat: Nach dem Entfernen von „www" und „uindex" blieb „org" übrig —
+ * und TMDb findet zu „org" tatsächlich eine Serie.
+ *
+ * Solche Titel dürfen nie in eine TMDb-Suche gehen; der Aufrufer weicht dann
+ * auf den DATEINAMEN aus, in dem der echte Titel steht.
+ */
+export function isJunkTitle(t) {
+  const s = String(t ?? "").trim();
+  if (s.length < 2) return true;
+  const tokens = s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (tokens.length === 0) return true;
+  return tokens.every((w) => SITE_WORDS.has(w) || /^\d{1,4}$/.test(w));
+}
+
+/**
+ * Ordner, der nur eine Release-Seite/Sammlung benennt („www.UIndex.org",
+ * „[TGx] Torrents"). Solche Ordner sind KEINE Serie — die echte Serie steht
+ * eine Ebene tiefer.
+ */
+export function isSiteDir(name) {
+  const raw = String(name ?? "").trim();
+  if (!raw) return false;
+  // NICHT einfach auf "www" prüfen: "www.UIndex.org - Loki" ist ein völlig
+  // normaler Serienordner, aus dem cleanShowTitle sauber "Loki" macht.
+  // Entscheidend ist allein, ob nach dem Bereinigen noch ein Titel übrig bleibt.
+  return isJunkTitle(cleanShowTitle(raw));
+}
+
 /** Plex/Jellyfin-Extras-Ordner, die NICHT als Folgen zählen. */
 export function isExtrasDir(name) {
   return /^(?:extras?|featurettes?|behind the scenes|deleted scenes|interviews?|scenes|shorts?|trailers?|other|bonus)$/i.test(
@@ -342,6 +382,25 @@ if (process.argv[1]?.endsWith("parser.js") && process.argv.includes("--test")) {
 
   eq(providerId("Firefly (2002) [tmdbid-1437]"), { kind: "tmdb", id: 1437 }, "Provider: tmdbid");
   eq(providerId("Firefly"), null, "Provider: keiner");
+
+  // Regression: aus dem Sammelordner "www.UIndex.org" wurde die Serie "OrG!"
+  eq(isJunkTitle(cleanShowTitle("www.UIndex.org")), true, "Müll-Titel: www.UIndex.org");
+  eq(isJunkTitle("org"), true, "Müll-Titel: org");
+  eq(isJunkTitle("OrG"), true, "Müll-Titel: OrG");
+  eq(isJunkTitle("TGx"), true, "Müll-Titel: TGx");
+  eq(isJunkTitle("2019"), true, "Müll-Titel: nur Jahr");
+  eq(isJunkTitle("Loki"), false, "Müll-Titel: echter Titel bleibt");
+  eq(isJunkTitle("Daredevil Born Again"), false, "Müll-Titel: echter Titel bleibt (lang)");
+  eq(isSiteDir("www.UIndex.org"), true, "Seiten-Ordner erkannt");
+  eq(isSiteDir("[TGx]"), true, "Seiten-Ordner erkannt (TGx)");
+  eq(isSiteDir("Daredevil Born Again"), false, "Serienordner ist kein Seiten-Ordner");
+  eq(isSiteDir("Stranger Things"), false, "Serienordner ist kein Seiten-Ordner (2)");
+  // aus dem Dateinamen muss der echte Titel kommen
+  eq(
+    cleanShowTitle("Daredevil.Born.Again.S02E06.Requiem.DSNP.DDP5.1.HDR.2160p.WEB-DL"),
+    "Daredevil Born Again",
+    "Dateiname liefert echten Serientitel",
+  );
 
   eq(isJunkClip("Movie-sample"), true, "Müll: sample");
   eq(isJunkClip("The Sample Room S01E01"), true, "Müll: Wort 'Sample'");
