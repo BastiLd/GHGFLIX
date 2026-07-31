@@ -1,6 +1,6 @@
 # GHGFlix — Bericht: Server-Überholung, Erkennung, Vorschaubilder, Cloud-Sync
 
-**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.2** · Handy **1.8.0**
+**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.2** · Handy **1.9.0**
 
 ---
 
@@ -302,6 +302,56 @@ Sache in zwei Minuten geklärt. Bei einem Absturz, der vor dem ersten Bild
 passiert, führt an den Systemlogs kein Weg vorbei; alles davor war verlorene
 Zeit. Die Diagnose-Fassung und das Log-Skript bleiben im Projekt — beim
 nächsten Mal steht die Ursache innerhalb von Minuten fest.
+
+---
+
+## NACHTRAG 5 — App startet, aber Verbindung und Bedienung
+
+Nach dem ExpoAsset-Fix läuft die App am Fernseher. Zwei Punkte blieben:
+
+### 10. „Nicht erreichbar — Network request failed"
+
+Ab Android 9 blockiert das System unverschlüsseltes **http://** von sich aus.
+Der GHGFlix-Server im eigenen Netz läuft aber genau so
+(`http://192.168.68.10:8484`). Die App kam damit nie beim Server an und meldete
+nur einen allgemeinen Netzwerkfehler.
+
+`android.usesCleartextTraffic` stand zwar in der Konfiguration — es hängt aber
+von der Plugin-Reihenfolge ab, ob es im fertigen Manifest landet. Ab 1.9.0
+setzt die TV-Erweiterung `android:usesCleartextTraffic="true"` zusätzlich hart,
+damit es garantiert drinsteht. Geprüft: Manifest enthält Leanback-Kategorie,
+Kachelbild **und** die Cleartext-Freigabe.
+
+### 11. Keine Markierung bei der Bedienung mit der Fernbedienung
+
+Am Fernseher springt man mit den Pfeiltasten von Knopf zu Knopf — React Native
+zeigt dabei von sich aus **keine** Markierung. Man sieht also nicht, ob man
+gerade auf „Test" oder auf „X" steht. Praktisch unbedienbar.
+
+Behoben: **24 Knöpfe und 5 Eingabefelder** haben jetzt eine Fokus-Anzeige —
+dicker roter Rahmen und leicht getönter Hintergrund, sobald sie dran sind.
+Auf dem Handy ändert sich nichts, dort gibt es keinen Tastaturfokus.
+
+### 12. Expo Go am iPhone: SDK 53 gegen SDK 54
+
+Der Studio-Log meldet „Project is incompatible with this version of Expo Go".
+Expo Go im App Store gibt es immer nur in der neuesten Fassung (SDK 54), das
+Projekt läuft auf SDK 53.
+
+Der Studio-Knopf „SDK 54 setzen" wirkt dabei **nur im Container-Klon** — und
+der wird bei jedem Start per `git reset --hard` zurückgesetzt (genau die
+Reparatur aus Nachtrag 3). Deshalb ändert sich dauerhaft nichts.
+
+Ein echter Umstieg tauscht React Native (0.79 → 0.81) und den Videoplayer
+(expo-video 2.2 → 3.0) aus. Entscheidung: **erst den Fernseher fertigstellen**,
+dann in Ruhe umsteigen. Für den TV wird Expo Go ohnehin nicht gebraucht — dort
+läuft die fertige APK.
+
+### 13. Studio-Logs ließen sich nicht kopieren
+
+Das Log-Fenster aktualisiert sich alle 1,5 Sekunden und scrollt dabei weg —
+Markieren war praktisch unmöglich. Es hat jetzt drei Knöpfe:
+**Alles kopieren**, **Als Datei speichern** und **Aktualisierung pausieren**.
 
 ---
 

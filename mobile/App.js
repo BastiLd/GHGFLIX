@@ -170,6 +170,44 @@ const C = {
   muted: "#9a9aa5",
 };
 
+// ── Bedienung mit der Fernbedienung (Android TV) ─────────────────────────────
+//
+// Am Fernseher wird mit den Pfeiltasten von Knopf zu Knopf gesprungen. React
+// Native zeigt dabei von sich aus KEINE Markierung - man sieht also nicht, wo
+// man gerade steht. Genau das war am TV das Problem: "Test" und "X" liessen
+// sich nicht unterscheiden.
+//
+// FPressable ist ein Ersatz fuer Pressable, der bei Fokus einen roten Rahmen
+// zeigt. Auf dem Handy aendert sich nichts (dort gibt es kein onFocus).
+/** Eingabefeld mit Fokus-Markierung (gleiche Begruendung wie FPressable). */
+function FInput({ style, ...rest }) {
+  const [fokus, setFokus] = useState(false);
+  return (
+    <TextInput
+      {...rest}
+      onFocus={(e) => { setFokus(true); rest.onFocus?.(e); }}
+      onBlur={(e) => { setFokus(false); rest.onBlur?.(e); }}
+      style={[style, fokus && st.inputFokus]}
+    />
+  );
+}
+
+function FPressable({ style, children, ...rest }) {
+  const [fokus, setFokus] = useState(false);
+  const basis = typeof style === "function" ? style({ pressed: false }) : style;
+  return (
+    <Pressable
+      {...rest}
+      focusable
+      onFocus={() => setFokus(true)}
+      onBlur={() => setFokus(false)}
+      style={[basis, fokus && st.tvFokus]}
+    >
+      {children}
+    </Pressable>
+  );
+}
+
 // ── connection manager ──────────────────────────────────────────────────────
 const CONN_KEY = "ghgflix.conn";
 const defaultConn = { mode: "auto", list: [], manualUrl: "", token: "", profile: 0 };
@@ -392,19 +430,19 @@ function ConnectScreen({ conn, onSave }) {
         </Text>
 
         {mode === "manual" ? (
-          <TextInput style={st.input} value={manualUrl} onChangeText={setManualUrl} placeholder="http://192.168.1.50:8484" placeholderTextColor={C.muted} autoCapitalize="none" autoCorrect={false} />
+          <FInput style={st.input} value={manualUrl} onChangeText={setManualUrl} placeholder="http://192.168.1.50:8484" placeholderTextColor={C.muted} autoCapitalize="none" autoCorrect={false} />
         ) : (
           <>
             {list.map((e, i) => (
               <View key={i} style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
-                <TextInput
+                <FInput
                   style={[st.input, { flex: 0.55, marginTop: 0 }]}
                   value={e.name}
                   onChangeText={(v) => setList(list.map((x, j) => (j === i ? { ...x, name: v } : x)))}
                   placeholder="Name"
                   placeholderTextColor={C.muted}
                 />
-                <TextInput
+                <FInput
                   style={[st.input, { flex: 1, marginTop: 0 }]}
                   value={e.url}
                   onChangeText={(v) => setList(list.map((x, j) => (j === i ? { ...x, url: v } : x)))}
@@ -413,30 +451,30 @@ function ConnectScreen({ conn, onSave }) {
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
-                <Pressable style={st.iconBtn} onPress={() => test(e.url)}>
+                <FPressable style={st.iconBtn} onPress={() => test(e.url)}>
                   <Text style={{ color: C.text }}>Test</Text>
-                </Pressable>
-                <Pressable style={st.iconBtn} onPress={() => setList(list.filter((_, j) => j !== i))}>
+                </FPressable>
+                <FPressable style={st.iconBtn} onPress={() => setList(list.filter((_, j) => j !== i))}>
                   <Text style={{ color: C.muted }}>✕</Text>
-                </Pressable>
+                </FPressable>
               </View>
             ))}
-            <Pressable onPress={() => setList([...list, { name: "", url: "" }])}>
+            <FPressable onPress={() => setList([...list, { name: "", url: "" }])}>
               <Text style={{ color: C.red, marginTop: 12, fontWeight: "600" }}>+ Adresse (Lokal / Domain / Tailscale)</Text>
-            </Pressable>
+            </FPressable>
           </>
         )}
       </View>
 
       <View style={st.panel}>
         <Text style={st.h3}>Server-Passwort (falls gesetzt)</Text>
-        <TextInput style={st.input} value={password} onChangeText={setPassword} placeholder="••••••" placeholderTextColor={C.muted} secureTextEntry />
+        <FInput style={st.input} value={password} onChangeText={setPassword} placeholder="••••••" placeholderTextColor={C.muted} secureTextEntry />
       </View>
 
       {msg ? <Text style={{ color: msg.startsWith("✓") ? "#4ade80" : C.red, marginBottom: 12 }}>{msg}</Text> : null}
-      <Pressable style={st.btn} onPress={save}>
+      <FPressable style={st.btn} onPress={save}>
         <Text style={st.btnText}>Verbinden & Speichern</Text>
-      </Pressable>
+      </FPressable>
       <Text style={{ color: C.muted, fontSize: 12, marginTop: 16, lineHeight: 18 }}>
         Beispiele: http://192.168.1.50:8484 (Zuhause) · http://zimaboard.tail1234.ts.net:8484 (Tailscale) ·
         https://flix.meinedomain.de (Domain)
@@ -462,12 +500,12 @@ function ProfileScreen({ api, onPick }) {
       <Text style={{ color: C.muted, marginVertical: 20 }}>Wer schaut?</Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 20, justifyContent: "center" }}>
         {profiles.map((p) => (
-          <Pressable key={p.id} onPress={() => onPick(p.id)} style={{ alignItems: "center", gap: 8 }}>
+          <FPressable key={p.id} onPress={() => onPick(p.id)} style={{ alignItems: "center", gap: 8 }}>
             <View style={st.avatar}>
               <Text style={{ color: "#fff", fontSize: 30, fontWeight: "800" }}>{p.name[0].toUpperCase()}</Text>
             </View>
             <Text style={{ color: C.text }}>{p.name}</Text>
-          </Pressable>
+          </FPressable>
         ))}
       </View>
     </View>
@@ -512,11 +550,11 @@ function HomeScreen({ api, img, push, openSettings }) {
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingTop: 54, paddingBottom: 40 }}>
       <View style={[st.rowBetween, { paddingHorizontal: 16, marginBottom: 8 }]}>
         <Text style={st.brand}>GHGFlix</Text>
-        <Pressable onPress={openSettings}>
+        <FPressable onPress={openSettings}>
           <Text style={{ fontSize: 20 }}>⚙️</Text>
-        </Pressable>
+        </FPressable>
       </View>
-      <TextInput style={[st.input, { marginHorizontal: 16 }]} value={q} onChangeText={setQ} placeholder="Suchen …" placeholderTextColor={C.muted} />
+      <FInput style={[st.input, { marginHorizontal: 16 }]} value={q} onChangeText={setQ} placeholder="Suchen …" placeholderTextColor={C.muted} />
 
       {cont.length > 0 && !q && (
         <>
@@ -528,7 +566,7 @@ function HomeScreen({ api, img, push, openSettings }) {
             contentContainerStyle={{ paddingHorizontal: 16, gap: 10 }}
             showsHorizontalScrollIndicator={false}
             renderItem={({ item: x }) => (
-              <Pressable
+              <FPressable
                 onPress={() =>
                   push({
                     name: "play",
@@ -546,7 +584,7 @@ function HomeScreen({ api, img, push, openSettings }) {
                 </View>
                 <Text numberOfLines={1} style={{ color: C.text, fontSize: 12, marginTop: 4 }}>{x.title}</Text>
                 <Text style={{ color: C.muted, fontSize: 11 }}>{fmtTime(x.duration - x.position)} übrig</Text>
-              </Pressable>
+              </FPressable>
             )}
           />
         </>
@@ -581,7 +619,7 @@ function PosterRow({ items, img, onPress }) {
       contentContainerStyle={{ paddingHorizontal: 16, gap: 10 }}
       showsHorizontalScrollIndicator={false}
       renderItem={({ item: x }) => (
-        <Pressable onPress={() => onPress(x)} style={{ width: 105 }}>
+        <FPressable onPress={() => onPress(x)} style={{ width: 105 }}>
           {x.poster ? (
             <Image source={{ uri: img(x.poster) }} style={st.poster} />
           ) : (
@@ -590,7 +628,7 @@ function PosterRow({ items, img, onPress }) {
             </View>
           )}
           <Text numberOfLines={1} style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>{x.title}</Text>
-        </Pressable>
+        </FPressable>
       )}
     />
   );
@@ -658,23 +696,23 @@ function ShowScreen({ api, img, push, pop, id, initialSeason }) {
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }}>
       {show.backdrop && <Image source={{ uri: img(show.backdrop, "w1280") }} style={{ width: "100%", height: 190, opacity: 0.55 }} />}
-      <Pressable onPress={pop} style={st.backBtn}>
+      <FPressable onPress={pop} style={st.backBtn}>
         <Text style={{ color: C.text, fontSize: 18 }}>←</Text>
-      </Pressable>
+      </FPressable>
       <View style={{ paddingHorizontal: 16 }}>
         <View style={[st.rowBetween, { alignItems: "flex-start" }]}>
           <Text style={[st.h1, { flex: 1, paddingRight: 10 }]}>{show.title}</Text>
-          <Pressable onPress={toggleFav} hitSlop={10} style={{ marginTop: 10 }}>
+          <FPressable onPress={toggleFav} hitSlop={10} style={{ marginTop: 10 }}>
             <Text style={{ fontSize: 22, color: fav ? C.red : C.muted }}>{fav ? "♥" : "♡"}</Text>
-          </Pressable>
+          </FPressable>
         </View>
         <Text style={{ color: C.muted, fontSize: 12, marginBottom: 10 }}>
           {show.year ?? ""} · {seasons.length} Staffeln · {flat.length} Folgen{show.rating ? ` · ★ ${show.rating.toFixed(1)}` : ""}
         </Text>
         {nextUnwatched && (
-          <Pressable style={[st.btn, { alignSelf: "flex-start" }]} onPress={() => playEp(nextUnwatched)}>
+          <FPressable style={[st.btn, { alignSelf: "flex-start" }]} onPress={() => playEp(nextUnwatched)}>
             <Text style={st.btnText}>▶ Abspielen · {se(nextUnwatched.season, nextUnwatched.episode)}</Text>
-          </Pressable>
+          </FPressable>
         )}
         {!!show.overview && <Text style={{ color: "#c9c9d2", fontSize: 13, lineHeight: 19, marginTop: 12 }}>{show.overview}</Text>}
       </View>
@@ -686,11 +724,11 @@ function ShowScreen({ api, img, push, pop, id, initialSeason }) {
         contentContainerStyle={{ paddingHorizontal: 16, gap: 8, marginVertical: 14 }}
         showsHorizontalScrollIndicator={false}
         renderItem={({ item: s }) => (
-          <Pressable onPress={() => pick(s.season)} style={[st.tab, s.season === cur && { backgroundColor: C.red }]}>
+          <FPressable onPress={() => pick(s.season)} style={[st.tab, s.season === cur && { backgroundColor: C.red }]}>
             <Text style={{ color: s.season === cur ? "#fff" : C.muted, fontWeight: s.season === cur ? "700" : "400" }}>
               {s.season === 0 ? "Specials" : `Staffel ${s.season}`}
             </Text>
-          </Pressable>
+          </FPressable>
         )}
       />
 
@@ -700,7 +738,7 @@ function ShowScreen({ api, img, push, pop, id, initialSeason }) {
           const p = progMap.get(e.id);
           const pct = p && p.duration > 0 ? Math.min(100, (p.position / p.duration) * 100) : 0;
           return (
-            <Pressable
+            <FPressable
               key={e.id}
               onPress={() => playEp(e)}
               onLongPress={() => toggleWatched(e, !p?.watched)}
@@ -724,7 +762,7 @@ function ShowScreen({ api, img, push, pop, id, initialSeason }) {
                   </View>
                 )}
               </View>
-            </Pressable>
+            </FPressable>
           );
         })}
       </View>
@@ -762,15 +800,15 @@ function MovieScreen({ api, img, push, pop, id }) {
   return (
     <ScrollView style={{ flex: 1 }}>
       {mv.backdrop && <Image source={{ uri: img(mv.backdrop, "w1280") }} style={{ width: "100%", height: 190, opacity: 0.55 }} />}
-      <Pressable onPress={pop} style={st.backBtn}>
+      <FPressable onPress={pop} style={st.backBtn}>
         <Text style={{ color: C.text, fontSize: 18 }}>←</Text>
-      </Pressable>
+      </FPressable>
       <View style={{ padding: 16 }}>
         <View style={[st.rowBetween, { alignItems: "flex-start" }]}>
           <Text style={[st.h1, { flex: 1, paddingRight: 10 }]}>{mv.title}</Text>
-          <Pressable onPress={toggleFav} hitSlop={10} style={{ marginTop: 10 }}>
+          <FPressable onPress={toggleFav} hitSlop={10} style={{ marginTop: 10 }}>
             <Text style={{ fontSize: 22, color: fav ? C.red : C.muted }}>{fav ? "♥" : "♡"}</Text>
-          </Pressable>
+          </FPressable>
         </View>
         <Text style={{ color: C.muted, fontSize: 12, marginBottom: 12 }}>
           {mv.year ?? ""}
@@ -779,12 +817,12 @@ function MovieScreen({ api, img, push, pop, id }) {
           {watched ? " · ✓ gesehen" : ""}
         </Text>
         <View style={{ flexDirection: "row", gap: 10 }}>
-          <Pressable style={st.btn} onPress={() => push({ name: "play", type: "movie", id: mv.id, title: mv.title, subtitle: mv.year ? String(mv.year) : "" })}>
+          <FPressable style={st.btn} onPress={() => push({ name: "play", type: "movie", id: mv.id, title: mv.title, subtitle: mv.year ? String(mv.year) : "" })}>
             <Text style={st.btnText}>▶ Abspielen</Text>
-          </Pressable>
-          <Pressable style={[st.btn, { backgroundColor: C.surface }]} onPress={toggleWatched}>
+          </FPressable>
+          <FPressable style={[st.btn, { backgroundColor: C.surface }]} onPress={toggleWatched}>
             <Text style={st.btnText}>{watched ? "✓ Gesehen" : "Als gesehen markieren"}</Text>
-          </Pressable>
+          </FPressable>
         </View>
         {!!mv.overview && <Text style={{ color: "#c9c9d2", fontSize: 13, lineHeight: 19, marginTop: 14 }}>{mv.overview}</Text>}
       </View>
@@ -997,9 +1035,9 @@ function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, n
         <Text style={{ color: C.muted, fontSize: 11, textAlign: "center", marginBottom: 18 }}>
           {videoLadeFehler || "expo-video nicht geladen"}
         </Text>
-        <Pressable onPress={pop} style={st.btn}>
+        <FPressable onPress={pop} style={st.btn}>
           <Text style={st.btnText}>Zurueck</Text>
-        </Pressable>
+        </FPressable>
       </View>
     );
   }
@@ -1017,9 +1055,9 @@ function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, n
 
   return (
     <View style={{ flex: 1, backgroundColor: "#000" }}>
-      <Pressable style={{ flex: 1 }} onPress={() => (uiVisible ? setUiVisible(false) : wake())}>
+      <FPressable style={{ flex: 1 }} onPress={() => (uiVisible ? setUiVisible(false) : wake())}>
         <VideoView player={player} style={{ flex: 1 }} nativeControls={false} contentFit="contain" allowsFullscreen />
-      </Pressable>
+      </FPressable>
 
       {buffering && (
         <View pointerEvents="none" style={st.playerSpinner}>
@@ -1030,9 +1068,9 @@ function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, n
       {uiVisible && (
         <>
           <View style={st.playerTop}>
-            <Pressable onPress={leave} style={st.pbtn} hitSlop={8}>
+            <FPressable onPress={leave} style={st.pbtn} hitSlop={8}>
               <Text style={{ color: C.text, fontSize: 18 }}>←</Text>
-            </Pressable>
+            </FPressable>
             <View style={{ flex: 1 }}>
               <Text numberOfLines={1} style={{ color: C.text, fontWeight: "700" }}>{title}</Text>
               {!!subtitle && <Text numberOfLines={1} style={{ color: C.muted, fontSize: 12 }}>{subtitle}</Text>}
@@ -1067,19 +1105,19 @@ function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, n
             </View>
 
             <View style={st.playerButtons}>
-              <Pressable onPress={() => seekBy(-10)} style={st.pbtn} hitSlop={8}>
+              <FPressable onPress={() => seekBy(-10)} style={st.pbtn} hitSlop={8}>
                 <Text style={{ color: C.text }}>« 10</Text>
-              </Pressable>
-              <Pressable onPress={togglePlay} style={[st.pbtn, st.pbtnMain]} hitSlop={8}>
+              </FPressable>
+              <FPressable onPress={togglePlay} style={[st.pbtn, st.pbtnMain]} hitSlop={8}>
                 <Text style={{ color: "#fff", fontSize: 22 }}>{playing ? "❚❚" : "▶"}</Text>
-              </Pressable>
-              <Pressable onPress={() => seekBy(10)} style={st.pbtn} hitSlop={8}>
+              </FPressable>
+              <FPressable onPress={() => seekBy(10)} style={st.pbtn} hitSlop={8}>
                 <Text style={{ color: C.text }}>10 »</Text>
-              </Pressable>
+              </FPressable>
               {nextEp && (
-                <Pressable onPress={playNext} style={st.pbtn} hitSlop={8}>
+                <FPressable onPress={playNext} style={st.pbtn} hitSlop={8}>
                   <Text style={{ color: C.text }}>Nächste ▶</Text>
-                </Pressable>
+                </FPressable>
               )}
             </View>
           </View>
@@ -1100,6 +1138,7 @@ const st = StyleSheet.create({
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   panel: { backgroundColor: C.bg2, borderColor: C.line, borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 14 },
   input: { backgroundColor: C.surface, borderColor: C.line, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, color: C.text, marginTop: 8 },
+  inputFokus: { borderColor: C.red, borderWidth: 3, backgroundColor: "#e5091415" },
   btn: { backgroundColor: C.red, borderRadius: 10, paddingHorizontal: 18, paddingVertical: 11, alignItems: "center" },
   btnText: { color: "#fff", fontWeight: "700" },
   iconBtn: { backgroundColor: C.surface, borderRadius: 10, paddingHorizontal: 10, justifyContent: "center" },
@@ -1115,6 +1154,14 @@ const st = StyleSheet.create({
   playerTop: { position: "absolute", top: 0, left: 0, right: 0, flexDirection: "row", alignItems: "center", gap: 10, padding: 14, paddingTop: 48, backgroundColor: "#000000aa" },
   playerBottom: { position: "absolute", bottom: 0, left: 0, right: 0, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 30, backgroundColor: "#000000cc" },
   pbtn: { backgroundColor: "#ffffff22", borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, justifyContent: "center" },
+  // Markierung fuer die Fernbedienung: dicker roter Rahmen + heller Hintergrund.
+  // Ohne das sieht man am Fernseher nicht, welcher Knopf gerade dran ist.
+  tvFokus: {
+    borderWidth: 3,
+    borderColor: C.red,
+    backgroundColor: "#e5091426",
+    borderRadius: 12,
+  },
   pbtnMain: { backgroundColor: C.red, paddingHorizontal: 26 },
   playerButtons: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 14, marginTop: 12 },
   playerBadge: { backgroundColor: "#ffffff1a", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },

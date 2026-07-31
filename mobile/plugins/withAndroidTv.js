@@ -64,6 +64,15 @@ module.exports = function withAndroidTv(config) {
     //    gibt (siehe Erklärung oben).
     application.$["android:banner"] = "@mipmap/ic_launcher";
 
+    // 3) Unverschlüsseltes HTTP ausdrücklich erlauben.
+    //    Ab Android 9 blockiert das System http:// standardmäßig — die App
+    //    meldet dann nur „Network request failed", ohne den Server je zu
+    //    erreichen. Der GHGFlix-Server im eigenen Netz läuft aber genau so
+    //    (http://192.168.x.x:8484). Expo setzt das zwar über
+    //    android.usesCleartextTraffic, hier wird es zusätzlich hart gesetzt,
+    //    damit es unabhängig von der Plugin-Reihenfolge sicher im Manifest steht.
+    application.$["android:usesCleartextTraffic"] = "true";
+
     // 3) LEANBACK_LAUNCHER an den vorhandenen MAIN-Filter hängen
     const activity = findLauncherActivity(application);
     if (activity) {
