@@ -39,8 +39,10 @@ try {
 import {
   ActivityIndicator,
   BackHandler,
+  DeviceEventEmitter,
   FlatList,
   Image,
+  findNodeHandle,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -180,6 +182,97 @@ const C = {
 // FPressable ist ein Ersatz fuer Pressable, der bei Fokus einen roten Rahmen
 // zeigt. Auf dem Handy aendert sich nichts (dort gibt es kein onFocus).
 /** Eingabefeld mit Fokus-Markierung (gleiche Begruendung wie FPressable). */
+/* ══ TV-FOKUS ════════════════════════════════════════════════════════════════
+ * DAS PROBLEM
+ * Am Fernseher war nur bei Textfeldern zu sehen, was gerade ausgewaehlt ist.
+ * Bei Knoepfen und Postern fehlte jede Markierung - man wusste nie, ob man
+ * gerade auf "Testen" oder auf "X" steht.
+ *
+ * DIE URSACHE (nachgesehen, nicht geraten)
+ * In React Native 0.79 loest Android das Ereignis "topFocus" AUSSCHLIESSLICH
+ * im TextInput-Manager aus:
+ *     ReactAndroid/.../views/textinput/ReactTextInputManager.java
+ * Fuer normale Views existiert es schlicht nicht. Die Props onFocus/onBlur
+ * einer <View> oder <Pressable> werden auf Android also NIE aufgerufen -
+ * genau das beobachtete Verhalten.
+ *
+ * DIE LOESUNG
+ * React Native bringt eine eingebaute Fernseh-Unterstuetzung mit, die kaum
+ * bekannt ist. ReactRootView reicht Fernbedienungstasten UND Fokuswechsel als
+ * geraeteweites Ereignis "onHWKeyEvent" an JavaScript weiter:
+ *     ReactAndroid/.../ReactAndroidHWInputDeviceHelper.java
+ * Der Inhalt:
+ *     eventType : "focus" | "blur"                       <- Fokuswechsel
+ *                 "select" | "up" | "down" | "left" | "right"
+ *                 "playPause" | "rewind" | "fastForward"
+ *                 "next" | "previous" | "info" | "menu"  <- Tasten
+ *     tag       : die native View-Nummer - dieselbe Zahl, die findNodeHandle()
+ *                 fuer eine Komponente liefert
+ *     eventKeyAction : 0 = Taste gedrueckt, 1 = losgelassen
+ *
+ * Damit laesst sich der Fokus vollstaendig nachbilden: jeder Knopf meldet
+ * seine View-Nummer an, und wenn das Ereignis genau diese Nummer nennt, zeigt
+ * er den Rahmen. Kein Wechsel auf den Fork react-native-tvos noetig, keine
+ * native Aenderung, kein Risiko fuer die Handy-Fassung.
+ *
+ * WICHTIG FUER SPAETER
+ * Das funktioniert nur mit der bewaehrten Architektur (newArchEnabled: false
+ * in app.json - dort aus einem anderen Grund bereits so gesetzt). Unter der
+ * neuen Architektur (Fabric) gibt es ReactRootView nicht mehr. Beim spaeteren
+ * Umstieg auf SDK 54 mit neuer Architektur muss dieser Block neu bewertet
+ * werden; dann waere @react-native-tvos/config-tv der Weg.
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+/** View-Nummer -> Melder der jeweiligen Komponente. */
+const tvHoerer = new Map();
+/** Fernbedienungstasten (ohne focus/blur) -> Abonnenten, z. B. der Player. */
+const tvTasten = new Set();
+let tvAktiv = null;
+let tvGestartet = false;
+
+function tvStart() {
+  if (tvGestartet) return;
+  tvGestartet = true;
+  try {
+    DeviceEventEmitter.addListener("onHWKeyEvent", (e) => {
+      const art = e?.eventType;
+      if (!art) return;
+      if (art === "focus") {
+        const alt = tvAktiv;
+        tvAktiv = e.tag ?? null;
+        if (alt != null && alt !== tvAktiv) tvHoerer.get(alt)?.(false);
+        if (tvAktiv != null) tvHoerer.get(tvAktiv)?.(true);
+        return;
+      }
+      if (art === "blur") {
+        if (e.tag != null) tvHoerer.get(e.tag)?.(false);
+        if (tvAktiv === e.tag) tvAktiv = null;
+        return;
+      }
+      // Nur beim Loslassen auswerten, sonst feuert Halten mehrfach.
+      if (e.eventKeyAction === 1 || e.eventKeyAction === -1) {
+        for (const fn of tvTasten) {
+          try { fn(art); } catch {}
+        }
+      }
+    });
+  } catch {
+    /* Auf iOS gibt es das Ereignis nicht - dort greift onFocus regulaer. */
+  }
+}
+
+/** Fernbedienungstasten abonnieren (Wiedergabe, Vor/Zurueck ...). */
+function useFernbedienung(fn) {
+  const halt = useRef(fn);
+  halt.current = fn;
+  useEffect(() => {
+    tvStart();
+    const weiter = (art) => halt.current?.(art);
+    tvTasten.add(weiter);
+    return () => { tvTasten.delete(weiter); };
+  }, []);
+}
+
 function FInput({ style, ...rest }) {
   const [fokus, setFokus] = useState(false);
   return (
@@ -192,16 +285,44 @@ function FInput({ style, ...rest }) {
   );
 }
 
-function FPressable({ style, children, ...rest }) {
+/**
+ * Knopf mit sichtbarer Fernseh-Markierung.
+ * @param fokusStil  eigener Stil statt des Standardrahmens (z. B. Poster:
+ *                   leicht vergroessern statt umranden)
+ */
+function FPressable({ style, children, fokusStil, ...rest }) {
   const [fokus, setFokus] = useState(false);
+  const nummer = useRef(null);
+
+  // Callback-Ref: meldet sich an, sobald die native View existiert, und wieder
+  // ab, sobald sie verschwindet (wichtig bei langen, recycelten Listen).
+  const setzeRef = useCallback((node) => {
+    if (nummer.current != null) {
+      tvHoerer.delete(nummer.current);
+      nummer.current = null;
+    }
+    if (!node) return;
+    tvStart();
+    const tag = findNodeHandle(node);
+    if (tag == null) return;
+    nummer.current = tag;
+    tvHoerer.set(tag, setFokus);
+    if (tvAktiv === tag) setFokus(true); // schon fokussiert beim Einhaengen
+  }, []);
+
+  useEffect(() => () => {
+    if (nummer.current != null) tvHoerer.delete(nummer.current);
+  }, []);
+
   const basis = typeof style === "function" ? style({ pressed: false }) : style;
   return (
     <Pressable
       {...rest}
+      ref={setzeRef}
       focusable
-      onFocus={() => setFokus(true)}
-      onBlur={() => setFokus(false)}
-      style={[basis, fokus && st.tvFokus]}
+      onFocus={(e) => { setFokus(true); rest.onFocus?.(e); }}
+      onBlur={(e) => { setFokus(false); rest.onBlur?.(e); }}
+      style={[basis, fokus && (fokusStil ?? st.tvFokus)]}
     >
       {children}
     </Pressable>
@@ -516,28 +637,74 @@ function ProfileScreen({ api, onPick }) {
 function HomeScreen({ api, img, push, openSettings }) {
   const [lib, setLib] = useState(null);
   const [cont, setCont] = useState([]);
-  const [favs, setFavs] = useState([]); // MOB-041: "Meine Liste" (server-API /api/favorites)
+  const [hist, setHist] = useState([]);
+  const [favs, setFavs] = useState([]);
   const [q, setQ] = useState("");
+  const [heroIdx, setHeroIdx] = useState(0);
 
   const load = useCallback(() => {
     api("/api/library").then(setLib).catch(() => setLib({ shows: [], movies: [] }));
-    api("/api/continue").then(setCont).catch(() => {});
+    api("/api/continue").then((c) => setCont(Array.isArray(c) ? c : [])).catch(() => {});
+    api("/api/history").then((h) => setHist(Array.isArray(h) ? h : [])).catch(() => {});
     api("/api/favorites").then((f) => setFavs(Array.isArray(f) ? f : [])).catch(() => {});
   }, [api]);
   useEffect(load, [load]);
 
-  const filt = (arr) => (q ? arr.filter((x) => x.title.toLowerCase().includes(q.toLowerCase())) : arr);
+  const filt = (arr) => (q ? arr.filter((x) => (x.title || "").toLowerCase().includes(q.toLowerCase())) : arr);
+
+  /* Alles in EINE Liste werfen, damit sich daraus dieselben Reihen bauen
+     lassen wie am Desktop (Neu hinzugefuegt, Top bewertet, Genres). */
+  const alle = useMemo(() => {
+    if (!lib) return [];
+    return [
+      ...(lib.shows || []).map((x) => ({ ...x, _t: "show" })),
+      ...(lib.movies || []).map((x) => ({ ...x, _t: "movie" })),
+    ];
+  }, [lib]);
+
+  const oeffne = useCallback((x) => push(x._t === "show" ? { name: "show", id: x.id } : { name: "movie", id: x.id }), [push]);
+
+  // Hero: die zuletzt hinzugekommenen Titel MIT Hintergrundbild, im Wechsel
+  const heroKandidaten = useMemo(
+    () => alle.filter((x) => x.backdrop).sort((a, b) => (b.added_at || 0) - (a.added_at || 0)).slice(0, 8),
+    [alle],
+  );
+  const hero = heroKandidaten[heroIdx % (heroKandidaten.length || 1)];
+  useEffect(() => {
+    if (heroKandidaten.length < 2) return;
+    const t = setInterval(() => setHeroIdx((i) => i + 1), 12000);
+    return () => clearInterval(t);
+  }, [heroKandidaten.length]);
+
+  const neu = useMemo(() => [...alle].sort((a, b) => (b.added_at || 0) - (a.added_at || 0)).slice(0, 20), [alle]);
+  const top = useMemo(
+    () => alle.filter((x) => (x.rating || 0) >= 7).sort((a, b) => (b.rating || 0) - (a.rating || 0)).slice(0, 20),
+    [alle],
+  );
 
   const favItems = useMemo(() => {
     if (!lib) return [];
     return favs
       .map((f) =>
         f.mediaType === "show"
-          ? { ...(lib.shows.find((s) => s.id === f.refId) || {}), _t: "show" }
-          : { ...(lib.movies.find((m) => m.id === f.refId) || {}), _t: "movie" },
+          ? { ...((lib.shows || []).find((s2) => s2.id === f.refId) || {}), _t: "show" }
+          : { ...((lib.movies || []).find((m) => m.id === f.refId) || {}), _t: "movie" },
       )
       .filter((x) => x.id);
   }, [favs, lib]);
+
+  // Genre-Reihen wie am Desktop: die fuenf haeufigsten Genres
+  const genreReihen = useMemo(() => {
+    const zaehler = new Map();
+    for (const x of alle) {
+      for (const g of parseGenres(x.genres)) zaehler.set(g, (zaehler.get(g) || 0) + 1);
+    }
+    return [...zaehler.entries()]
+      .filter(([, n]) => n >= 3)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([g]) => ({ genre: g, items: alle.filter((x) => parseGenres(x.genres).includes(g)).slice(0, 20) }));
+  }, [alle]);
 
   if (!lib)
     return (
@@ -546,28 +713,93 @@ function HomeScreen({ api, img, push, openSettings }) {
       </View>
     );
 
-  return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingTop: 54, paddingBottom: 40 }}>
-      <View style={[st.rowBetween, { paddingHorizontal: 16, marginBottom: 8 }]}>
-        <Text style={st.brand}>GHGFlix</Text>
-        <FPressable onPress={openSettings}>
-          <Text style={{ fontSize: 20 }}>⚙️</Text>
-        </FPressable>
-      </View>
-      <FInput style={[st.input, { marginHorizontal: 16 }]} value={q} onChangeText={setQ} placeholder="Suchen …" placeholderTextColor={C.muted} />
+  const suche = q.trim().length > 0;
 
-      {cont.length > 0 && !q && (
+  return (
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 48 }}>
+      {/* ── Hero: grosses Bild wie am Desktop ───────────────────────────── */}
+      {hero && !suche ? (
+        <View style={st.hero}>
+          <Image source={{ uri: img(hero.backdrop, "w1280") }} style={st.heroImg} />
+          {/* Weicher Uebergang nach unten, ohne zusaetzliches Verlaufs-Modul:
+             mehrere Streifen mit zunehmender Deckkraft. */}
+          {[0.0, 0.15, 0.35, 0.6, 0.85, 1].map((deck, i) => (
+            <View
+              key={i}
+              pointerEvents="none"
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: (5 - i) * 34,
+                height: 36,
+                backgroundColor: C.bg,
+                opacity: deck,
+              }}
+            />
+          ))}
+          <View style={st.heroText}>
+            <Text numberOfLines={2} style={st.heroTitle}>{hero.title}</Text>
+            <Text style={st.heroMeta}>
+              {[
+                hero._t === "show" ? "Serie" : "Film",
+                hero.year,
+                hero.rating ? "\u2605 " + Number(hero.rating).toFixed(1) : null,
+                hero._t === "show" && hero.seasons ? hero.seasons + " Staffeln" : null,
+              ].filter(Boolean).join("  \u00b7  ")}
+            </Text>
+            {!!hero.overview && (
+              <Text numberOfLines={2} style={st.heroDesc}>{hero.overview}</Text>
+            )}
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+              <FPressable style={st.heroBtn} onPress={() => oeffne(hero)}>
+                <Text style={st.heroBtnText}>▶  Ansehen</Text>
+              </FPressable>
+              <FPressable style={[st.heroBtn, st.heroBtnGhost]} onPress={() => oeffne(hero)}>
+                <Text style={[st.heroBtnText, { color: C.text }]}>Mehr Infos</Text>
+              </FPressable>
+            </View>
+          </View>
+          <View style={st.heroTop}>
+            <Text style={st.brand}>GHGFlix</Text>
+            <FPressable onPress={openSettings} style={st.iconRound}>
+              <Text style={{ fontSize: 18 }}>⚙️</Text>
+            </FPressable>
+          </View>
+        </View>
+      ) : (
+        <View style={[st.rowBetween, { paddingHorizontal: 16, paddingTop: 54, marginBottom: 8 }]}>
+          <Text style={st.brand}>GHGFlix</Text>
+          <FPressable onPress={openSettings} style={st.iconRound}>
+            <Text style={{ fontSize: 18 }}>⚙️</Text>
+          </FPressable>
+        </View>
+      )}
+
+      <FInput
+        style={[st.input, { marginHorizontal: 16, marginTop: hero && !suche ? 4 : 0 }]}
+        value={q}
+        onChangeText={setQ}
+        placeholder="Suchen …"
+        placeholderTextColor={C.muted}
+      />
+
+      {suche ? (
         <>
-          <Text style={st.rowTitle}>Weiterschauen</Text>
-          <FlatList
-            horizontal
-            data={cont}
-            keyExtractor={(x) => `${x.mediaType}${x.refId}`}
-            contentContainerStyle={{ paddingHorizontal: 16, gap: 10 }}
-            showsHorizontalScrollIndicator={false}
-            renderItem={({ item: x }) => (
-              <FPressable
-                onPress={() =>
+          <Text style={st.rowTitle}>Serien</Text>
+          <PosterRow items={filt(lib.shows || [])} img={img} onPress={(x) => push({ name: "show", id: x.id })} />
+          <Text style={st.rowTitle}>Filme</Text>
+          <PosterRow items={filt(lib.movies || [])} img={img} onPress={(x) => push({ name: "movie", id: x.id })} />
+        </>
+      ) : (
+        <>
+          {cont.length > 0 && (
+            <>
+              <Text style={st.rowTitle}>Weiterschauen</Text>
+              <WideRow
+                items={cont}
+                img={img}
+                onPress={(x) =>
                   push({
                     name: "play",
                     type: x.mediaType,
@@ -576,66 +808,213 @@ function HomeScreen({ api, img, push, openSettings }) {
                     subtitle: x.mediaType === "episode" ? se(x.season, x.episode) : "",
                   })
                 }
-                style={{ width: 190 }}
-              >
-                <Image source={{ uri: x.still ? img(x.still, "w500") : img(x.mBackdrop || x.sBackdrop, "w500") }} style={st.wideImg} />
-                <View style={st.progressBg}>
-                  <View style={[st.progressFg, { width: `${Math.round((x.position / x.duration) * 100)}%` }]} />
-                </View>
-                <Text numberOfLines={1} style={{ color: C.text, fontSize: 12, marginTop: 4 }}>{x.title}</Text>
-                <Text style={{ color: C.muted, fontSize: 11 }}>{fmtTime(x.duration - x.position)} übrig</Text>
-              </FPressable>
-            )}
-          />
+              />
+            </>
+          )}
+
+          {neu.length > 0 && (
+            <>
+              <Text style={st.rowTitle}>Neu hinzugefügt</Text>
+              <PosterRow items={neu} img={img} onPress={oeffne} />
+            </>
+          )}
+
+          {favItems.length > 0 && (
+            <>
+              <Text style={st.rowTitle}>Meine Liste</Text>
+              <PosterRow items={favItems} img={img} onPress={oeffne} />
+            </>
+          )}
+
+          <Text style={st.rowTitle}>Serien</Text>
+          <PosterRow items={lib.shows || []} img={img} onPress={(x) => push({ name: "show", id: x.id })} />
+
+          <Text style={st.rowTitle}>Filme</Text>
+          <PosterRow items={lib.movies || []} img={img} onPress={(x) => push({ name: "movie", id: x.id })} />
+
+          {top.length > 0 && (
+            <>
+              <Text style={st.rowTitle}>Top bewertet</Text>
+              <PosterRow items={top} img={img} onPress={oeffne} />
+            </>
+          )}
+
+          {hist.length > 0 && (
+            <>
+              <Text style={st.rowTitle}>Zuletzt gesehen</Text>
+              <WideRow
+                items={hist}
+                img={img}
+                ohneFortschritt
+                onPress={(x) =>
+                  push({
+                    name: "play",
+                    type: x.mediaType,
+                    id: x.refId,
+                    title: x.title,
+                    subtitle: x.mediaType === "episode" ? se(x.season, x.episode) : "",
+                  })
+                }
+              />
+            </>
+          )}
+
+          {genreReihen.map((r) => (
+            <View key={r.genre}>
+              <Text style={st.rowTitle}>{r.genre}</Text>
+              <PosterRow items={r.items} img={img} onPress={oeffne} />
+            </View>
+          ))}
         </>
       )}
-
-      {favItems.length > 0 && !q && (
-        <>
-          <Text style={st.rowTitle}>Meine Liste</Text>
-          <PosterRow
-            items={favItems}
-            img={img}
-            onPress={(x) => push(x._t === "show" ? { name: "show", id: x.id } : { name: "movie", id: x.id })}
-          />
-        </>
-      )}
-
-      <Text style={st.rowTitle}>Serien</Text>
-      <PosterRow items={filt(lib.shows)} img={img} onPress={(x) => push({ name: "show", id: x.id })} />
-      <Text style={st.rowTitle}>Filme</Text>
-      <PosterRow items={filt(lib.movies)} img={img} onPress={(x) => push({ name: "movie", id: x.id })} />
     </ScrollView>
   );
 }
 
-function PosterRow({ items, img, onPress }) {
-  if (!items.length) return <Text style={{ color: C.muted, paddingHorizontal: 16 }}>Nichts gefunden</Text>;
+/** Genres kommen je nach Quelle als JSON-Liste oder als "Action, Drama". */
+function parseGenres(g) {
+  if (!g) return [];
+  if (Array.isArray(g)) return g;
+  const s2 = String(g).trim();
+  if (s2.startsWith("[")) {
+    try { return JSON.parse(s2); } catch { return []; }
+  }
+  return s2.split(",").map((x) => x.trim()).filter(Boolean);
+}
+
+/** Breite Karten mit Fortschrittsbalken - fuer "Weiterschauen"/"Zuletzt gesehen". */
+function WideRow({ items, img, onPress, ohneFortschritt }) {
   return (
     <FlatList
       horizontal
       data={items}
-      keyExtractor={(x) => String(x.id)}
-      contentContainerStyle={{ paddingHorizontal: 16, gap: 10 }}
+      keyExtractor={(x, i) => `${x.mediaType}${x.refId}${i}`}
+      contentContainerStyle={{ paddingHorizontal: 16, gap: 12 }}
+      showsHorizontalScrollIndicator={false}
+      renderItem={({ item: x }) => {
+        const bild = x.still || x.mBackdrop || x.sBackdrop || x.poster;
+        const anteil = x.duration > 0 ? Math.min(1, x.position / x.duration) : 0;
+        return (
+          <FPressable
+            onPress={() => onPress(x)}
+            style={[st.kachel, { width: 218 }]}
+            fokusStil={st.tvFokusKachel}
+          >
+            <View style={st.wideWrap}>
+              {bild ? (
+                <Image source={{ uri: img(bild, "w500") }} style={st.wideImg} />
+              ) : (
+                <View style={[st.wideImg, st.center]}>
+                  <Text style={{ color: C.muted, fontSize: 11 }}>kein Bild</Text>
+                </View>
+              )}
+              {!ohneFortschritt && anteil > 0 && (
+                <View style={st.progressBg}>
+                  <View style={[st.progressFg, { width: `${Math.round(anteil * 100)}%` }]} />
+                </View>
+              )}
+              <View style={st.playDot}>
+                <Text style={{ color: "#fff", fontSize: 16 }}>▶</Text>
+              </View>
+            </View>
+            <Text numberOfLines={1} style={st.cardTitle}>{x.title}</Text>
+            <Text numberOfLines={1} style={st.cardSub}>
+              {x.mediaType === "episode" && x.season != null ? se(x.season, x.episode) + "  " : ""}
+              {!ohneFortschritt && x.duration > 0 ? fmtTime(x.duration - x.position) + " übrig" : ""}
+            </Text>
+          </FPressable>
+        );
+      }}
+    />
+  );
+}
+
+/** Poster-Kachel wie am Desktop: Bild, NEU-Abzeichen, Bewertung, Titel. */
+function PosterRow({ items, img, onPress }) {
+  const jung = Date.now() - 14 * 24 * 3600 * 1000; // "neu" = letzte 14 Tage
+  return (
+    <FlatList
+      horizontal
+      data={items}
+      keyExtractor={(x, i) => String(x.id ?? i) + (x._t || "")}
+      contentContainerStyle={{ paddingHorizontal: 16, gap: 12 }}
       showsHorizontalScrollIndicator={false}
       renderItem={({ item: x }) => (
-        <FPressable onPress={() => onPress(x)} style={{ width: 105 }}>
-          {x.poster ? (
-            <Image source={{ uri: img(x.poster) }} style={st.poster} />
-          ) : (
-            <View style={[st.poster, st.center]}>
-              <Text style={{ color: C.muted, fontSize: 11, textAlign: "center", padding: 6 }}>{x.title}</Text>
-            </View>
-          )}
-          <Text numberOfLines={1} style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>{x.title}</Text>
+        <FPressable
+          onPress={() => onPress(x)}
+          style={[st.kachel, { width: 126 }]}
+          fokusStil={st.tvFokusKachel}
+        >
+          <View style={st.posterWrap}>
+            {x.poster ? (
+              <Image source={{ uri: img(x.poster, "w500") }} style={st.poster} />
+            ) : (
+              <View style={[st.poster, st.center, { padding: 6 }]}>
+                <Text numberOfLines={4} style={{ color: C.muted, fontSize: 10, textAlign: "center" }}>{x.title}</Text>
+              </View>
+            )}
+            {(x.added_at || 0) > jung && (
+              <View style={st.badgeNeu}>
+                <Text style={st.badgeText}>NEU</Text>
+              </View>
+            )}
+            {!!x.rating && Number(x.rating) > 0 && (
+              <View style={st.badgeNote}>
+                <Text style={st.badgeText}>★ {Number(x.rating).toFixed(1)}</Text>
+              </View>
+            )}
+          </View>
+          <Text numberOfLines={2} style={st.cardTitle}>{x.title}</Text>
+          <Text numberOfLines={1} style={st.cardSub}>
+            {x.seasons
+              ? `${x.seasons} Staffel${x.seasons > 1 ? "n" : ""}`
+              : x.year
+                ? String(x.year)
+                : ""}
+          </Text>
         </FPressable>
       )}
     />
   );
 }
 
-// ── show detail (remembers the season!) ─────────────────────────────────────
-const seasonMemory = {};
+/**
+ * Kopfbereich der Detailseiten: Hintergrundbild mit weichem Uebergang.
+ *
+ * Vorher lag ueber dem ganzen Bild pauschal opacity 0.55 - dadurch wirkte es
+ * flau und der Schnitt nach unten war eine harte Kante. Jetzt bleibt das Bild
+ * oben voll kraeftig und laeuft nach unten in den Hintergrund aus, genau wie
+ * in der Desktop-App und bei Plex/Jellyfin.
+ *
+ * Der Verlauf entsteht aus gestapelten Streifen zunehmender Deckkraft. Das
+ * spart die Zusatz-Abhaengigkeit expo-linear-gradient - und jedes native
+ * Modul weniger ist eines, das beim Start nicht fehlen kann (siehe die
+ * Geschichte mit expo-asset in BERICHT.md).
+ */
+function BackdropKopf({ uri, hoehe = 230 }) {
+  if (!uri) return <View style={{ height: 74 }} />;
+  const streifen = [0.05, 0.2, 0.42, 0.68, 0.88, 1];
+  return (
+    <View style={{ height: hoehe }}>
+      <Image source={{ uri }} style={{ width: "100%", height: hoehe, opacity: 0.9 }} />
+      {streifen.map((deck, i) => (
+        <View
+          key={i}
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: (streifen.length - 1 - i) * 26,
+            height: 28,
+            backgroundColor: C.bg,
+            opacity: deck,
+          }}
+        />
+      ))}
+    </View>
+  );
+}
 
 function ShowScreen({ api, img, push, pop, id, initialSeason }) {
   const [data, setData] = useState(null);
@@ -695,7 +1074,7 @@ function ShowScreen({ api, img, push, pop, id, initialSeason }) {
 
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }}>
-      {show.backdrop && <Image source={{ uri: img(show.backdrop, "w1280") }} style={{ width: "100%", height: 190, opacity: 0.55 }} />}
+      <BackdropKopf uri={show.backdrop ? img(show.backdrop, "w1280") : null} />
       <FPressable onPress={pop} style={st.backBtn}>
         <Text style={{ color: C.text, fontSize: 18 }}>←</Text>
       </FPressable>
@@ -799,7 +1178,7 @@ function MovieScreen({ api, img, push, pop, id }) {
     );
   return (
     <ScrollView style={{ flex: 1 }}>
-      {mv.backdrop && <Image source={{ uri: img(mv.backdrop, "w1280") }} style={{ width: "100%", height: 190, opacity: 0.55 }} />}
+      <BackdropKopf uri={mv.backdrop ? img(mv.backdrop, "w1280") : null} />
       <FPressable onPress={pop} style={st.backBtn}>
         <Text style={{ color: C.text, fontSize: 18 }}>←</Text>
       </FPressable>
@@ -1022,6 +1401,45 @@ function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, n
     if (nextEp) push({ name: "play", type: "episode", id: nextEp.id, title, subtitle: se(nextEp.season, nextEp.episode) + (nextEp.title ? " · " + nextEp.title : "") });
   };
 
+  /* ── Fernbedienung ────────────────────────────────────────────────────────
+     Die Medientasten des Fernsehers (Wiedergabe/Pause, Vor- und Ruecklauf,
+     naechster Titel) kommen als "onHWKeyEvent" an - siehe die ausfuehrliche
+     Erklaerung beim TV-Fokus weiter oben. Ohne das hier waeren sie am
+     Fernseher wirkungslos, und man muesste alles ueber die Bildschirmknoepfe
+     erledigen.
+
+     Bewusst NICHT belegt: "select" (die mittlere Taste). Ist gerade ein Knopf
+     ausgewaehlt, hat Android den Druck bereits an ihn weitergereicht - eine
+     zweite Reaktion hier wuerde doppelt ausloesen. Bei ausgeblendeter
+     Bedienleiste holt die Taste sie nur zurueck. */
+  useFernbedienung((taste) => {
+    switch (taste) {
+      case "playPause":
+        togglePlay();
+        break;
+      case "fastForward":
+        seekBy(30);
+        break;
+      case "rewind":
+        seekBy(-10);
+        break;
+      case "right":
+        if (!uiVisible) seekBy(30); else wake();
+        break;
+      case "left":
+        if (!uiVisible) seekBy(-10); else wake();
+        break;
+      case "next":
+        if (nextEp) playNext();
+        break;
+      case "stop":
+        leave();
+        break;
+      default:
+        wake(); // jede andere Taste holt die Bedienleiste zurueck
+    }
+  });
+
   // Konnte das Video-Modul nicht geladen werden, hier sauber Bescheid geben
   if (videoLadeFehler || !VideoView) {
     return (
@@ -1143,10 +1561,34 @@ const st = StyleSheet.create({
   btnText: { color: "#fff", fontWeight: "700" },
   iconBtn: { backgroundColor: C.surface, borderRadius: 10, paddingHorizontal: 10, justifyContent: "center" },
   avatar: { width: 80, height: 80, borderRadius: 14, backgroundColor: C.red, alignItems: "center", justifyContent: "center" },
-  poster: { width: 105, height: 158, borderRadius: 10, backgroundColor: C.surface },
-  wideImg: { width: 190, height: 107, borderRadius: 10, backgroundColor: C.surface },
-  progressBg: { position: "absolute", left: 0, right: 0, bottom: 40, height: 3, backgroundColor: "#ffffff33", borderRadius: 2 },
-  progressFg: { height: 3, backgroundColor: C.red, borderRadius: 2 },
+  // ── Kacheln und Reihen (dem Desktop nachempfunden) ──
+  posterWrap: { position: "relative" },
+  poster: { width: 118, height: 177, borderRadius: 10, backgroundColor: C.surface },
+  wideWrap: { position: "relative" },
+  wideImg: { width: 210, height: 118, borderRadius: 10, backgroundColor: C.surface },
+  progressBg: { position: "absolute", left: 0, right: 0, bottom: 0, height: 4, backgroundColor: "#00000088", borderBottomLeftRadius: 10, borderBottomRightRadius: 10 },
+  progressFg: { height: 4, backgroundColor: C.red },
+  playDot: {
+    position: "absolute", right: 8, top: 8, width: 30, height: 30, borderRadius: 15,
+    backgroundColor: "#000000aa", alignItems: "center", justifyContent: "center",
+  },
+  cardTitle: { color: C.text, fontSize: 12, fontWeight: "600", marginTop: 6, lineHeight: 15 },
+  cardSub: { color: C.muted, fontSize: 11, marginTop: 1 },
+  badgeNeu: { position: "absolute", left: 6, top: 6, backgroundColor: C.red, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2 },
+  badgeNote: { position: "absolute", right: 6, top: 6, backgroundColor: "#000000bb", borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2 },
+  badgeText: { color: "#fff", fontSize: 9, fontWeight: "800" },
+  // ── Hero (grosses Bild oben, wie am Desktop) ──
+  hero: { height: 300, position: "relative", marginBottom: 4 },
+  heroImg: { width: "100%", height: 300, backgroundColor: C.bg2 },
+  heroTop: { position: "absolute", top: 46, left: 16, right: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  heroText: { position: "absolute", left: 16, right: 16, bottom: 10 },
+  heroTitle: { color: C.text, fontSize: 26, fontWeight: "900", textShadowColor: "#000", textShadowRadius: 8 },
+  heroMeta: { color: C.red, fontSize: 12, fontWeight: "700", marginTop: 4 },
+  heroDesc: { color: "#dcdce4", fontSize: 12, marginTop: 6, lineHeight: 17 },
+  heroBtn: { backgroundColor: C.red, borderRadius: 10, paddingHorizontal: 18, paddingVertical: 10 },
+  heroBtnGhost: { backgroundColor: "#ffffff22" },
+  heroBtnText: { color: "#fff", fontWeight: "800", fontSize: 13 },
+  iconRound: { backgroundColor: "#00000088", borderRadius: 20, width: 38, height: 38, alignItems: "center", justifyContent: "center" },
   tab: { backgroundColor: C.surface, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 7 },
   epRow: { flexDirection: "row", gap: 10, backgroundColor: C.bg2, borderRadius: 12, padding: 10, alignItems: "center" },
   epImg: { width: 110, height: 62, borderRadius: 8, backgroundColor: C.surface },
@@ -1156,11 +1598,29 @@ const st = StyleSheet.create({
   pbtn: { backgroundColor: "#ffffff22", borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, justifyContent: "center" },
   // Markierung fuer die Fernbedienung: dicker roter Rahmen + heller Hintergrund.
   // Ohne das sieht man am Fernseher nicht, welcher Knopf gerade dran ist.
+  // Markierung fuer die Fernbedienung. Heller Rahmen + Schein, damit er auf
+  // dunklem Hintergrund aus drei Metern Entfernung sicher zu erkennen ist.
   tvFokus: {
     borderWidth: 3,
-    borderColor: C.red,
-    backgroundColor: "#e5091426",
+    borderColor: "#ffffff",
+    backgroundColor: "#e5091433",
     borderRadius: 12,
+    // Erhoeht die Kachel optisch - wie bei Plex/Jellyfin
+    transform: [{ scale: 1.04 }],
+  },
+  // Fuer Poster und breite Karten: staerker skalieren, roter Rahmen ums Bild.
+  // Kachel-Grundzustand: Rahmen ist IMMER vorhanden, nur unsichtbar. Sonst
+  // wuerde beim Fokussieren die Breite wachsen und die ganze Reihe verrutschen.
+  kachel: {
+    borderWidth: 3,
+    borderColor: "transparent",
+    borderRadius: 13,
+    padding: 1,
+  },
+  tvFokusKachel: {
+    borderColor: "#ffffff",
+    backgroundColor: "#ffffff14",
+    transform: [{ scale: 1.07 }],
   },
   pbtnMain: { backgroundColor: C.red, paddingHorizontal: 26 },
   playerButtons: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 14, marginTop: 12 },

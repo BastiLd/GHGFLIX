@@ -885,3 +885,146 @@ Vorschau für diese Datei für immer sofort da.
 
 **Sonstiges:** `supabase/schema.sql`, `docs/SUPABASE.md` (neu),
 `docker-compose.yml`, beide GitHub-Workflows, alle Versionsnummern
+
+---
+
+## Nachtrag 12 — Handy und Fernseher sehen jetzt aus wie die Desktop-App (App 2.0.0)
+
+### Was beanstandet war
+
+> „AM HANDY UND TV SIND NUR SERIEN UND FILME SO ALS LISTEN DA, ES SOLL ABER SO SEIN
+> WIE IN PLEX, JELLYFIN UND DIESER DESKTOP APP."
+>
+> „Die Auswahl ist nur bei Textfeldern. Bei Filmen, Testen, X, Suche usw. ist es
+> immer noch nicht [zu sehen]."
+
+Beides ist behoben. Der zweite Punkt war die interessantere Nuss.
+
+---
+
+### Teil 1 — Der Startbildschirm
+
+Vorher bestand er aus vier Elementen: Suchfeld, „Weiterschauen", „Serien",
+„Filme". Die Desktop-App zeigt dagegen ein großes Kopfbild und acht Reihen.
+Der Handy-Startbildschirm ist jetzt genauso aufgebaut:
+
+| Bereich | Inhalt | Herkunft |
+|---|---|---|
+| **Kopfbild** | Großes Hintergrundbild, Titel, Bewertung, Kurzbeschreibung, „Ansehen" | die 8 neuesten Titel mit Hintergrundbild, Wechsel alle 12 s |
+| Weiterschauen | breite Karten mit Fortschrittsbalken und Restzeit | `/api/continue` |
+| Neu hinzugefügt | die 20 zuletzt eingelesenen Titel | `added_at` |
+| Meine Liste | Favoriten | `/api/favorites` |
+| Serien / Filme | vollständige Sammlung | `/api/library` |
+| Top bewertet | alles ab Bewertung 7, absteigend | `rating` |
+| Zuletzt gesehen | Verlauf | `/api/history` |
+| Genre-Reihen | die fünf häufigsten Genres mit je mindestens 3 Titeln | `genres` |
+
+Die Kacheln zeigen zusätzlich ein rotes **NEU**-Abzeichen (Titel jünger als
+14 Tage), die Bewertung als ★-Wert und bei angefangenen Titeln einen
+Fortschrittsbalken.
+
+**Ohne zusätzliche Abhängigkeit.** Der weiche Übergang unter dem Kopfbild
+entsteht aus sechs gestapelten Streifen zunehmender Deckkraft statt aus
+`expo-linear-gradient`. Nach der Geschichte mit `expo-asset` (Nachtrag 9) gilt:
+jedes native Modul, das nicht da ist, kann beim Start auch nicht fehlen.
+
+---
+
+### Teil 2 — Warum der Auswahlrahmen nur bei Textfeldern kam
+
+Diesmal wurde **nachgesehen statt geraten** — die Lehre aus Nachtrag 9.
+
+**Die Ursache.** In React Native 0.79 löst Android das Ereignis `topFocus`
+ausschließlich im Textfeld-Manager aus:
+
+```
+node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/
+    views/textinput/ReactTextInputManager.java     <- einzige Fundstelle
+    views/view/ReactViewManager.kt                 <- kein Fokus-Ereignis
+```
+
+Die Props `onFocus`/`onBlur` einer `<View>` oder `<Pressable>` existieren zwar
+in der Typdefinition, werden auf Android aber **nie aufgerufen**. Genau das war
+zu sehen: Textfelder markiert, Knöpfe nicht.
+
+**Die Lösung — ohne Fork.** React Native bringt eine kaum bekannte
+Fernseh-Unterstützung mit. `ReactRootView` reicht Fernbedienungstasten *und
+Fokuswechsel* als geräteweites Ereignis `onHWKeyEvent` an JavaScript weiter:
+
+```
+ReactAndroid/src/main/java/com/facebook/react/ReactAndroidHWInputDeviceHelper.java
+    eventType : "focus" | "blur"
+                "select" | "up" | "down" | "left" | "right"
+                "playPause" | "rewind" | "fastForward" | "next" | "previous"
+    tag       : native View-Nummer — dieselbe Zahl, die findNodeHandle() liefert
+```
+
+Jeder Knopf meldet beim Einhängen seine View-Nummer an eine zentrale Liste an.
+Nennt das Ereignis genau diese Nummer, zeigt er den Rahmen. Damit ist der
+Wechsel auf den Fork `react-native-tvos` **nicht nötig** — kein Risiko für die
+Handy-Fassung, keine native Änderung, keine neue Abhängigkeit.
+
+**Wichtig für später:** Das setzt die bewährte Architektur voraus
+(`newArchEnabled: false`, in `app.json` ohnehin schon so gesetzt). Unter Fabric
+gibt es `ReactRootView` nicht mehr. Beim späteren Umstieg auf SDK 54 mit neuer
+Architektur muss dieser Block neu bewertet werden — dann wäre
+`@react-native-tvos/config-tv` der Weg.
+
+**Kein Springen beim Fokussieren.** Die Kacheln tragen den Rahmen von Anfang an,
+nur in `transparent`. Fokussiert wechselt lediglich die Farbe, dazu kommt
+`scale: 1.07`. Würde die Rahmenbreite erst beim Fokussieren entstehen, würde die
+ganze Reihe verrutschen.
+
+---
+
+### Teil 3 — Die Fernbedienung bedient jetzt den Player
+
+Aus demselben Ereignis fällt die Tastenbelegung mit ab:
+
+| Taste | Wirkung |
+|---|---|
+| ⏯ Wiedergabe/Pause | anhalten / fortsetzen |
+| ⏩ Vorlauf | 30 s vor |
+| ⏪ Rücklauf | 10 s zurück |
+| ▶▶ Nächster Titel | nächste Folge |
+| ⏹ Stopp | Wiedergabe verlassen |
+| ◀ ▶ Richtung | springt, solange die Bedienleiste aus ist |
+| jede andere | holt die Bedienleiste zurück |
+
+Die mittlere Taste ist **bewusst nicht belegt**: Ist ein Knopf ausgewählt, hat
+Android den Druck bereits an ihn weitergereicht — eine zweite Reaktion würde
+doppelt auslösen.
+
+---
+
+### Teil 4 — Detailseiten
+
+Über dem Hintergrundbild lag pauschal `opacity: 0.55`, was flau wirkte und unten
+hart abschnitt. Jetzt bleibt das Bild oben kräftig und läuft nach unten in den
+Hintergrund aus — dieselbe Technik wie beim Kopfbild.
+
+---
+
+### Neuer Test: `mobile/test/laden.test.mjs`
+
+```powershell
+cd "$env:USERPROFILE\Documents\GHGFlix\mobile"
+node test\laden.test.mjs
+```
+
+Der Test lädt `App.js` wirklich, mit Attrappen für alles Native. Er findet
+fehlende Importe, Zugriffe auf noch nicht Definiertes und Tippfehler auf
+Modulebene — also **genau die Fehlerklasse, die zum Absturz aus Nachtrag 9
+geführt hat**, und zwar ohne Gerät und ohne Cloud-Build. Ein Durchlauf dauert
+unter einer Sekunde; ein Cloud-Build dauert eine Viertelstunde.
+
+### Geprüft
+
+| Prüfung | Ergebnis |
+|---|---|
+| Ladetest `App.js` | kein Fehler auf Modulebene |
+| Fokus-Verteilung (8 Fälle, gegen die echte Java-Ereignisfolge) | bestanden |
+| Reihen-Logik (6 Fälle, gegen echte Datenbankstruktur) | bestanden |
+| Stile: 59 benutzt, 57 definiert, keine fehlend, keine ungenutzt | sauber |
+| Layout-Rechnung Kachel mit/ohne Fokus | 132 px = 132 px, kein Springen |
+| Server-Tests (Parser, Scanner, Profile) | alle bestanden |
