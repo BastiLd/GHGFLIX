@@ -7,25 +7,27 @@
  * Der Startbildschirm von Android TV zeigt aber AUSSCHLIESSLICH Apps mit
  *     <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
  * Folge: Die App wird sauber installiert (beim zweiten Versuch fragt Android
- * sogar nach einem „Update"), taucht danach aber NIRGENDS auf und lässt sich
- * auch nicht öffnen. Genau dieses Verhalten hatten wir.
+ * sogar nach einem „Update"), taucht danach aber NIRGENDS auf.
  *
  * Ergänzt werden deshalb:
  *   1. LEANBACK_LAUNCHER an der Haupt-Activity  → App erscheint im TV-Menü
  *   2. uses-feature leanback / touchscreen "nicht erforderlich"
  *      → Android hält die App auf einem Gerät ohne Touchscreen für zulässig
- *   3. android:banner am <application>          → das Kachelbild im TV-Menü
- *      (ohne Banner zeigen manche Launcher die App gar nicht an)
+ *   3. android:banner → das Kachelbild im TV-Menü
  *
- * Das Banner-Bild liegt unter assets/tv-banner.png (320×180). Fehlt es, wird
- * automatisch auf das App-Symbol zurückgefallen — der Build bricht nie ab.
+ * ── WARUM DAS BANNER JETZT DAS APP-SYMBOL IST ──────────────────────────────
+ * Eine frühere Fassung kopierte ein eigenes 320×180-Bild nach
+ * res/drawable/tv_banner.png und trug `@drawable/tv_banner` ins Manifest ein.
+ * Kommt diese Datei beim Cloud-Build aus irgendeinem Grund NICHT an (der
+ * android-Ordner wird beim Bauen neu erzeugt), verweist das Manifest auf eine
+ * Ressource, die es nicht gibt — und Android bricht die App SOFORT BEIM START
+ * ab: kurz schwarz, dann zurück ins Menü. Genau dieses Verhalten trat auf.
+ *
+ * `@mipmap/ic_launcher` ist das App-Symbol und existiert IMMER. Es sieht als
+ * Kachel etwas schlichter aus, kann aber unmöglich fehlen. Stabilität geht
+ * hier klar vor Optik.
  */
-const { withAndroidManifest, withDangerousMod } = require("expo/config-plugins");
-const fs = require("node:fs");
-const path = require("node:path");
-
-const BANNER_SRC = "assets/tv-banner.png";
-const BANNER_RES = "tv_banner";
+const { withAndroidManifest } = require("expo/config-plugins");
 
 /** <uses-feature ... required="false"> ergänzen, ohne Doppelte zu erzeugen. */
 function addUsesFeature(manifest, name) {
@@ -47,8 +49,8 @@ function findLauncherActivity(application) {
   );
 }
 
-const withTvManifest = (config) =>
-  withAndroidManifest(config, (cfg) => {
+module.exports = function withAndroidTv(config) {
+  return withAndroidManifest(config, (cfg) => {
     const manifest = cfg.modResults.manifest;
 
     // 1) Gerätemerkmale: beides ausdrücklich NICHT erforderlich
@@ -58,9 +60,9 @@ const withTvManifest = (config) =>
     const application = manifest.application?.[0];
     if (!application) return cfg;
 
-    // 2) Kachelbild im TV-Startbildschirm
-    const hasBanner = fs.existsSync(path.join(cfg.modRequest.projectRoot, BANNER_SRC));
-    application.$["android:banner"] = hasBanner ? `@drawable/${BANNER_RES}` : "@mipmap/ic_launcher";
+    // 2) Kachelbild: bewusst das App-Symbol — eine Ressource, die es garantiert
+    //    gibt (siehe Erklärung oben).
+    application.$["android:banner"] = "@mipmap/ic_launcher";
 
     // 3) LEANBACK_LAUNCHER an den vorhandenen MAIN-Filter hängen
     const activity = findLauncherActivity(application);
@@ -81,28 +83,4 @@ const withTvManifest = (config) =>
     }
     return cfg;
   });
-
-/** Banner-Bild in die Android-Ressourcen kopieren. */
-const withTvBanner = (config) =>
-  withDangerousMod(config, [
-    "android",
-    async (cfg) => {
-      try {
-        const src = path.join(cfg.modRequest.projectRoot, BANNER_SRC);
-        if (fs.existsSync(src)) {
-          const dir = path.join(cfg.modRequest.platformProjectRoot, "app/src/main/res/drawable");
-          fs.mkdirSync(dir, { recursive: true });
-          fs.copyFileSync(src, path.join(dir, `${BANNER_RES}.png`));
-        }
-      } catch (e) {
-        // Ein fehlendes Banner darf den Build NIE zum Scheitern bringen —
-        // das Manifest fällt dann auf @mipmap/ic_launcher zurück.
-        console.warn("[withAndroidTv] Banner konnte nicht kopiert werden:", e.message);
-      }
-      return cfg;
-    },
-  ]);
-
-module.exports = function withAndroidTv(config) {
-  return withTvManifest(withTvBanner(config));
 };

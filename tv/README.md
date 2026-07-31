@@ -301,16 +301,53 @@ Oberfläche. Dann hilft nur Weg 2.
 
    (danach PowerShell einmal schließen und neu öffnen, dann geht schlicht `adb`)
 
-5. **Verbinden und mitlesen** (TV-IP anpassen):
+5. **Verbinden.** Hier gibt es ZWEI Wege — welcher geht, hängt vom Fernseher ab:
+
+   **Weg A: Drahtloses Debugging mit Kopplung** (Android 11+, das ist bei
+   Google TV der Normalfall)
+
+   Der einfache `adb connect …:5555` schlägt hier fehl
+   (`cannot connect … (10060)`), weil Port 5555 gar nicht offen ist. Google TV
+   verlangt erst eine Kopplung mit Code:
+
+   1. Am TV: *Einstellungen → System → Entwickleroptionen →*
+      **Drahtloses Debugging** einschalten
+   2. Dort **„Gerät mit Kopplungscode koppeln"** öffnen.
+      Es erscheinen eine **IP mit Port** (z. B. `192.168.68.55:37129`) und ein
+      **sechsstelliger Code**. Dieses Fenster offen lassen!
+   3. Am PC — die Zahlen von Schritt 2 einsetzen:
 
    ```powershell
    cd "$env:USERPROFILE\platform-tools"
-   .\adb.exe connect 192.168.68.55:5555
+   .\adb.exe pair 192.168.68.55:37129
+   # Es wird nach dem sechsstelligen Code gefragt -> eingeben
+   ```
+
+   4. Danach steht im Fenster **„Drahtloses Debugging"** oben eine ANDERE
+      Portnummer (das ist der Verbindungs-Port, nicht der Kopplungs-Port):
+
+   ```powershell
+   .\adb.exe connect 192.168.68.55:42871
    .\adb.exe devices
    ```
 
-   Am Fernseher erscheint „USB-Debugging zulassen?" → **Immer zulassen** →
-   **OK**.
+   **Weg B: Einmal per USB-Kabel** (falls es kein drahtloses Debugging gibt)
+
+   TV per USB-Kabel an den PC (USB-Buchse des TV, die Daten kann), dann:
+
+   ```powershell
+   cd "$env:USERPROFILE\platform-tools"
+   .\adb.exe devices        # am TV "USB-Debugging zulassen?" bestaetigen
+   .\adb.exe tcpip 5555     # oeffnet Port 5555
+   # Kabel abziehen, dann:
+   .\adb.exe connect 192.168.68.55:5555
+   ```
+
+   > **Wenn `Expand-Archive` meckert** („Zugriff verweigert" auf `adb.exe`):
+   > Es läuft noch ein adb-Dienst. Erst beenden, dann neu entpacken:
+   > ```powershell
+   > Get-Process adb -ErrorAction SilentlyContinue | Stop-Process -Force
+   > ```
 
 6. Log leeren, App am TV starten, Log ansehen:
 
@@ -318,20 +355,9 @@ Oberfläche. Dann hilft nur Weg 2.
    cd "$env:USERPROFILE\platform-tools"
    .\adb.exe logcat -c
    # jetzt am Fernseher GHGFlix oeffnen, ca. 10 Sekunden warten, dann:
-   .\adb.exe logcat -d -b crash *:E > "$env:USERPROFILE\Desktop\ghgflix-log.txt"
+   .\adb.exe logcat -d -b crash > "$env:USERPROFILE\Desktop\ghgflix-log.txt"
+   .\adb.exe logcat -d *:E >> "$env:USERPROFILE\Desktop\ghgflix-log.txt"
    notepad "$env:USERPROFILE\Desktop\ghgflix-log.txt"
-   ```
-
-   Nur die GHGFlix-Zeilen, live mitlaufend:
-
-   ```powershell
-   .\adb.exe logcat --pid=$(.\adb.exe shell pidof -s com.bastild.ghgflix)
-   ```
-
-   Nach dem Absturz die Ursache direkt anzeigen:
-
-   ```powershell
-   .\adb.exe logcat -d -b crash
    ```
 
 7. Fertig? Verbindung trennen:

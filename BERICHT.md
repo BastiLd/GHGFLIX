@@ -1,6 +1,6 @@
 # GHGFlix — Bericht: Server-Überholung, Erkennung, Vorschaubilder, Cloud-Sync
 
-**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.1** · Handy **1.5.0**
+**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.2** · Handy **1.6.0**
 
 ---
 
@@ -168,6 +168,43 @@ Greift beides nicht (Absturz noch vor dem Start der Oberfläche), steht in
 [`tv/README.md`](tv/README.md) eine Schritt-für-Schritt-Anleitung, wie du per
 `adb` über WLAN die echten Systemlogs vom Fernseher holst — mit allen Befehlen
 zum Kopieren.
+
+### 8c. Und DANN stürzte sie beim Öffnen ab — mein Fehler
+
+Der Absturz kam **genau mit meiner TV-Erweiterung**. Vorher war die App
+unsichtbar (also nie gestartet), danach sichtbar — und stürzte sofort ab.
+
+Ursache: Meine Erweiterung trug ins Manifest
+`android:banner="@drawable/tv_banner"` ein und kopierte das Bild parallel dazu
+in die Android-Ressourcen. Kommt diese Datei beim Cloud-Build **nicht** an —
+der `android`-Ordner wird beim Bauen komplett neu erzeugt — verweist das
+Manifest auf eine Ressource, die es nicht gibt. Android bricht die App dann
+**sofort beim Start** ab: kurz schwarz, zurück ins Menü. Exakt dein Symptom.
+
+Behoben ab 1.6.0: Das Kachelbild ist jetzt schlicht das **App-Symbol**
+(`@mipmap/ic_launcher`) — eine Ressource, die garantiert existiert. Die
+Datei-Kopie ist komplett entfernt, damit diese Fehlerquelle gar nicht mehr
+existieren kann. Optisch etwas schlichter, dafür kann es nicht mehr schiefgehen.
+
+### 8d. `adb connect` lief in einen Zeitüberschreitung
+
+`cannot connect to …:5555 (10060)` — Port 5555 ist bei Google TV schlicht
+**nicht offen**. Der einfache `adb connect` funktioniert nur, wenn der Port
+vorher per USB freigeschaltet wurde. Android 11+ (also auch dein PeaQ) will
+stattdessen eine **Kopplung mit sechsstelligem Code** über *Drahtloses
+Debugging*. Beide Wege stehen jetzt Schritt für Schritt in
+[`tv/README.md`](tv/README.md).
+
+Ebenfalls ergänzt: `winget install Google.PlatformTools` scheitert regelmäßig
+am Hash-Vergleich (Google tauscht das Paket öfter aus als der winget-Katalog
+nachzieht) — der direkte Download von Google klappt dagegen immer.
+
+### 8e. Upload gab „404 Nicht gefunden"
+
+Richtig so: Der Upload-Endpunkt kam erst nach dem letzten Server-Update dazu,
+auf ZimaOS lief noch die alte Fassung. Der Server ist jetzt **2.3.2**, und das
+Skript prüft vorab, ob der Server Dateien überhaupt annehmen kann — statt einer
+nichtssagenden 404 steht dann im Klartext, was zu tun ist.
 
 ### 9. Studio-Klon scheiterte an eigenen Bau-Dateien
 

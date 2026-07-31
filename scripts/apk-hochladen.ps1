@@ -60,6 +60,24 @@ try {
   throw "Server nicht erreichbar unter $Server - stimmt die Adresse? ($($_.Exception.Message))"
 }
 Write-Host ("     " + $ping.name + " Version " + $ping.version + " - erreichbar")
+
+# Der Upload-Endpunkt gibt es erst ab Server 2.3.2. Laeuft auf ZimaOS noch eine
+# aeltere Fassung, kaeme sonst nur ein nichtssagendes "404 Nicht gefunden".
+try {
+  $null = Invoke-RestMethod -Uri "$Server/api/apk/status" -TimeoutSec 8
+} catch {
+  Write-Host ""
+  Write-Host "Dieser Server kann noch keine Dateien empfangen." -ForegroundColor Yellow
+  Write-Host "Du brauchst mindestens Server-Version 2.3.2 - laeuft gerade: $($ping.version)"
+  Write-Host ""
+  Write-Host "So aktualisierst du:"
+  Write-Host "  1. In ZimaOS: App Store -> GHGFlix -> Update"
+  Write-Host "  2. Danach pruefen: $Server/api/ping  (dort muss 2.3.2 stehen)"
+  Write-Host ""
+  Write-Host "Oder die Datei einfach von Hand ablegen (geht immer):"
+  Write-Host "  ZimaOS -> Files -> /DATA/AppData/ghgflix/data/apk/GHGFlix.apk"
+  exit 1
+}
 if (-not $ping.auth) {
   Write-Host ""
   Write-Host "Dieser Server hat KEIN Passwort gesetzt." -ForegroundColor Yellow
