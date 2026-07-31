@@ -18,6 +18,29 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      # Die Versionsnummer wird AUS server/package.json gelesen, nicht hier
+      # eingetippt. Vorher stand hier fest "2.3.2", waehrend der Server im Code
+      # laengst 2.4.0 meldete — ein Abbild ":2.4.0" gab es also nie. Wer in
+      # ZimaOS brav die im Bericht genannte Version eintrug, bekam einen Pull-
+      # Fehler statt eines Updates. Ab jetzt kann das nicht mehr auseinander
+      # laufen.
+      - name: Version aus server/package.json lesen
+        id: version
+        run: echo "v=$(node -p "require('./server/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # Sicherheitsnetz: meldet der laufende Server eine andere Nummer als
+      # package.json, bricht der Bau ab — sonst zeigt /api/ping spaeter etwas
+      # anderes an als das Abbild heisst.
+      - name: Version gegen src/index.js pruefen
+        run: |
+          IM_CODE=$(node -p "require('fs').readFileSync('server/src/index.js','utf8').match(/const VERSION = \"([^\"]+)\"/)[1]")
+          if [ "$IM_CODE" != "${{ steps.version.outputs.v }}" ]; then
+            echo "::error::server/package.json sagt ${{ steps.version.outputs.v }}, server/src/index.js sagt $IM_CODE — bitte angleichen."
+            exit 1
+          fi
+          echo "Version stimmt ueberein: $IM_CODE"
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -34,5 +57,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/bastild/ghgflix-server:latest
-            ghcr.io/bastild/ghgflix-server:2.3.2
+            ghcr.io/bastild/ghgflix-server:${{ steps.version.outputs.v }}
             ghcr.io/bastild/ghgflix-server:${{ github.sha }}

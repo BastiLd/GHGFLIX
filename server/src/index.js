@@ -26,7 +26,7 @@ const SERVER_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const WEBAPP_DIR = join(SERVER_ROOT, "webapp");
 const LEGACY_DIR = join(SERVER_ROOT, "web");
 const WEB_DIR = existsSync(join(WEBAPP_DIR, "index.html")) ? WEBAPP_DIR : LEGACY_DIR;
-const VERSION = "2.4.0";
+const VERSION = "2.4.1";
 
 const db = openDb();
 

@@ -147,6 +147,7 @@ Fix nachgewiesen — nicht nur behauptet.
 | MOB-051 | ✅ | **APK ließ sich nicht installieren.** `eas.json` stand auf `appVersionSource: "remote"`: dann führt EAS den versionCode auf dem Server und ignoriert `app.json`. Stand dieser Zähler niedriger als die auf dem Fernseher installierte 13, war jeder neue Bau aus Android-Sicht ein Rückschritt → Installation bricht ohne brauchbare Meldung ab. Jetzt `"local"` + `versionCode: 14` sichtbar in `app.json`. Zusätzlich erklärt `/app` (Installationsseite) jetzt direkt am Fernseher den Fall „Download geht, Installieren nicht" samt Lösung (alte Fassung zuerst deinstallieren) — der Hinweis stand bisher nur im PowerShell-Skript, das am TV niemand sieht. |
 | SRV-041 | ✅ | **Stiller Datenverlust-Fehler, beim Testlauf entdeckt.** Die Sicherung gegen leere Docker-Mounts in `scanner.js` verglich einen vereinheitlichten Bibliothekspfad per SQL-`LIKE` gegen die roh gespeicherten Dateipfade. Unter Linux fällt das nicht auf, unter Windows traf der Vergleich nie zu — die Sicherung griff dort also überhaupt nicht und ein leerer Mount hätte die Bibliothek gelöscht. Beide Seiten laufen jetzt über `pfadNorm`/`liegtUnter`, dieselbe Regel auch für `isOffline`. Der zugehörige Test war rot und ist jetzt grün. |
 | TEST-001 | ✅ | **Zwei Testhelfer prüften unter Windows in Wahrheit gar nichts.** Der Modul-Hook in `mini-renderer.mjs` und `laden.test.mjs` erkannte absolute Pfade an `name.startsWith("/")` — unter Windows („C:\…") nie zutreffend. Jede übersetzte Datei bekam dadurch statt des echten Moduls die react-native-Attrappe, die zu **jedem** Namen eine Funktion liefert: alle Export-Prüfungen bestanden scheinbar, und `useFokusSystem()` gab immer `null` zurück. Von den 34 Oberflächen-Tests liefen faktisch nur 7. Behoben über `path.isAbsolute`; zusätzlich die React-Attrappe von einem Proxy auf ein einfaches Objekt umgestellt, weil Babels `_interopRequireWildcard` die Eigenschaften kopiert und dabei jeden Proxy aushebelt. Jetzt laufen alle 34 wirklich durch (Poster anwählbar, Player-Leiste erreichbar, Steuerkreuz). |
+| OPS-022 | ✅ | **Das Server-Abbild trug die falsche Versionsnummer.** `.github/workflows/docker.yml` vergab fest den Tag `2.3.2`, während der Server im Code längst `2.4.0` meldete — ein Abbild `ghcr.io/bastild/ghgflix-server:2.4.0` gab es also nie. Wer in ZimaOS die im letzten Bericht genannte Version eintrug, bekam einen Pull-Fehler statt eines Updates. Der Tag wird jetzt aus `server/package.json` gelesen, und ein Prüfschritt bricht den Bau ab, falls `package.json` und `src/index.js` auseinanderlaufen. Server steht jetzt auf **2.4.1**. |
 | OPS-020 | ✅ | Arbeit lief direkt in `C:\Users\basti\Documents\GHGFlix` auf `feature/zimaos-docker-server` (die Claude-Worktree hing an einem 29 Commits alten `main`). |
 
 **Testlage nach Phase 7:** Server 5 Dateien grün (u. a. 16 Routen-, 32 Kopplungs-,
@@ -196,5 +197,9 @@ inzwischen ggf. zurückgesetzt/erhöht), dann gezielt nacharbeiten.
 
 ## Versionen
 
-Desktop-App **v0.9.6** (zuletzt auf `main`) · `feature/zimaos-docker-server`:
-App **3.1.0** · Server **2.4.0** — main hat diesen Stand noch nicht (OPS-021).
+Stand `feature/zimaos-docker-server`: Handy-/TV-App **3.2.0** (versionCode 14,
+runtimeVersion 1) · Server **2.4.1** · Desktop-App **v0.9.6**.
+
+In ZimaOS also `ghcr.io/bastild/ghgflix-server:2.4.1` eintragen — oder einfach
+`:latest`. Nachprüfen unter `http://<server-ip>:8484/api/ping`. `main` steht
+weiterhin auf v0.9.6 und hat nichts davon (OPS-021).
