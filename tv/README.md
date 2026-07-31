@@ -4,8 +4,43 @@ Geschrieben für einen **PeaQ Smart Google TV** — das ist ein Android-TV-Gerä
 mit Google-TV-Oberfläche. Alles hier gilt genauso für andere Android-TV- und
 Fire-TV-Geräte.
 
-**Kurzantwort:** Am schnellsten geht es **ohne USB-Stick** über die App
-„Downloader". USB-Stick geht auch, ist aber umständlicher.
+---
+
+## Die Kurzantwort auf „welchen Link öffne ich wo?"
+
+Es sind **zwei verschiedene Adressen** — das ist der häufigste Punkt der
+Verwirrung:
+
+| Adresse | Wo eingeben? | Was passiert? |
+|---|---|---|
+| `http://192.168.68.10:8484/app` | **am PC/Handy im Browser** | Anleitungs-Seite zum Nachlesen. Zeigt auch an, ob schon eine App-Datei bereitliegt. |
+| `http://192.168.68.10:8484/apk` | **am Fernseher in der App „Downloader"** | Lädt die App-Datei herunter und installiert sie. |
+
+Also: `/app` ist **nur zum Nachlesen**, `/apk` ist **die Installation**.
+Am Fernseher tippst du `/apk` ein — nicht in den TV-Browser, sondern in
+**Downloader** (Google TV hat ab Werk oft gar keinen Browser).
+
+## Und wie aktualisiere ich später?
+
+Genau gleich — die App wird beim Installieren einfach ersetzt:
+
+1. Neue App-Datei bauen (Studio → GHGFlix → **APK bauen**, oder am PC per
+   `eas build`)
+2. Sie auf dem Server ablegen und dabei die alte überschreiben:
+   `/DATA/AppData/ghgflix/data/apk/GHGFlix.apk`
+3. Am Fernseher **Downloader** öffnen → dieselbe Adresse `…:8484/apk` → **Go**
+   → **Installieren** → fertig
+
+Deine Einstellungen (Server-Adresse, Passwort) bleiben dabei erhalten. Ein
+Deinstallieren ist nur nötig, wenn die Meldung „App nicht installiert"
+erscheint — dann wurde die neue Datei mit einem anderen Schlüssel signiert.
+
+> **Wichtig:** Es liegt erst dann eine App-Datei bereit, wenn du sie einmal
+> gebaut und abgelegt hast (Schritt 2.1 weiter unten). Vorher zeigt
+> `…:8484/apk` nur „Noch keine App-Datei hinterlegt".
+
+**Ganz ohne Installation** geht es auch: irgendeinen Browser am TV öffnen und
+`http://192.168.68.10:8484/?tv=1` eingeben.
 
 ---
 

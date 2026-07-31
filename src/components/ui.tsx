@@ -262,3 +262,59 @@ export function TextInput({
     />
   );
 }
+
+/**
+ * Poster auf der Detailseite, das sich dem BILD anpasst statt umgekehrt.
+ *
+ * Vorher hatte der Rahmen fest 2:3 und das Bild lag mit `object-contain`
+ * darin — ein selbst gewähltes Poster mit anderem Seitenverhältnis bekam
+ * dadurch schwarze Balken oben und unten. Jetzt wird das echte Verhältnis des
+ * geladenen Bildes gemessen und der Rahmen darauf gesetzt: keine Balken, und
+ * abgeschnitten wird auch nichts.
+ *
+ * Die Breite bleibt fest (damit das Layout ruhig steht), die Höhe folgt dem
+ * Bild — sanft begrenzt, damit ein extremes Banner die Seite nicht sprengt.
+ */
+export function AutoPoster({
+  src,
+  fallbackText,
+  className,
+  children,
+}: {
+  src: string | null;
+  fallbackText?: string;
+  className?: string;
+  children?: ReactNode;
+}) {
+  const [ratio, setRatio] = useState<number | null>(null);
+  return (
+    <div
+      className={clsx(
+        "relative w-52 shrink-0 rounded-xl overflow-hidden border border-ghg-line shadow-2xl bg-ghg-bg2",
+        className,
+      )}
+      style={{ aspectRatio: String(ratio ?? 2 / 3) }}
+    >
+      {src ? (
+        <img
+          src={src}
+          alt=""
+          onLoad={(e) => {
+            const img = e.currentTarget;
+            if (!img.naturalWidth || !img.naturalHeight) return;
+            // 0.3 … 2.0 = von sehr hoch bis breiter als 16:9
+            const r = Math.min(2, Math.max(0.3, img.naturalWidth / img.naturalHeight));
+            setRatio(r);
+          }}
+          className="w-full h-full object-cover"
+          draggable={false}
+        />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center p-3 text-center text-ghg-muted">
+          {fallbackText}
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}

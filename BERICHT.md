@@ -1,6 +1,6 @@
 # GHGFlix — Bericht: Server-Überholung, Erkennung, Vorschaubilder, Cloud-Sync
 
-**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.1** · Handy **1.2.0**
+**Stand:** 31.07.2026 · **Versionen:** Desktop **1.0.0** · Server **2.3.1** · Handy **1.3.0**
 
 ---
 
@@ -67,6 +67,50 @@ Drei Sicherungen dagegen:
 
 > **Damit die falsche Serie verschwindet, muss einmal neu eingelesen werden** —
 > siehe Schritt 8 unten. Dein Gesehen-Stand geht dabei nicht verloren.
+
+---
+
+## ⚠️ NACHTRAG 2 — Handy-App-Absturz, Player und Poster-Ränder
+
+### 5. Handy-App stürzte beim Abspielen ab
+
+`NativeSharedObjectNotFoundException` in `App.js:702`. Ursache: expo-video gibt
+das native Player-Objekt frei, sobald der Bildschirm verlassen wird. Der
+Speicher-Timer griff im Aufräum-Teil aber noch einmal auf `player.currentTime`
+zu — und genau dann existierte das Objekt nicht mehr.
+
+Behoben: Position und Dauer werden jetzt fortlaufend in Zwischenspeichern
+mitgeschrieben (gefüttert vom `timeUpdate`-Ereignis). Gespeichert wird
+**ausschließlich** daraus, das native Objekt wird nach dem Verlassen nie mehr
+angefasst. Zusätzlich läuft jeder direkte Zugriff über eine Schutzfunktion,
+und ein Marker stoppt alle Zugriffe, sobald der Bildschirm zu ist.
+
+### 6. Der Handy-Player war zu dürftig
+
+Vorher gab es nur drei Knöpfe und sonst nichts — keine Zeitleiste, keine
+Zeitanzeige, kein Hinweis beim Laden. Jetzt:
+
+- **Fortschrittsleiste zum Ziehen** — antippen oder wischen zum Spulen, mit
+  rotem Griff
+- **Zeitanzeige** links (gelaufen) und rechts (Restzeit)
+- **Ladeanzeige**, solange das Video puffert (vorher schwarzes Bild ohne
+  jede Rückmeldung — man wusste nicht, ob es hängt)
+- **Anzeige „Direkt" / „Umgewandelt"**, damit erkennbar ist, ob der Server
+  gerade rechnen muss
+- Bedienelemente **blenden sich nach 4 Sekunden aus** und kommen bei Tippen
+  zurück
+- Deutlich sichtbarer Abspiel-/Pause-Knopf in Rot, „Nächste Folge" beschriftet
+
+### 7. Schwarze Ränder beim Poster
+
+Der Rahmen auf der Detailseite hatte **fest 2:3**, das Bild lag mit
+„einpassen" darin — ein selbst gewähltes Poster mit anderem Seitenverhältnis
+bekam dadurch Balken oben und unten.
+
+Jetzt misst die App das echte Seitenverhältnis des geladenen Bildes und setzt
+den Rahmen darauf: **keine Balken, und abgeschnitten wird auch nichts.** Die
+Breite bleibt fest, damit das Layout ruhig steht; die Höhe folgt dem Bild
+(sanft begrenzt, damit ein extrem breites Banner die Seite nicht sprengt).
 
 > Der vorherige Bericht zur Masterplan-Umsetzung (16.07.2026) steht in
 > [`PLAN_STATUS.md`](PLAN_STATUS.md).

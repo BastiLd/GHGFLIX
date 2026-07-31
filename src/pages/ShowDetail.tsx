@@ -17,7 +17,7 @@ import { ArtworkDialog } from "../components/ArtworkDialog";
 import { Extras } from "../components/Extras";
 import { IdentifyDialog, type IdentifyTarget } from "../components/IdentifyDialog";
 import { ReassignDialog, type ReassignTarget } from "../components/ReassignDialog";
-import { Button, EmptyState, Modal, SkeletonDetail, TextInput } from "../components/ui";
+import { AutoPoster, Button, EmptyState, Modal, SkeletonDetail, TextInput } from "../components/ui";
 import type { ArtworkTarget, Episode, Progress } from "../lib/types";
 
 export default function ShowDetail() {
@@ -167,15 +167,9 @@ export default function ShowDetail() {
       </div>
 
       <div className="px-10 -mt-32 relative flex gap-8">
-        <div className="w-52 shrink-0 aspect-[2/3] rounded-xl overflow-hidden border border-ghg-line shadow-2xl bg-ghg-bg2">
-          {posterUrl(show.posterPath, "w500") ? (
-            // object-contain: a custom image in a different aspect ratio is
-            // letterboxed instead of cropped ("nichts wird abgeschnitten")
-            <img src={posterUrl(show.posterPath, "w500")!} alt="" className="w-full h-full object-contain" />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center p-3 text-center text-ghg-muted">{show.title}</div>
-          )}
-        </div>
+        {/* Der Rahmen nimmt das echte Seitenverhaeltnis des Bildes an —
+            keine schwarzen Balken, nichts abgeschnitten. */}
+        <AutoPoster src={posterUrl(show.posterPath, "w500")} fallbackText={show.title} />
 
         <div className="flex-1 pt-32">
           <h1 className="text-4xl font-black text-glow">{show.title}</h1>

@@ -12,7 +12,7 @@ import { Extras } from "../components/Extras";
 import { IdentifyDialog, type IdentifyTarget } from "../components/IdentifyDialog";
 import { MovieCardItem } from "../components/cards";
 import { MediaRow } from "../components/MediaRow";
-import { Button, EmptyState, Modal, SkeletonDetail } from "../components/ui";
+import { AutoPoster, Button, EmptyState, Modal, SkeletonDetail } from "../components/ui";
 import { useMemo } from "react";
 
 export default function MovieDetail() {
@@ -95,12 +95,9 @@ export default function MovieDetail() {
       </div>
 
       <div className="px-10 -mt-32 relative flex gap-8">
-        <div className="relative w-52 shrink-0 aspect-[2/3] rounded-xl overflow-hidden border border-ghg-line shadow-2xl bg-ghg-bg2">
-          {posterUrl(m.posterPath, "w500") ? (
-            <img src={posterUrl(m.posterPath, "w500")!} alt="" className="w-full h-full object-contain" />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center p-3 text-center text-ghg-muted">{m.title}</div>
-          )}
+        {/* Der Rahmen nimmt das echte Seitenverhaeltnis des Bildes an —
+            keine schwarzen Balken, nichts abgeschnitten. */}
+        <AutoPoster src={posterUrl(m.posterPath, "w500")} fallbackText={m.title}>
           {resume && prog.data && prog.data.durationSec > 0 && (
             <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/60">
               <div
@@ -109,7 +106,7 @@ export default function MovieDetail() {
               />
             </div>
           )}
-        </div>
+        </AutoPoster>
 
         <div className="flex-1 pt-32">
           <h1 className="text-4xl font-black text-glow">{m.title}</h1>

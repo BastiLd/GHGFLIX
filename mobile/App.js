@@ -654,16 +654,54 @@ function MovieScreen({ api, img, push, pop, id }) {
 }
 
 // ── player ──────────────────────────────────────────────────────────────────
+//
+// WICHTIG ZUM ABSTURZ "NativeSharedObjectNotFoundException":
+// expo-video gibt das native Player-Objekt frei, sobald der Bildschirm
+// verlassen wird. Jeder spätere Zugriff auf `player.currentTime` &Co. wirft
+// dann. Genau das passierte im Aufräum-Teil des Speicher-Timers.
+//
+// Lösung: Position und Dauer werden fortlaufend in Refs gespiegelt (gefüttert
+// vom timeUpdate-Ereignis). Gespeichert wird NUR aus diesen Refs — nach dem
+// Verlassen wird das native Objekt also nie mehr angefasst. Zusätzlich läuft
+// jeder direkte Zugriff über `safe()`.
 function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, nextEp }) {
   useKeepAwake();
   const [info, setInfo] = useState(null);
   const [resume, setResume] = useState(0);
-  // AV-20: transcode stream starts at this position. Requires the server's
-  // accurate-seek fix (server/src/stream.js) — the stream then really starts
-  // at the requested t, so offset == requested position holds.
+  const [uiVisible, setUiVisible] = useState(true);
+  const [playing, setPlaying] = useState(true);
+  const [buffering, setBuffering] = useState(true);
+  const [pos, setPos] = useState(0);          // Anzeige
+  const [dur, setDur] = useState(0);
+  const [barWidth, setBarWidth] = useState(0);
+  const [scrubbing, setScrubbing] = useState(false);
+  const [scrubT, setScrubT] = useState(0);
+
+  // AV-20: Beim Umwandeln startet der Datenstrom an dieser Stelle.
   const offsetRef = useRef(0);
   const modeRef = useRef("direct");
-  const [uiVisible, setUiVisible] = useState(true);
+  const posRef = useRef(0);     // letzte bekannte Position (überlebt den Player)
+  const durRef = useRef(0);
+  const aliveRef = useRef(true); // false, sobald der Bildschirm verlassen wurde
+  const hideRef = useRef(null);
+
+  /** Jeder Zugriff auf das native Player-Objekt — niemals ungeschützt. */
+  const safe = (fn, fallback = undefined) => {
+    if (!aliveRef.current) return fallback;
+    try {
+      return fn();
+    } catch {
+      return fallback;
+    }
+  };
+
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      if (hideRef.current) clearTimeout(hideRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -672,7 +710,11 @@ function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, n
       const at = saved && !saved.watched && saved.position > 30 && saved.position < (saved.duration || 1e9) * 0.95 ? saved.position : 0;
       modeRef.current = i.direct ? "direct" : "transcode";
       offsetRef.current = i.direct ? 0 : at;
+      posRef.current = at;
+      durRef.current = i.duration || 0;
       setResume(at);
+      setDur(i.duration || 0);
+      setPos(at);
       setInfo(i);
     })().catch(() => {});
   }, [api, type, id]);
@@ -682,75 +724,123 @@ function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, n
     modeRef.current === "direct" ? `${base}${i.directUrl}${tok}&profile=1` : `${base}${i.transcodeUrl}${tok}&profile=1&t=${Math.floor(t)}`;
 
   const player = useVideoPlayer(null, (p) => {
-    p.timeUpdateEventInterval = 5;
+    p.timeUpdateEventInterval = 1; // 1 s -> flüssige Fortschrittsleiste
   });
 
-  // load source once info arrives
+  // Quelle laden, sobald die Infos da sind
   useEffect(() => {
     if (!info) return;
-    player.replace(srcFor(info, resume));
-    player.play();
+    safe(() => {
+      player.replace(srcFor(info, resume));
+      player.play();
+    });
     if (modeRef.current === "direct" && resume > 0) {
-      const t = setTimeout(() => {
-        player.currentTime = resume;
-      }, 600);
+      const t = setTimeout(() => safe(() => { player.currentTime = resume; }), 600);
       return () => clearTimeout(t);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [info]);
 
-  const position = () => offsetRef.current + (player.currentTime || 0);
-  const duration = info?.duration || player.duration || 0;
+  // Position/Dauer/Zustand fortlaufend spiegeln
+  useEffect(() => {
+    const subs = [];
+    safe(() => {
+      subs.push(
+        player.addListener("timeUpdate", ({ currentTime }) => {
+          if (!aliveRef.current) return;
+          const p = offsetRef.current + (currentTime || 0);
+          posRef.current = p;
+          setPos(p);
+          if (!durRef.current) {
+            const d = safe(() => player.duration, 0) || 0;
+            if (d) { durRef.current = d; setDur(d); }
+          }
+        }),
+      );
+      subs.push(
+        player.addListener("playingChange", ({ isPlaying }) => aliveRef.current && setPlaying(!!isPlaying)),
+      );
+      subs.push(
+        player.addListener("statusChange", ({ status }) => {
+          if (!aliveRef.current) return;
+          setBuffering(status === "loading");
+          // Direktwiedergabe klappt nicht -> auf Umwandeln umschalten
+          if (status === "error" && modeRef.current === "direct" && info) {
+            modeRef.current = "transcode";
+            offsetRef.current = posRef.current;
+            safe(() => {
+              player.replace(srcFor(info, posRef.current));
+              player.play();
+            });
+          }
+        }),
+      );
+    });
+    return () => subs.forEach((s) => { try { s.remove(); } catch { /* schon weg */ } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info]);
 
+  /** Speichern liest AUSSCHLIESSLICH die Refs — kein nativer Zugriff. */
   const save = useCallback(
     (watched = false) => {
-      const dur = duration;
-      if (!dur) return;
-      const done = watched || position() >= dur * 0.95;
-      api("/api/progress", { method: "POST", body: { mediaType: type, refId: +id, position: position(), duration: dur, watched: done } }).catch(() => {});
+      const d = durRef.current;
+      const p = posRef.current;
+      if (!d) return;
+      const done = watched || p >= d * 0.95;
+      api("/api/progress", {
+        method: "POST",
+        body: { mediaType: type, refId: +id, position: p, duration: d, watched: done },
+      }).catch(() => {});
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [api, type, id, duration],
+    [api, type, id],
   );
 
   useEffect(() => {
-    const t = setInterval(save, 10000);
+    const t = setInterval(() => save(), 10000);
     return () => {
       clearInterval(t);
-      save();
+      save(); // gefahrlos: greift nur auf Refs zu
     };
   }, [save]);
 
-  // fall back to transcoding when direct play fails
-  useEffect(() => {
-    const sub = player.addListener("statusChange", ({ status }) => {
-      if (status === "error" && modeRef.current === "direct" && info) {
-        modeRef.current = "transcode";
-        offsetRef.current = resume;
-        player.replace(srcFor(info, resume));
-        player.play();
-      }
-    });
-    return () => sub.remove();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [info, resume]);
+  // Bedienelemente nach 4 s ausblenden
+  const wake = useCallback(() => {
+    setUiVisible(true);
+    if (hideRef.current) clearTimeout(hideRef.current);
+    hideRef.current = setTimeout(() => setUiVisible(false), 4000);
+  }, []);
+  useEffect(() => { wake(); }, [wake]);
 
-  const seekBy = (d) => {
-    if (modeRef.current === "direct") player.seekBy(d);
-    else {
-      const t = Math.max(0, position() + d);
-      offsetRef.current = t;
-      player.replace(srcFor(info, t));
-      player.play();
+  const seekTo = (t) => {
+    const target = Math.max(0, Math.min(t, durRef.current || t));
+    posRef.current = target;
+    setPos(target);
+    if (modeRef.current === "direct") {
+      safe(() => { player.currentTime = target - offsetRef.current; });
+    } else {
+      offsetRef.current = target;
+      safe(() => {
+        player.replace(srcFor(info, target));
+        player.play();
+      });
     }
+    wake();
+  };
+  const seekBy = (d) => seekTo(posRef.current + d);
+
+  const togglePlay = () => {
+    safe(() => (player.playing ? player.pause() : player.play()));
+    wake();
   };
 
   const leave = () => {
     save();
+    aliveRef.current = false; // ab hier keine Player-Zugriffe mehr
     pop();
   };
   const playNext = () => {
     save(true);
+    aliveRef.current = false;
     pop();
     if (nextEp) push({ name: "play", type: "episode", id: nextEp.id, title, subtitle: se(nextEp.season, nextEp.episode) + (nextEp.title ? " · " + nextEp.title : "") });
   };
@@ -762,43 +852,77 @@ function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, n
       </View>
     );
 
+  const shown = scrubbing ? scrubT : pos;
+  const pct = dur > 0 ? Math.min(1, Math.max(0, shown / dur)) : 0;
+  const tFromX = (x) => (barWidth > 0 && dur > 0 ? (Math.min(Math.max(x, 0), barWidth) / barWidth) * dur : 0);
+
   return (
     <View style={{ flex: 1, backgroundColor: "#000" }}>
-      <Pressable style={{ flex: 1 }} onPress={() => setUiVisible((v) => !v)}>
+      <Pressable style={{ flex: 1 }} onPress={() => (uiVisible ? setUiVisible(false) : wake())}>
         <VideoView player={player} style={{ flex: 1 }} nativeControls={false} contentFit="contain" allowsFullscreen />
       </Pressable>
+
+      {buffering && (
+        <View pointerEvents="none" style={st.playerSpinner}>
+          <ActivityIndicator color={C.red} size="large" />
+        </View>
+      )}
+
       {uiVisible && (
         <>
           <View style={st.playerTop}>
-            <Pressable onPress={leave} style={st.pbtn}>
+            <Pressable onPress={leave} style={st.pbtn} hitSlop={8}>
               <Text style={{ color: C.text, fontSize: 18 }}>←</Text>
-            </Pressable>
-            <Pressable onPress={leave} style={st.pbtn}>
-              <Text style={{ color: C.text, fontSize: 16 }}>✕</Text>
             </Pressable>
             <View style={{ flex: 1 }}>
               <Text numberOfLines={1} style={{ color: C.text, fontWeight: "700" }}>{title}</Text>
               {!!subtitle && <Text numberOfLines={1} style={{ color: C.muted, fontSize: 12 }}>{subtitle}</Text>}
             </View>
+            <View style={st.playerBadge}>
+              <Text style={{ color: C.muted, fontSize: 11 }}>
+                {modeRef.current === "direct" ? "Direkt" : "Umgewandelt"}
+              </Text>
+            </View>
           </View>
+
           <View style={st.playerBottom}>
-            <Pressable onPress={() => seekBy(-10)} style={st.pbtn}>
-              <Text style={{ color: C.text }}>⏪ 10</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => (player.playing ? player.pause() : player.play())}
-              style={[st.pbtn, { paddingHorizontal: 22 }]}
-            >
-              <Text style={{ color: C.text, fontSize: 22 }}>{player.playing ? "⏸" : "▶"}</Text>
-            </Pressable>
-            <Pressable onPress={() => seekBy(10)} style={st.pbtn}>
-              <Text style={{ color: C.text }}>10 ⏩</Text>
-            </Pressable>
-            {nextEp && (
-              <Pressable onPress={playNext} style={st.pbtn}>
-                <Text style={{ color: C.text }}>⏭</Text>
+            {/* Fortschrittsleiste: tippen oder ziehen zum Spulen */}
+            <View style={st.seekRow}>
+              <Text style={st.timeText}>{fmtTime(shown)}</Text>
+              <View
+                style={st.seekHit}
+                onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
+                onStartShouldSetResponder={() => true}
+                onMoveShouldSetResponder={() => true}
+                onResponderGrant={(e) => { setScrubbing(true); setScrubT(tFromX(e.nativeEvent.locationX)); }}
+                onResponderMove={(e) => setScrubT(tFromX(e.nativeEvent.locationX))}
+                onResponderRelease={(e) => { const t = tFromX(e.nativeEvent.locationX); setScrubbing(false); seekTo(t); }}
+                onResponderTerminate={() => setScrubbing(false)}
+              >
+                <View style={st.seekTrack}>
+                  <View style={[st.seekFill, { width: `${pct * 100}%` }]} />
+                  <View style={[st.seekKnob, { left: `${pct * 100}%` }]} />
+                </View>
+              </View>
+              <Text style={st.timeText}>{dur ? "-" + fmtTime(Math.max(0, dur - shown)) : "--:--"}</Text>
+            </View>
+
+            <View style={st.playerButtons}>
+              <Pressable onPress={() => seekBy(-10)} style={st.pbtn} hitSlop={8}>
+                <Text style={{ color: C.text }}>« 10</Text>
               </Pressable>
-            )}
+              <Pressable onPress={togglePlay} style={[st.pbtn, st.pbtnMain]} hitSlop={8}>
+                <Text style={{ color: "#fff", fontSize: 22 }}>{playing ? "❚❚" : "▶"}</Text>
+              </Pressable>
+              <Pressable onPress={() => seekBy(10)} style={st.pbtn} hitSlop={8}>
+                <Text style={{ color: C.text }}>10 »</Text>
+              </Pressable>
+              {nextEp && (
+                <Pressable onPress={playNext} style={st.pbtn} hitSlop={8}>
+                  <Text style={{ color: C.text }}>Nächste ▶</Text>
+                </Pressable>
+              )}
+            </View>
           </View>
         </>
       )}
@@ -830,6 +954,16 @@ const st = StyleSheet.create({
   epImg: { width: 110, height: 62, borderRadius: 8, backgroundColor: C.surface },
   backBtn: { position: "absolute", top: 50, left: 14, backgroundColor: "#00000088", borderRadius: 10, padding: 8, zIndex: 5 },
   playerTop: { position: "absolute", top: 0, left: 0, right: 0, flexDirection: "row", alignItems: "center", gap: 10, padding: 14, paddingTop: 48, backgroundColor: "#000000aa" },
-  playerBottom: { position: "absolute", bottom: 0, left: 0, right: 0, flexDirection: "row", justifyContent: "center", gap: 14, padding: 18, paddingBottom: 34, backgroundColor: "#000000aa" },
+  playerBottom: { position: "absolute", bottom: 0, left: 0, right: 0, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 30, backgroundColor: "#000000cc" },
   pbtn: { backgroundColor: "#ffffff22", borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, justifyContent: "center" },
+  pbtnMain: { backgroundColor: C.red, paddingHorizontal: 26 },
+  playerButtons: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 14, marginTop: 12 },
+  playerBadge: { backgroundColor: "#ffffff1a", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
+  playerSpinner: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center" },
+  seekRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  seekHit: { flex: 1, height: 30, justifyContent: "center" },
+  seekTrack: { height: 4, backgroundColor: "#ffffff40", borderRadius: 2, justifyContent: "center" },
+  seekFill: { height: 4, backgroundColor: C.red, borderRadius: 2 },
+  seekKnob: { position: "absolute", width: 14, height: 14, borderRadius: 7, backgroundColor: C.red, borderWidth: 2, borderColor: "#fff", marginLeft: -7 },
+  timeText: { color: C.text, fontSize: 12, fontVariant: ["tabular-nums"], minWidth: 46, textAlign: "center" },
 });
