@@ -93,23 +93,41 @@ export function baueUmgebung(basis) {
   /* ── React-Attrappe ────────────────────────────────────────────────── */
   const erzeugtesElement = (type, props, key) => ({ $$typeof: Symbol.for("react.element"), type, props, key });
 
-  const ReactAttrappe = new Proxy(React, {
-    get(ziel, k) {
-      if (hooks[k]) return hooks[k];
-      if (k === "createContext") {
-        return (standard) => {
-          const ctx = { _standard: standard };
-          ctx.Provider = function Provider({ value, children }) {
-            kontextWerte.set(ctx, value);
-            return children;
-          };
-          ctx.Consumer = function Consumer({ children }) { return children(kontextWerte.get(ctx)); };
-          return ctx;
-        };
-      }
-      return ziel[k];
-    },
+  /** Kontext-Attrappe: der Provider merkt sich den Wert, useContext liest ihn. */
+  function createContextAttrappe(standard) {
+    const ctx = { _standard: standard };
+    ctx.Provider = function Provider({ value, children }) {
+      kontextWerte.set(ctx, value);
+      return children;
+    };
+    ctx.Consumer = function Consumer({ children }) { return children(kontextWerte.get(ctx)); };
+    return ctx;
+  }
+
+  /* ACHTUNG, HART ERKAUFTE ERKENNTNIS: Hier stand einmal ein Proxy um React.
+     Der sah richtig aus, wirkte aber nicht.
+     Babel übersetzt `import React, { createContext } from "react"` zu
+     `_interopRequireWildcard(require("react"))`. Diese Hilfsfunktion KOPIERT
+     die Eigenschaften des Moduls in ein frisches Objekt — die Attrappen aus
+     dem Proxy gingen dabei verloren und fokus.js bekam den ECHTEN
+     React-Kontext. Der echte useContext lieferte dann brav den Standardwert
+     (null), der FokusProvider setzte nie etwas, und der Test meldete
+     „Fokus-Kern nicht erreichbar" — obwohl an der App selbst nichts fehlte.
+     Ein Test, der aus dem falschen Grund fehlschlägt, ist schlimmer als gar
+     keiner: Man sucht den Fehler dort, wo keiner ist.
+
+     Deshalb jetzt ein ganz gewöhnliches Objekt. `__esModule: true` sorgt
+     zusätzlich dafür, dass _interopRequireWildcard es unverändert
+     zurückgibt, statt es zu kopieren. */
+  const ReactAttrappe = {};
+  for (const k of Object.getOwnPropertyNames(React)) {
+    try { ReactAttrappe[k] = React[k]; } catch { /* nicht lesbar — überspringen */ }
+  }
+  Object.assign(ReactAttrappe, hooks, {
+    createContext: createContextAttrappe,
+    __esModule: true,
   });
+  ReactAttrappe.default = ReactAttrappe;
 
   /* ── Native Attrappen: geben ihre Kinder weiter ────────────────────── */
   const durchreicher = (name) => {
@@ -196,7 +214,14 @@ export function baueUmgebung(basis) {
 
   Module._load = function (name, parent, isMain) {
     if (attrappen[name]) return attrappen[name];
-    if (name.startsWith(".") || name.startsWith("/")) {
+    /* path.isAbsolute statt name.startsWith("/"): Unter Windows sind absolute
+       Pfade "C:\..." und beginnen NICHT mit einem Schrägstrich. Ohne diese
+       Änderung fiel jede übersetzte Datei in den Zweig ganz unten und bekam
+       statt des echten Moduls die react-native-Attrappe zurück. Die liefert
+       zu JEDEM Namen eine Funktion — dadurch bestand jede Prüfung scheinbar,
+       und `useFokusSystem()` gab immer null zurück. Der Test prüfte also in
+       Wahrheit gar nichts mehr. */
+    if (name.startsWith(".") || path.isAbsolute(name)) {
       const elt = herkunft.get(parent?.filename) || parent?.filename;
       const roh = name.startsWith(".") ? path.resolve(path.dirname(elt || basis), name) : name;
       const kand = [roh, roh + ".js"];

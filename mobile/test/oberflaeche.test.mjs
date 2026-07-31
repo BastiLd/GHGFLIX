@@ -16,9 +16,12 @@
  *   node test/oberflaeche.test.mjs
  */
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { baueUmgebung } from "./mini-renderer.mjs";
 
-const basis = path.resolve(new URL(".", import.meta.url).pathname, "..");
+/* fileURLToPath statt .pathname — siehe Erklaerung in laden.test.mjs
+   (unter Windows entstuende sonst "C:\C:\Users\..."). */
+const basis = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const U = baueUmgebung(basis);
 
 let gut = 0;

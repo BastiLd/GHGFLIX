@@ -375,6 +375,33 @@ function showFolderOf(root, filePath) {
 // ── Aufräumen ───────────────────────────────────────────────────────────────
 
 /**
+ * Pfad vereinheitlichen: Backslashes zu Schrägstrichen, Schrägstrich am Ende
+ * weg. Unter Windows zusätzlich klein geschrieben, weil dort "C:\Filme" und
+ * "c:\filme" derselbe Ordner sind.
+ *
+ * WICHTIG: Jeder Pfadvergleich in dieser Datei MUSS hierüber laufen. Genau
+ * hier lag ein stiller Datenverlust-Fehler: Die Sicherung in pruneMissing()
+ * verglich einen VEREINHEITLICHTEN Bibliothekspfad per SQL-LIKE gegen die ROH
+ * gespeicherten Dateipfade. Unter Linux fällt das nicht auf (dort ändert das
+ * Vereinheitlichen nichts), unter Windows fand der Vergleich nie etwas — die
+ * Sicherung griff dort also gar nicht und ein leerer Mount hätte die
+ * Bibliothek gelöscht. Eine Sicherung gegen Datenverlust darf nicht vom
+ * Betriebssystem abhängen.
+ */
+const pfadNorm = (s) => {
+  const n = String(s || "").replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? n.toLowerCase() : n;
+};
+
+/** Liegt `pfad` innerhalb von `wurzel`? (Mit Trennzeichen, damit "/media/tv"
+ *  nicht auch "/media/tv-alt" einschließt.) */
+const liegtUnter = (pfad, wurzel) => {
+  const p = pfadNorm(pfad);
+  const w = pfadNorm(wurzel);
+  return p === w || p.startsWith(w + "/");
+};
+
+/**
  * Zeilen entfernen, deren Datei verschwunden ist — offline Platten ausgenommen.
  *
  * ZWEITE SICHERUNG (wichtig in Docker): Ein Bind-Mount auf einen Host-Pfad, den
@@ -386,6 +413,10 @@ function showFolderOf(root, filePath) {
  */
 function pruneMissing(db, foundPerLibrary = new Map()) {
   const libs = listLibraries();
+  // Einmal laden statt pro Bibliothek — und in JS vergleichen, damit für beide
+  // Seiten dieselbe Vereinheitlichung gilt (siehe pfadNorm).
+  const alleFilmPfade = db.prepare("SELECT path FROM movies").all().map((r) => r.path);
+  const alleFolgenPfade = db.prepare("SELECT path FROM episodes").all().map((r) => r.path);
   const offlineRoots = libs
     .filter((l) => {
       try {
@@ -395,11 +426,8 @@ function pruneMissing(db, foundPerLibrary = new Map()) {
       }
       // existiert, lieferte aber nichts — hatten wir vorher etwas davon?
       if ((foundPerLibrary.get(l.path) ?? 0) > 0) return false;
-      const prefix = l.path.replace(/\\/g, "/").replace(/\/+$/, "") + "/";
-      const had =
-        l.kind === "movie"
-          ? db.prepare("SELECT COUNT(*) c FROM movies WHERE path LIKE ?").get(prefix + "%").c
-          : db.prepare("SELECT COUNT(*) c FROM episodes WHERE path LIKE ?").get(prefix + "%").c;
+      const quelle = l.kind === "movie" ? alleFilmPfade : alleFolgenPfade;
+      const had = quelle.filter((p) => liegtUnter(p, l.path)).length;
       if (had > 0) {
         console.warn(
           `[scan] ACHTUNG: "${l.path}" ist eingebunden, enthält aber keine Videos mehr (vorher ${had}). ` +
@@ -409,13 +437,12 @@ function pruneMissing(db, foundPerLibrary = new Map()) {
       }
       return false;
     })
-    .map((l) => l.path.replace(/\\/g, "/").replace(/\/+$/, ""));
+    .map((l) => l.path);
 
-  // Vergleich MIT Trennzeichen, sonst würde "/media/tv" auch "/media/tv-alt" schützen
-  const isOffline = (p) => {
-    const n = p.replace(/\\/g, "/");
-    return offlineRoots.some((r) => n === r || n.startsWith(r + "/"));
-  };
+  // Vergleich MIT Trennzeichen, sonst würde "/media/tv" auch "/media/tv-alt"
+  // schützen — steckt in liegtUnter(), damit hier und bei der Sicherung oben
+  // garantiert dieselbe Regel gilt.
+  const isOffline = (p) => offlineRoots.some((r) => liegtUnter(p, r));
   const gone = (p) => {
     try {
       statSync(p);

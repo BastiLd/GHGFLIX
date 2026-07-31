@@ -30,8 +30,13 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import Module from "node:module";
+import { fileURLToPath } from "node:url";
 
-const basis = path.resolve(new URL(".", import.meta.url).pathname, "..");
+/* fileURLToPath statt .pathname: Unter Windows liefert .pathname
+   "/C:/Users/..." — mit fuehrendem Schraegstrich. path.resolve haelt das fuer
+   einen Pfad ab Laufwerkswurzel und macht daraus "C:\C:\Users\..."; der Test
+   bricht dann mit "Cannot find module" ab, obwohl alles da ist. */
+const basis = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const req = createRequire(path.join(basis, "package.json"));
 const babel = req("@babel/core");
 
@@ -109,7 +114,13 @@ Module._load = function (name, parent, isMain) {
   if (attrappen[name]) return attrappen[name];
   if (reactCache[name]) return reactCache[name];
   // Eigene Dateien: erst übersetzen, dann laden
-  if (name.startsWith(".") || name.startsWith("/")) {
+  /* path.isAbsolute statt name.startsWith("/"): Unter Windows sind absolute
+     Pfade "C:\..." und beginnen nicht mit Schrägstrich. Ohne das landete jede
+     übersetzte Datei beim Zweig ganz unten und bekam die react-native-
+     Attrappe zurück. Die liefert zu jedem Namen eine Funktion — die
+     Export-Prüfungen unten bestanden dann immer, ohne je den echten Code
+     angefasst zu haben. */
+  if (name.startsWith(".") || path.isAbsolute(name)) {
     /* Die übersetzte Fassung liegt im Temp-Ordner, ihre relativen Importe
        ("./fokus-kern.js") beziehen sich aber auf den ursprünglichen Ort im
        Projekt. Deshalb wird für die Auflösung immer das ORIGINAL als

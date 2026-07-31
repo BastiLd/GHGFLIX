@@ -1,7 +1,8 @@
 {
   "cli": {
     "version": ">= 12.0.0",
-    "appVersionSource": "remote"
+    "_hinweis_appVersionSource": "'local' = die versionCode-Zahl aus app.json gilt. Vorher stand hier 'remote': dann fuehrt EAS die Zahl auf seinem Server und ignoriert app.json. Weil dieser Serverzaehler niedriger stehen konnte als die auf dem Fernseher bereits installierte Fassung, war jeder neue Bau aus Android-Sicht ein Rueckschritt - die Installation brach dann ohne brauchbare Meldung ab ('App nicht installiert'). Mit 'local' steht die Zahl sichtbar in app.json und laesst sich nachvollziehen.",
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
@@ -12,19 +13,23 @@
       }
     },
     "preview": {
+      "_hinweis": "Das ist das Profil fuer Handy und Fernseher. 'apk', weil sich ein App-Bundle (aab) nicht per Downloader installieren laesst.",
       "distribution": "internal",
+      "channel": "preview",
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
       "autoIncrement": true,
+      "channel": "production",
       "android": {
         "buildType": "app-bundle"
       }
     },
     "diagnose": {
       "distribution": "internal",
+      "channel": "preview",
       "android": {
         "buildType": "apk"
       },

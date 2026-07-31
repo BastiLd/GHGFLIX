@@ -1,10 +1,13 @@
 # PLAN_STATUS — Umsetzungsstand des GHGFlix-Masterplans
 
-Referenz: [`GHGFlix_Masterplan.md`](GHGFlix_Masterplan.md) · Stand: 16.07.2026 ·
+Referenz: [`GHGFlix_Masterplan.md`](GHGFlix_Masterplan.md) · Stand: 31.07.2026 ·
 Branches: `fix/supabase-sync` → `feat/arch-consolidation` → `feat/mobile-v2` →
-`feat/tv-mode` → `feat/server-hardening` → `chore/docs-qa` (aufeinander aufbauend —
-`chore/docs-qa` enthält ALLES; zum Veröffentlichen in `main` bzw.
-`feature/zimaos-docker-server` mergen, damit der Docker-CI-Build anspringt).
+`feat/tv-mode` → `feat/server-hardening` → `chore/docs-qa` → `feature/zimaos-docker-server`
+(aufeinander aufbauend, verifiziert per `git merge-base --is-ancestor` — keine Divergenzen).
+`feature/zimaos-docker-server` enthält ALLES und ist der aktuelle Arbeitsstand.
+**Offen: `main` wurde seit v0.9.6 (07.07.) nie aktualisiert** — bewusst nicht
+gemergt, bevor Phase 7 unten nicht abgeschlossen ist (main soll nur einen
+lauffähigen Stand bekommen).
 Gesamtbericht: [`BERICHT.md`](BERICHT.md)
 
 ## Entscheidungen (Abschnitt 3 des Plans — empfohlene Defaults verwendet, robert kann jederzeit ändern)
@@ -115,6 +118,83 @@ Gesamtbericht: [`BERICHT.md`](BERICHT.md)
 | QA-001/002 etc. | ⏳ | **Manuelle Tests durch robert** — Checkliste benutzen |
 | OPS-004/005/SRV-016 | ✅ | War schon da: Multi-Arch-Docker-Build (amd64+arm64) in CI |
 
+## Zwischenstand 17.–31.07. (undokumentiert nachgetragen)
+
+Zwischen Phase 6 (16.07.) und heute lief ohne PLAN_STATUS-Pflege eine lange
+Session direkt auf `feature/zimaos-docker-server`: Server-seitige Erkennung neu
+1:1 vom Desktop portiert (Show/Season-Gruppierung, Poster/Banner-Trennung,
+Sprite-Vorschaubilder), Supabase-Sync-Kernbug behoben (lokal↔Cloud-Profil-
+Verknüpfung), komplette Mobile-App-Neuentwicklung (9 Module statt 1 Datei,
+Player, TV-Fernbedienungs-Fokussystem, Ton-/Untertitelspuren, Einstellungen,
+QR-Kopplung, Selbst-Update), VetNow-Studio-Integration (App 3.1.0 / Server
+2.4.0). Dabei sind **frühere Backlog-Punkte als erledigt gemeldet worden, die
+es nicht sind** (TV-001…TV-055 native App, MOB-Untertitel/QR-Pairing) — siehe
+Phase 7. Diese Lücke ist der Grund, warum PLAN_STATUS ab jetzt wieder gepflegt
+werden sollte, statt Fortschritt nur in Chat-Zusammenfassungen zu behaupten.
+
+## Phase 7 — Stabilisierung ✅ (umgesetzt 31.07.2026)
+
+Ziel: App läuft wieder zuverlässig, bevor an Umfang oder Politur
+weitergearbeitet wird. Jeder Punkt wurde vor dem Fix reproduziert und nach dem
+Fix nachgewiesen — nicht nur behauptet.
+
+| ID | Status | Notiz |
+|---|---|---|
+| DOCK-001 | ✅ | **Studio-Port-Bug.** `vetnow-app/studio/lib/proc.js` `stop()` beendete unter Linux nur den getrackten Top-Level-PID per SIGTERM. Da der Start als `bash -c "… && npx expo start"` läuft, ist das die Schale — der eigentliche Metro-Prozess überlebte als Waise und hielt den Port. Der nächste Start meldete „Port is being used", `npx expo` durfte mit `CI=1` nicht nachfragen, übersprang den Dev-Server und endete trotzdem mit Code 0 (sah also erfolgreich aus). Behoben: Start mit `detached: true` (eigene Prozessgruppe), Stopp per `process.kill(-pid)` mit SIGKILL-Nachschlag, plus Preflight, der einen von früher belegten Port über `/proc` findet und freiräumt. **Nachgewiesen** in `studio/test/proc.test.js` — läuft im echten `node:22-bookworm`-Container: Test 1 reproduziert den Fehler, Test 2–5 belegen die Behebung inkl. „stoppen und sofort neu starten" und „Altlast aufräumen ohne Containerneustart". 15/15 grün. |
+| MOB-050 | ✅ | SDK-54-Upgrade jetzt fest in `mobile/package.json` + `package-lock.json` (expo 54.0.36, RN 0.81.5, react 19.1.0, alle expo-Module auf die von `expo@54/bundledNativeModules.json` vorgegebenen Fassungen). Vorher steckte es nur als Handbefehl im Container und wurde bei jedem Studio-Start durch `git reset --hard` verworfen. Vorher geprüft, dass der Player die Umstellung überlebt: die Typdefinitionen von `expo-video` 3.0.16 enthalten alle benutzten Bestandteile (`replace`, `availableAudioTracks`, `audioTrack`, Ereignisse `timeUpdate`/`playingChange`/`statusChange`) unverändert. `npx expo-doctor`: 18/18. |
+| MOB-050b | ✅ | **Folgefehler des SDK-Wechsels, vorher gefunden statt hinterher:** `expo-file-system` 19 hat `downloadAsync`/`getContentUriAsync`/`cacheDirectory` nach `expo-file-system/legacy` verschoben. `src/update.js` hätte still auf „nur Browser öffnen" zurückgeschaltet — das bequeme Selbst-Installieren wäre kommentarlos verschwunden. Jetzt Weiche mit Rückfall auf den alten Pfad. Außerdem: `expo-intent-launcher` wurde von `update.js` benutzt, stand aber **nie** in den Abhängigkeiten — der Weg „App installiert sich selbst" konnte also noch nie funktionieren. Ergänzt. |
+| SRV-040 | ✅ | **QR-Kopplung war totes Programm.** `/api/pair/start`, `/api/pair/check` und `/koppeln` steckten im `if (p === "/api/apk" && POST)`-Block. Eine Anfrage kann nie beides sein → über HTTP nie erreichbar, obwohl `koppeln.js` für sich 32 grüne Tests hatte. Herausgelöst; die Anmeldepflicht des Uploads blieb erhalten. Neuer `server/test/routen.test.mjs` startet den **echten** Server und klopft die Routen von außen ab — gegen den alten Stand 9 Fehlschläge, gegen den neuen 16/16 grün. Genau diese Testebene (HTTP statt Modul) hat gefehlt. |
+| MOB-051 | ✅ | **APK ließ sich nicht installieren.** `eas.json` stand auf `appVersionSource: "remote"`: dann führt EAS den versionCode auf dem Server und ignoriert `app.json`. Stand dieser Zähler niedriger als die auf dem Fernseher installierte 13, war jeder neue Bau aus Android-Sicht ein Rückschritt → Installation bricht ohne brauchbare Meldung ab. Jetzt `"local"` + `versionCode: 14` sichtbar in `app.json`. Zusätzlich erklärt `/app` (Installationsseite) jetzt direkt am Fernseher den Fall „Download geht, Installieren nicht" samt Lösung (alte Fassung zuerst deinstallieren) — der Hinweis stand bisher nur im PowerShell-Skript, das am TV niemand sieht. |
+| SRV-041 | ✅ | **Stiller Datenverlust-Fehler, beim Testlauf entdeckt.** Die Sicherung gegen leere Docker-Mounts in `scanner.js` verglich einen vereinheitlichten Bibliothekspfad per SQL-`LIKE` gegen die roh gespeicherten Dateipfade. Unter Linux fällt das nicht auf, unter Windows traf der Vergleich nie zu — die Sicherung griff dort also überhaupt nicht und ein leerer Mount hätte die Bibliothek gelöscht. Beide Seiten laufen jetzt über `pfadNorm`/`liegtUnter`, dieselbe Regel auch für `isOffline`. Der zugehörige Test war rot und ist jetzt grün. |
+| TEST-001 | ✅ | **Zwei Testhelfer prüften unter Windows in Wahrheit gar nichts.** Der Modul-Hook in `mini-renderer.mjs` und `laden.test.mjs` erkannte absolute Pfade an `name.startsWith("/")` — unter Windows („C:\…") nie zutreffend. Jede übersetzte Datei bekam dadurch statt des echten Moduls die react-native-Attrappe, die zu **jedem** Namen eine Funktion liefert: alle Export-Prüfungen bestanden scheinbar, und `useFokusSystem()` gab immer `null` zurück. Von den 34 Oberflächen-Tests liefen faktisch nur 7. Behoben über `path.isAbsolute`; zusätzlich die React-Attrappe von einem Proxy auf ein einfaches Objekt umgestellt, weil Babels `_interopRequireWildcard` die Eigenschaften kopiert und dabei jeden Proxy aushebelt. Jetzt laufen alle 34 wirklich durch (Poster anwählbar, Player-Leiste erreichbar, Steuerkreuz). |
+| OPS-020 | ✅ | Arbeit lief direkt in `C:\Users\basti\Documents\GHGFlix` auf `feature/zimaos-docker-server` (die Claude-Worktree hing an einem 29 Commits alten `main`). |
+
+**Testlage nach Phase 7:** Server 5 Dateien grün (u. a. 16 Routen-, 32 Kopplungs-,
+41 Spuren-Tests), Handy/TV 220 Tests grün (28 Laden, 34 Oberfläche, 43 Fokus,
+20 Netzsuche, 39 Untertitel, 33 QR, 23 Update), Studio 15 Tests grün im
+Linux-Container.
+
+**Nicht am Gerät geprüft (kann diese Umgebung nicht):** ob ein EAS-Bau
+tatsächlich durchläuft, ob die OTA-Auslieferung auf dem Fernseher ankommt und
+ob der Signaturschlüssel bei EAS derselbe geblieben ist. Bleibt der erste
+Punkt der nächsten Sitzung.
+
+## Phase 8 — Build-Pipeline vereinfachen (nach Phase 7)
+
+Ziel: EAS-Free-Tier-Wartezeit nicht mehr im täglichen Testzyklus. Entscheidung
+Nutzer: „einfacher Dev-Client, du entscheidest sonst" → Dev-Client + OTA.
+
+| ID | Status | Notiz |
+|---|---|---|
+| MOB-052 | ✅ (vorbereitet) | `expo-updates` ist eingebaut und in `app.json` konfiguriert (`updates.url` auf das vorhandene EAS-Projekt, `runtimeVersion: "1"` als feste Zahl, `channel` je Bauprofil in `eas.json`). Damit gilt ab dem **nächsten** Bau: reine JavaScript-Änderungen gehen mit `npx eas-cli update --branch preview` in Sekunden an Handy und Fernseher — ohne neuen APK-Bau, ohne Sideload. Ein voller Bau ist nur noch nötig, wenn sich native Bestandteile ändern; dann `runtimeVersion` um eins erhöhen. Bewusst **ohne** `expo-dev-client`: der würde in den Auslieferungsbau den Entwickler-Starter mit hineinziehen, und für schnelles Ausprobieren gibt es ja schon Expo Go im Studio. Steht auf „vorbereitet", weil die Auslieferung erst nach dem ersten Bau mit diesen Einstellungen wirklich belegt ist. |
+| MOB-053 | 📋 | Selbst-Update in der App (fragt den Server nach einer neueren APK) und OTA laufen derzeit nebeneinander. Sinnvoll wäre, dass die App unterscheidet: „nur JS neu" (kommt von selbst per OTA) gegenüber „neue APK nötig" (native Änderung). Solange `runtimeVersion` von Hand gepflegt wird, ist das kosmetisch — beide Wege funktionieren. |
+
+## Phase 9 — Vollständige 1:1-Parität zu Desktop/Plex/Jellyfin (großer Umfang, laut Nutzer „wirklich alles")
+
+Der große Parallel-Audit (7 Subagents: Mobile-Parität, Server-Erkennung/Artwork,
+Supabase-Verifikation, Build/Versionen, Studio-Port-Bug, TV/Web-Parität,
+Desktop-Release-Prozess) ist am **monatlichen Ausgabenlimit** gescheitert (0/7
+Ergebnisse) — nur DOCK-001/MOB-050/SRV-040/MOB-051 oben wurden von Hand
+verifiziert. Der Rest dieser Phase startet ohne vollständige Bestandsaufnahme
+und sollte **zuerst** eine neue, vollständige Prüfung durchführen (Limit
+inzwischen ggf. zurückgesetzt/erhöht), dann gezielt nacharbeiten.
+
+| ID | Status | Notiz |
+|---|---|---|
+| PARITY-001 | 📋 | Vollständige Feature-für-Feature-Prüfung Mobile/TV/Web gegen Desktop: Artwork-/Erkennungsqualität, My List, Suche, Stats, Extras, ContextMenu-Äquivalente, Mascot/Empty-States, MiniPlayer/Scrubber. Auch Desktop-only Extras nachziehen (Bildgrößen-Einstellungen, Intro-Quellmodi) — laut Nutzerentscheidung **nichts bewusst auslassen**. |
+| PARITY-002 | 📋 | Jetzt, wo Mobile/TV überhaupt läuft: erstmals echten Sync von einem Nicht-Windows-Gerät gegenprüfen (`sync_devices` hatte beim Schreiben dieses Eintrags nur 2× „Windows-PC", 0 Mobile/TV-Geräte je synchronisiert). |
+| TV-native-check | 📋 | Nutzer hat sich für **native TV-App als Hauptweg** entschieden (nicht Browser-TV-Modus). PLAN_STATUS stufte die native Android-TV-App zuletzt (Phase 4, 16.07.) als „größtes offenes Stück" ein; die Session danach behauptet, ein komplettes Fokus-/Fernbedienungssystem gebaut zu haben. Das muss verifiziert werden (nicht nur „existiert", sondern Plex/Jellyfin-Qualität) — inkl. TV-001…TV-043/TV-049…055 aus Phase 4 gegenchecken, was davon durch die neue Mobile-App tatsächlich abgedeckt ist. |
+| SYNC-010 | 📋 | Desktop-`device_key` (`src/lib/supabase.ts:342`, `localStorage`) hat sich innerhalb von 6 Stunden zweimal neu generiert (vermutlich bei jedem Rebuild/Reinstall) — `sync_devices` sammelt so Karteileichen. Stabilere Geräte-Identität oder Cleanup/Upsert-by-Machine ergänzen. |
+
+## Phase 10 — Doku/Hygiene (niedrige Priorität)
+
+| ID | Status | Notiz |
+|---|---|---|
+| DOCS-010 | 📋 | Dieses Dokument + `GHGFlix_Masterplan.md`/`BERICHT.md` laufend pflegen statt nur in Chat-Zusammenfassungen zu behaupten — genau diese Lücke hat SRV-040 und die TV-Status-Verwirrung verursacht. |
+| OPS-021 | 📋 | Sobald Phase 7 grün ist: `feature/zimaos-docker-server` → `main` mergen (main ist seit v0.9.6 nicht aktualisiert). |
+| REL-001 | 📋 | Desktop-Auto-Updater prüfen (`tauri-plugin-updater` o. ä.) statt jedes Mal `scripts\rebuild-windows.ps1` manuell laufen zu lassen. |
+
 ## Versionen
 
-Desktop-App **0.9.9** · Server **2.2.0** · Mobile **1.1.0** (versionCode 2)
+Desktop-App **v0.9.6** (zuletzt auf `main`) · `feature/zimaos-docker-server`:
+App **3.1.0** · Server **2.4.0** — main hat diesen Stand noch nicht (OPS-021).

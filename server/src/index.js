@@ -359,18 +359,18 @@ async function handle(req, res) {
       canUpload: !!password(),
     });
   }
-  // App-Datei vom PC hochladen — spart das Herumschieben im Datei-Manager.
-  // NUR mit gesetztem Server-Passwort UND gültigem Token: ohne Passwort wäre
-  // das ein offenes Tor, um eine Datei auf dem NAS abzulegen.
-  if (p === "/api/apk" && req.method === "POST") {
-    if (!password()) {
-      return json(res, { error: "Hochladen nur mit gesetztem Server-Passwort (GHGFLIX_PASSWORD)." }, 403);
-    }
-    /* ── Kopplung: Zugang ohne Tippen am Fernseher ───────────────────────
+  /* ── Kopplung: Zugang ohne Tippen am Fernseher ───────────────────────
      Der Fernseher holt sich einen Code, zeigt ihn als QR-Code, das Handy
      scannt ihn und gibt das Passwort ein. Details in src/koppeln.js.
      Diese drei Endpunkte liegen bewusst VOR der Token-Pruefung — sie sind
-     ja gerade dafuer da, ein Token zu bekommen. */
+     ja gerade dafuer da, ein Token zu bekommen.
+
+     ACHTUNG: Diese drei Blöcke steckten bis 07/2026 versehentlich INNERHALB
+     des /api/apk-Blocks. Eine Anfrage kann nie gleichzeitig /api/apk UND
+     /api/pair/start sein — die Kopplung war dadurch über HTTP nie
+     erreichbar, obwohl koppeln.js für sich getestet war und die Funktion
+     als fertig gemeldet wurde. Nicht wieder hineinschieben:
+     test/routen.test.mjs prüft genau diese Erreichbarkeit. */
   if (p === "/api/pair/start" && req.method === "POST") {
     if (!password()) return json(res, { error: "Ohne Server-Passwort ist keine Kopplung noetig." }, 400);
     const body = await readBody(req).catch(() => ({}));
@@ -409,7 +409,14 @@ async function handle(req, res) {
     return res.end(kopplungsSeite({ code: String(url.searchParams.get("code") || "").toUpperCase() }));
   }
 
-  if (!authed(req, url)) return json(res, { error: "unauthorized" }, 401);
+  // App-Datei vom PC hochladen — spart das Herumschieben im Datei-Manager.
+  // NUR mit gesetztem Server-Passwort UND gültigem Token: ohne Passwort wäre
+  // das ein offenes Tor, um eine Datei auf dem NAS abzulegen.
+  if (p === "/api/apk" && req.method === "POST") {
+    if (!password()) {
+      return json(res, { error: "Hochladen nur mit gesetztem Server-Passwort (GHGFLIX_PASSWORD)." }, 403);
+    }
+    if (!authed(req, url)) return json(res, { error: "unauthorized" }, 401);
     const dir = join(process.env.DATA_DIR || "/data", "apk");
     const target = join(dir, "GHGFlix.apk");
     const tmp = target + ".teil";

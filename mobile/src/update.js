@@ -82,6 +82,35 @@ export async function pruefeUpdate(api, eigene) {
 }
 
 /**
+ * Zugriff auf die Datei-Funktionen von Expo.
+ *
+ * ACHTUNG, STOLPERSTELLE: Ab SDK 54 (expo-file-system 19) steckt hinter
+ * "expo-file-system" eine komplett neue Schnittstelle (File/Directory). Die
+ * hier gebrauchten Funktionen downloadAsync / getContentUriAsync /
+ * cacheDirectory gibt es dort nur noch unter "expo-file-system/legacy".
+ *
+ * Ohne diese Weiche wäre downloadAsync nach dem SDK-Wechsel einfach
+ * `undefined` gewesen. Auffallen würde das kaum: die Prüfung unten hätte
+ * still auf Weg 2 umgeschaltet und nur noch den Browser geöffnet — das
+ * bequeme „App installiert sich selbst" wäre lautlos verschwunden.
+ */
+function dateiSystem() {
+  try {
+    // eslint-disable-next-line global-require
+    const alt = require("expo-file-system/legacy");
+    if (alt?.downloadAsync) return alt;
+  } catch {
+    /* SDK 53: diesen Unterpfad gibt es dort noch nicht — unten weiter */
+  }
+  try {
+    // eslint-disable-next-line global-require
+    return require("expo-file-system");
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Die neue Fassung holen.
  *
  * Erst wird versucht, sie direkt zur Installation zu übergeben (falls
@@ -98,8 +127,7 @@ export async function starteUpdate(basis, pfad = "/apk", token = "") {
   try {
     // eslint-disable-next-line global-require
     const intent = require("expo-intent-launcher");
-    // eslint-disable-next-line global-require
-    const fs = require("expo-file-system");
+    const fs = dateiSystem();
     if (intent?.startActivityAsync && fs?.downloadAsync) {
       const ziel = fs.cacheDirectory + "GHGFlix-update.apk";
       const { uri } = await fs.downloadAsync(url, ziel);

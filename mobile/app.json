@@ -2,18 +2,22 @@
   "expo": {
     "name": "GHGFlix",
     "slug": "ghgflix",
-    "version": "3.1.0",
+    "version": "3.2.0",
     "orientation": "default",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0b0b0f",
-    "_hinweis_newArch": "Expo SDK 53 aktiviert die neue React-Native-Architektur (Fabric) standardmaessig. Auf guenstigen Android-TV-Geraeten fuehrt das haeufig zu einem sofortigen Absturz beim Start (Bildschirm kurz schwarz, dann zurueck ins Menue). Die bewaehrte Architektur ist in SDK 53 voll unterstuetzt - deshalb hier bewusst abgeschaltet.",
     "newArchEnabled": false,
+    "runtimeVersion": "1",
     "splash": {
       "backgroundColor": "#0b0b0f"
     },
     "plugins": [
       "./plugins/withAndroidTv.js"
     ],
+    "updates": {
+      "url": "https://u.expo.dev/b14ed30d-3ecc-4465-ac79-7988b90ab0d8",
+      "fallbackToCacheTimeout": 0
+    },
     "ios": {
       "supportsTablet": true,
       "buildNumber": "1.1.0",
@@ -24,13 +28,20 @@
       }
     },
     "android": {
-      "usesCleartextTraffic": true,
       "package": "com.bastild.ghgflix",
-      "versionCode": 13
+      "versionCode": 14
     },
     "extra": {
       "eas": {
         "projectId": "b14ed30d-3ecc-4465-ac79-7988b90ab0d8"
+      },
+      "hinweise": {
+        "_": "Erklaerungen zu den Feldern oben. Sie stehen hier unter 'extra', weil Expo alles andere in app.json gegen ein festes Schema prueft - eigene Kommentarfelder weiter oben lassen 'npx expo-doctor' fehlschlagen und verdecken dann echte Probleme.",
+        "newArchEnabled": "Expo aktiviert die neue React-Native-Architektur (Fabric) standardmaessig. Auf guenstigen Android-TV-Geraeten fuehrt das haeufig zu einem sofortigen Absturz beim Start (kurz schwarz, dann zurueck ins Menue). Deshalb bewusst aus. ACHTUNG: SDK 54 ist die LETZTE Fassung, die das erlaubt - ab SDK 55 gibt es nur noch die neue Architektur. Vor einem Wechsel auf SDK 55 unbedingt auf dem echten Fernseher testen.",
+        "updates": "Ueber-die-Luft-Updates (OTA). Reine JavaScript-Aenderungen landen damit ohne neuen APK-Bau auf Handy und Fernseher: einmal 'npx eas-cli update --branch preview' genuegt, die App holt sie beim naechsten Start. Ein voller Bau ist nur noch noetig, wenn sich NATIVE Bestandteile aendern. Genau das spart die langen Wartezeiten im kostenlosen EAS-Kontingent.",
+        "runtimeVersion": "Bewusst eine feste Zahl statt einer Regel: Ein OTA-Update wird nur auf einen Bau mit derselben runtimeVersion gespielt. Solange sich NUR JavaScript aendert, bleibt die Zahl stehen und alle bisherigen Installationen bekommen das Update. Aendern sich native Bestandteile (neues expo-Modul, SDK-Wechsel), Zahl um eins erhoehen UND neu bauen - sonst trifft ein Update auf einen Bau, dem der passende native Teil fehlt.",
+        "versionCode": "MUSS bei jedem neuen APK groesser sein als bei der bereits installierten Fassung - sonst verweigert Android die Installation kommentarlos ('App nicht installiert'). Frueher stand in eas.json appVersionSource 'remote': dann zaehlte EAS diese Zahl auf dem Server und der Wert hier wurde ignoriert. Stand der Serverzaehler niedriger als die auf dem Fernseher installierte 13, war jeder neue Bau ein Rueckschritt und die Installation schlug fehl. Jetzt 'local': es gilt genau diese Zahl.",
+        "usesCleartextTraffic": "Steht bewusst NICHT hier: Expos Schema kennt android.usesCleartextTraffic nicht, der Eintrag war wirkungslos. Gesetzt wird es hart im Manifest durch plugins/withAndroidTv.js - ohne das blockiert Android ab Version 9 alle http://-Verbindungen zum Server im Heimnetz und die App meldet nur 'Network request failed'."
       }
     }
   }
