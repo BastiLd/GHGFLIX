@@ -333,6 +333,39 @@ if ($text -match "Success") {
 # "3.1.0" gefuehrt wurde - und niemand verstand, warum Funktionen fehlten.
 # Deshalb wird hier NACH der Installation am Geraet selbst nachgesehen.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# FUER WELCHEN BENUTZER ist die App installiert?
+#
+# DAS HAT AM 01.08. EINEN HALBEN TAG GEKOSTET: Der Fernseher hatte zwei
+# Benutzer - 0 ("Eigentuemer", der laufende) und 10 ("new_user"). "adb install"
+# meldete "Success", legte die App aber nur bei Benutzer 10 ab. Ergebnis:
+#   - dumpsys nennt brav eine Versionsnummer  -> sieht installiert aus
+#   - pm path liefert nichts, die Start-Aktivitaet ist nicht aufloesbar
+#   - im Menue des Fernsehers taucht nichts auf
+# Genau daher kam der Widerspruch im alten Bericht ("ist nicht installiert"
+# gegen "dumpsys zeigt 2.0.0"). Deshalb wird das hier geprueft und behoben.
+# ---------------------------------------------------------------------------
+$pfad = Invoke-Adb -s "$TvIp`:5555" shell pm path --user 0 com.bastild.ghgflix
+if ($pfad -notmatch "package:") {
+  Warn "Die App ist noch nicht fuer den aktiven Benutzer (0) freigegeben."
+  Write-Host "     Das passiert, wenn der Fernseher mehrere Benutzerprofile hat."
+  Write-Host "     Ich schalte sie frei ..."
+  Invoke-Adb -s "$TvIp`:5555" shell cmd package install-existing --user 0 com.bastild.ghgflix | Out-Null
+  $pfad = Invoke-Adb -s "$TvIp`:5555" shell pm path --user 0 com.bastild.ghgflix
+  if ($pfad -match "package:") {
+    Gut "Fuer Benutzer 0 freigegeben"
+  } else {
+    Write-Host ""
+    Write-Host "Das hat nicht geklappt. Vorhandene Benutzerprofile:" -ForegroundColor Yellow
+    Write-Host (Invoke-Adb -s "$TvIp`:5555" shell pm list users)
+    Write-Host "Dann bitte gezielt installieren:"
+    Write-Host ""
+    Write-Host "  `"$AdbExe`" -s $TvIp`:5555 install -r --user 0 `"$Datei`"" -ForegroundColor Green
+    Write-Host ""
+    exit 1
+  }
+}
+
 $dump = Invoke-Adb -s "$TvIp`:5555" shell dumpsys package com.bastild.ghgflix
 $vName = ([regex]::Match($dump, "versionName=([^\s]+)")).Groups[1].Value
 $vCode = ([regex]::Match($dump, "versionCode=(\d+)")).Groups[1].Value
