@@ -16,8 +16,9 @@ gemessen wurde.**
   (NICHT `main`, das steht auf v0.9.6 und ist ~36 Commits zurück)
 - `C:\Users\basti\Documents\vetnow-app` — Branch `main` (VetNow Studio, Docker)
 
-**Stand:** Desktop-App 1.2.0 · Server 2.5.0 · Handy/TV-App 3.3.0
-(versionCode 15, noch NICHT gebaut) · Auf dem Fernseher liegt noch 2.0.0.
+**Stand:** Desktop-App 1.3.0 · Server 2.6.0 · Handy/TV-App 3.3.0
+(versionCode 15, gebaut und am Fernseher installiert — nachgeprüft per
+`dumpsys`). OTA-Kanal `preview` ist eingerichtet.
 
 **Geräte im Netz:**
 - GHGFlix-Server: `http://192.168.68.10:8484` (ZimaOS/Docker, Passwort gesetzt)
@@ -43,6 +44,16 @@ Punkte 1–5 — Auswahl-Fenster für Ordner mit Ignorierliste, HLS für iPhone/
 Serienansicht, Trailer mit Staffel- und Sprachauswahl samt Behebung von
 YouTube-Fehler 153 (`Referrer-Policy: no-referrer`), und die Kanäle-Seite mit
 YouTube-Abos, Benachrichtigung und Leaks/Blog-Bereich.
+
+**Zuletzt fertig (Phase 12, siehe PLAN_STATUS):** Erkennung nachgeschärft
+(nichtssagende Ordnernamen, zusammengezogene Folgennummern, Titel-Abgleich für
+`120 - Titel`-Dateien — 68 von 162 Miraculous-Folgen standen falsch und sind
+korrigiert) sowie die Kanäle-Seite mit Gruppen, Shorts-Trennung, Suche,
+Merkliste, Gesehen-Markierung und Kanal-Einzelansicht.
+
+**WICHTIG für die Handy-/TV-App:** Alle Änderungen aus Phase 12 sind
+**Desktop und Web** — auf ausdrücklichen Wunsch des Nutzers. Handy und TV
+wurden bewusst nicht angefasst.
 
 **Was NOCH ZU TUN ist:**
 

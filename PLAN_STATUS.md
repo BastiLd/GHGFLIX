@@ -286,6 +286,23 @@ Rust **20 Unit-Tests grün** (`cargo test --lib`) · `cargo check` und
   durchläuft, ob die OTA-Auslieferung ankommt und ob das iPhone das neue HLS
   wirklich abspielt.
 
+## Phase 12 — Erkennung nachgeschärft + Kanäle-Seite ausgebaut (01.08.2026, Abend)
+
+| ID | Status | Notiz |
+|---|---|---|
+| ERK-001 | ✅ | **Nichtssagende Ordnernamen.** `Websites Download\miraculous to\Downloads\…` landete als Serie „Downloads" (4 Staffeln, 90 Folgen, nie von TMDb gefunden). `isGenericDir()` kennt jetzt Namen wie Downloads/Videos/Neuer Ordner/temp (auch mit Zusatz „Downloads (2)"); trifft einer zu, steigt `showSourceName` bis zu drei Ebenen hoch. Dazu `stripDomainSuffix()`: „miraculous to" kommt von miraculous.to, das Länderkürzel gehört nicht zum Titel. Mit Gegenproben, damit „Downton Abbey", „Film Noir Collection" und „Person of Interest" unangetastet bleiben. |
+| ERK-002 | ✅ | **Zusammengezogene Folgennummern.** `101` in „Staffel 1" heißt 1×01, nicht Folge 101. Vorher entstand S01E101 — mit solchen Nummern findet TMDb nie einen Folgentitel. Zerlegt wird **nur**, wenn die führende Ziffernfolge exakt der Staffel aus dem Ordnernamen entspricht; „Staffel 1\250" bleibt Folge 250. |
+| ERK-003 | ✅ | **Der eigentliche Miraculous-Fehler.** Nach ERK-002 stimmten die Nummern, die Vorschaubilder aber weiter nicht: `S1E20` zeigte „Guitar Villain", die Datei heißt `120 - Pixelator.mp4`. **miraculous.to nummeriert anders als TMDb.** Die App nimmt die Nummer aus dem Dateinamen und holt Titel + Bild von TMDb für *diese* Nummer. Der Dateiname trägt aber auch den Titel — dafür gibt es den Titel-Abgleich, der nur nicht griff: `candidate_of()` suchte ausschließlich nach `SxxEyy`. Versteht jetzt beide Schreibweisen. **Am echten Bestand: 162 Folgen, 135 per Titel erkannt, 68 standen falsch** (Staffel 3: 21 von 26, Staffel 4: 20 von 26, Staffel 6: 16 von 25). Stichprobe danach 70/77 — der Rest sind Schreibvarianten („The Evilustrator"/„The Evillustrator", „Mr."/„Mister"). Drei Dateien blieben ehrlich unentschieden statt geraten. |
+| ERK-004 | ✅ | **Titel-Abgleich im Server war viel zu locker** (kein Eindeutigkeitstest, keine zweistufige Umnummerierung — zwei Dateien konnten dieselbe Folge beanspruchen und die UNIQUE-Bedingung verletzen). Jetzt gleiche Logik wie im Desktop. Dazu Knopf „Titel-Abgleich (alle Staffeln)", weil das Problem immer die ganze Serie betrifft. |
+| ERK-005 | ✅ | **Staffel-6-Vertauschung + der Weg zurück** (siehe Commit 9531444): der Titel-Abgleich pinnte auch NICHT erkannte Dateien dauerhaft, 17 von 22 Folgen standen falsch, und weil Platzierungen bei jedem Scan neu greifen, half „Bibliothek neu aufbauen" nicht. `set_placement` für Unerkanntes entfernt, Mindestqualität für Titelreste eingeführt, neuer Knopf „Nummern aus Dateinamen" als Rücknahme. |
+| KAN-010 | ✅ | **Kanäle-Seite mit Gruppen.** Eine Kachel = ein Film, eine Filmreihe oder eine Serie; darin die zugehörigen YouTube-Kanäle und Blogs. Die Gruppe hängt am **Abo**, nicht am Beitrag — einmal einsortiert landet alles Neue von selbst richtig. Kachelansicht ist Standard, eine Gruppe darf „beim Öffnen direkt aufgehen" (höchstens eine). Je Kachel ein Einstellungsknopf oben rechts: Name, Symbol, Textfarbe, Zuordnung der Abos, löschen. |
+| KAN-011 | ✅ | **Shorts von normalen Videos trennen.** Der Atom-Feed verrät nichts über das Format. `youtube.com/shorts/<id>` antwortet aber unterschiedlich — echtes Short mit 200, normales Video mit einer Umleitung auf `/watch`. Deshalb wird der Umleitung bewusst **nicht** gefolgt; in Rust braucht das einen eigenen HTTP-Client, sonst käme immer 200 und jedes Video gälte als Short. Ergebnis wird dauerhaft gemerkt, höchstens 25 Prüfungen je Durchlauf. Ungeprüftes gilt als normales Video — lieber einmal zu viel zeigen als etwas verschwinden lassen. |
+| KAN-012 | ✅ | Volltextsuche, Sortierung (neu/alt/Kanal), Merkliste „Später ansehen", Gesehen-Markierung mit Ausblenden, Kanal-Einzelansicht, Abonnieren direkt in die geöffnete Gruppe. **Nur Desktop und Web** — Handy und TV bewusst unberührt (Nutzerwunsch). |
+| OPS-030 | ✅ | **Taskleisten-Verknüpfung.** Der NSIS-Installer entfernt sie beim Ersetzen der alten Fassung; Startmenü und Desktop legt er neu an, die Taskleiste nicht. Wieder anheften geht nicht per Programm — nachgeprüft, die Verbenliste einer .exe kennt nur noch „An Start anheften". `rebuild-windows.ps1 -Installieren` sichert die `.lnk` vorher und schreibt sie sofort zurück; gelingt das nicht, sagt es klar, dass ein Rechtsklick nötig ist. |
+
+**Testlage nach Phase 12:** Server **10 Dateien grün** (Kanäle jetzt 60 Prüfungen,
+Ordnernamen 30) · Rust **26 Unit-Tests grün** · `cargo check` und `tsc` sauber.
+
 ## Versionen
 
 Stand `feature/zimaos-docker-server`: Handy-/TV-App **3.3.0** (versionCode 15,
