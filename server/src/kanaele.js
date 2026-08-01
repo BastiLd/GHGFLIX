@@ -36,6 +36,42 @@ const MAX_PRO_FEED = 15;
 
 const HOLEN_TIMEOUT_MS = 15_000;
 
+/* Ein Short darf höchstens 3 Minuten lang sein (YouTube hat 2024 von 60 s
+   erhöht). Nur zusammen mit Hochformat aussagekräftig. */
+const MAX_SHORT_SEK = 185;
+
+/**
+ * Kopfzeilen für YouTube-Anfragen.
+ *
+ * DAS ZUSTIMMUNGS-COOKIE IST DER SPRINGENDE PUNKT (gemessen am 01.08.2026):
+ * Ohne es antwortet YouTube aus der EU auf JEDE Anfrage mit
+ * `302 → consent.youtube.com`. Die alte Shorts-Erkennung las das als
+ * „Umleitung, also kein Short" — und markierte damit ausnahmslos jedes Video
+ * als normales Video. Der Filter hat deshalb nie funktioniert.
+ *
+ * Mit `SOCS`/`CONSENT` liefert YouTube die echte Antwort:
+ *   /shorts/<id>  →  200  = wirklich ein Short
+ *                 →  303  = normales Video (leitet auf /watch um)
+ * An 10 echten Videos geprüft, 10 von 10 richtig.
+ */
+const YT_KOPF = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+  "Accept-Language": "de,en;q=0.8",
+  Cookie: "SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmRlIAEaBgiA_LyaBg; CONSENT=YES+cb",
+};
+
+/** fetch mit hartem Zeitlimit — ein hängender Server darf nichts blockieren. */
+async function mitZeitlimit(fn, ms = 10_000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fn(ctrl.signal);
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 const jetzt = () => Date.now();
 
 function lesen(key, standard) {
@@ -104,12 +140,10 @@ function eintraege(xml) {
 async function holen(url, alsText = true) {
   const res = await fetch(url, {
     signal: AbortSignal.timeout(HOLEN_TIMEOUT_MS),
-    headers: {
-      // Ohne erkennbaren Browser-Agenten liefert YouTube eine Zustimmungsseite
-      // statt der Kanalseite — dann fände die Kanal-ID-Suche unten nichts.
-      "User-Agent": "Mozilla/5.0 (compatible; GHGFlix/1.0)",
-      "Accept-Language": "de,en;q=0.8",
-    },
+    // Ein echter Browser-Agent ist Pflicht: „GHGFlix/1.0" wird von etlichen
+    // Seiten (und von YouTubes Zustimmungswand) anders behandelt als ein
+    // Browser. Das Zustimmungs-Cookie schadet fremden Seiten nicht.
+    headers: { ...YT_KOPF, Accept: "application/rss+xml, application/atom+xml, application/xml, text/html;q=0.8, */*;q=0.5" },
   });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return alsText ? res.text() : res;
@@ -151,24 +185,87 @@ export async function kanalIdErmitteln(eingabe) {
 }
 
 /** Aus einer Blog-Adresse den Feed heraussuchen (falls kein Feed angegeben). */
-export async function blogFeedErmitteln(eingabe) {
-  const url = String(eingabe || "").trim();
-  if (!url) throw new Error("Bitte eine Adresse angeben");
-  const voll = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-  let text;
-  try {
-    text = await holen(voll);
-  } catch (e) {
-    throw new Error(`Nicht erreichbar: ${String(e.message || e)}`);
-  }
-  // Schon selbst ein Feed?
-  if (/<rss[\s>]|<feed[\s>]/i.test(text.slice(0, 2000))) return voll;
+/* Übliche Adressen, unter denen Blogsysteme ihren Feed anbieten. Reihenfolge
+   nach Häufigkeit: WordPress zuerst, dann die allgemeinen, dann Blogger.
+   Gemessen am 01.08.2026: „tumblr.com" hat keinen Feed im HTML, aber ein
+   echter Tumblr-Blog liefert unter /rss einen — ohne dieses Abklopfen war
+   „Blog hinzufügen" für solche Seiten schlicht unmöglich. */
+const FEED_PFADE = [
+  "/feed", "/feed/", "/rss", "/rss/", "/rss.xml", "/feed.xml", "/atom.xml",
+  "/index.xml", "/?feed=rss2", "/feeds/posts/default", "/blog/feed", "/news/feed",
+];
 
+const SIEHT_NACH_FEED_AUS = (t) => /<rss[\s>]|<feed[\s>]|<rdf:RDF/i.test(String(t).slice(0, 3000));
+
+/**
+ * Aus einer Blog-Adresse den Feed heraussuchen.
+ *
+ * Drei Stufen, weil jede für sich in echten Fällen scheitert:
+ *   1. Ist die Adresse selbst schon ein Feed? (dann fertig)
+ *   2. Steht im HTML ein <link rel="alternate" type="application/rss+xml">?
+ *   3. Sonst die üblichen Pfade abklopfen (/feed, /rss, …).
+ *
+ * Dazu ein HTTP-Rückfall: `serienblitz.de` verweigert die HTTPS-Verbindung
+ * rundweg (ECONNREFUSED auf Port 443), antwortet über http aber sauber.
+ * Ohne diesen Rückfall bekam der Nutzer nur „error sending request for url".
+ */
+export async function blogFeedErmitteln(eingabe) {
+  const roh = String(eingabe || "").trim();
+  if (!roh) throw new Error("Bitte eine Adresse angeben");
+
+  // Welche Adressen probieren wir? Mit Schema wie angegeben, sonst https und
+  // danach http (manche kleinen Seiten können kein TLS).
+  const versuche = /^https?:\/\//i.test(roh) ? [roh] : [`https://${roh}`, `http://${roh}`];
+
+  let text = null;
+  let basis = null;
+  const fehler = [];
+  for (const u of versuche) {
+    try {
+      text = await holen(u);
+      basis = u;
+      break;
+    } catch (e) {
+      fehler.push(`${u}: ${String(e.message || e).slice(0, 80)}`);
+    }
+  }
+  if (text == null) {
+    throw new Error(
+      `Die Seite ist nicht erreichbar.\n${fehler.join("\n")}\n` +
+        `Tipp: Läuft die Seite nur über http://? Dann bitte mit „http://" davor eintragen.`,
+    );
+  }
+
+  // 1) Schon selbst ein Feed?
+  if (SIEHT_NACH_FEED_AUS(text)) return basis;
+
+  // 2) Im HTML verlinkt?
   const m =
     /<link[^>]+type=["']application\/(?:rss|atom)\+xml["'][^>]*href=["']([^"']+)["']/i.exec(text) ||
     /<link[^>]+href=["']([^"']+)["'][^>]*type=["']application\/(?:rss|atom)\+xml["']/i.exec(text);
-  if (!m) throw new Error("Auf dieser Seite ist kein RSS-/Atom-Feed verlinkt. Bitte die Feed-Adresse direkt angeben.");
-  return new URL(entschluesseln(m[1]), voll).toString();
+  if (m) return new URL(entschluesseln(m[1]), basis).toString();
+
+  // 3) Übliche Pfade abklopfen.
+  const wurzel = new URL(basis);
+  for (const p of FEED_PFADE) {
+    const kandidat = new URL(p, `${wurzel.protocol}//${wurzel.host}`).toString();
+    try {
+      const t = await holen(kandidat);
+      if (SIEHT_NACH_FEED_AUS(t)) return kandidat;
+    } catch {
+      /* der nächste Pfad ist dran */
+    }
+  }
+
+  throw new Error(
+    `Auf „${basis}" ist kein RSS-/Atom-Feed zu finden — weder im Seitenkopf noch unter den üblichen ` +
+      `Adressen (${FEED_PFADE.slice(0, 6).join(", ")} …).\n` +
+      `Zwei häufige Gründe:\n` +
+      `• Es ist die Startseite einer Plattform statt eines einzelnen Blogs. ` +
+      `Bei Tumblr z. B. „meinblog.tumblr.com" statt „tumblr.com".\n` +
+      `• Die Seite bietet gar keinen Feed an. Dann hilft nur die Feed-Adresse direkt, ` +
+      `falls es eine gibt.`,
+  );
 }
 
 /* ── Feeds verwalten ────────────────────────────────────────────────────── */
@@ -420,23 +517,45 @@ function beitragAus(block, feed) {
  * Bei Zeitüberschreitung oder Fehler: null zurückgeben (unbekannt) statt zu
  * raten. Ein falsch einsortiertes Video wäre ärgerlicher als eins ohne Marke.
  */
-async function istShortPruefen(videoId) {
-  if (!videoId) return null;
+export async function istShortPruefen(videoId) {
+  if (!videoId) return { istShort: null, dauerSek: null };
+
+  // ── Weg 1: die Adresse selbst fragen (billig, ein HEAD ohne Inhalt) ──
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 8000);
-    const r = await fetch(`https://www.youtube.com/shorts/${videoId}`, {
-      method: "HEAD",
-      redirect: "manual",
-      signal: ctrl.signal,
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; GHGFlix/1.0)" },
-    });
-    clearTimeout(t);
-    if (r.status >= 300 && r.status < 400) return false; // leitet auf /watch um
-    if (r.status === 200) return true;
-    return null;
+    const r = await mitZeitlimit((signal) =>
+      fetch(`https://www.youtube.com/shorts/${videoId}`, {
+        method: "HEAD",
+        redirect: "manual",
+        signal,
+        headers: YT_KOPF,
+      }),
+    );
+    if (r.status === 200) return { istShort: true, dauerSek: null };
+    if (r.status >= 300 && r.status < 400) return { istShort: false, dauerSek: null };
   } catch {
-    return null;
+    /* weiter mit Weg 2 */
+  }
+
+  // ── Weg 2: die Videoseite lesen (Bildformat und Länge) ──
+  // Kostet mehr, liefert dafür auch die Laufzeit für die Anzeige.
+  try {
+    const t = await mitZeitlimit((signal) =>
+      fetch(`https://www.youtube.com/watch?v=${videoId}`, { signal, headers: YT_KOPF }).then((r) =>
+        r.ok ? r.text() : "",
+      ),
+    );
+    if (!t) return { istShort: null, dauerSek: null };
+    const dauer = /"lengthSeconds":"(\d+)"/.exec(t)?.[1];
+    const masse = /"width":(\d+),"height":(\d+)/.exec(t);
+    const dauerSek = dauer ? Number(dauer) : null;
+    if (!masse) return { istShort: null, dauerSek };
+    const hochkant = Number(masse[2]) > Number(masse[1]);
+    // Beides muss stimmen: hochkant UND kurz. Ein hochkant gedrehtes langes
+    // Video ist kein Short, ein kurzes Querformat auch nicht.
+    const istShort = hochkant && dauerSek != null && dauerSek <= MAX_SHORT_SEK;
+    return { istShort, dauerSek };
+  } catch {
+    return { istShort: null, dauerSek: null };
   }
 }
 
@@ -487,7 +606,11 @@ export async function abholen(nurId = null) {
      der Nutzer wartet vor einer leeren Seite. Was übrig bleibt, holt der
      nächste Durchlauf in 30 Minuten. */
   const offen = vorhanden.filter((b) => b.art === "youtube" && b.videoId && b.istShort == null).slice(0, 25);
-  for (const b of offen) b.istShort = await istShortPruefen(b.videoId);
+  for (const b of offen) {
+    const { istShort, dauerSek } = await istShortPruefen(b.videoId);
+    b.istShort = istShort;
+    if (dauerSek != null) b.dauerSek = dauerSek;
+  }
 
   vorhanden.sort((a, b) => b.veroeffentlicht - a.veroeffentlicht);
   beitraegeSpeichern(vorhanden);

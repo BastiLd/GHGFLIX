@@ -278,6 +278,8 @@ export interface FeedBeitrag {
   /** Merkliste „Später ansehen" */
   gemerkt?: boolean;
   gesehen?: boolean;
+  /** Laufzeit in Sekunden, falls bekannt (aus der Shorts-Prüfung). */
+  dauerSek?: number | null;
   entdeckt: number;
   /** Name des Abos — nur beim Abrufen gefüllt. */
   feedTitel?: string | null;

@@ -69,12 +69,22 @@ export default function Feeds() {
   const gruppen = useQuery({ queryKey: ["feedGroups"], queryFn: feedGroups });
   const abos = useQuery({ queryKey: ["feeds"], queryFn: feedsList });
 
-  /* Eine Gruppe darf „beim Öffnen direkt aufgehen". Das gilt genau einmal pro
-     Seitenbesuch — sonst käme man nie zur Kachelübersicht zurück. */
+  /* Startansicht festlegen — einmal pro Seitenbesuch:
+       KEINE Gruppen angelegt  → gleich die Beitragsliste („Alles gemischt").
+                                 Die Kachelübersicht wäre sonst eine leere
+                                 Seite mit einem einzigen Knopf, und wer nie
+                                 Gruppen benutzt, käme nie an seine Videos.
+       Gruppen vorhanden       → Kacheln, außer eine ist auf „direkt aufgehen"
+                                 gestellt. */
   useEffect(() => {
     if (startErledigt || !gruppen.data) return;
     setStartErledigt(true);
-    const auto = gruppen.data.find((g) => g.standardOffen && g.id);
+    const echte = gruppen.data.filter((g) => g.id);
+    if (echte.length === 0) {
+      setOffen("");
+      return;
+    }
+    const auto = echte.find((g) => g.standardOffen);
     if (auto?.id) setOffen(auto.id);
   }, [gruppen.data, startErledigt]);
 
@@ -925,6 +935,11 @@ function BeitragsKachel({ b, onOeffnen, onAendern }: { b: FeedBeitrag; onOeffnen
           {b.istShort === true && (
             <span className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/70 rounded px-1.5 py-0.5 text-[10px] font-bold">
               <Zap className="w-3 h-3" /> SHORT
+            </span>
+          )}
+          {b.dauerSek != null && b.dauerSek > 0 && (
+            <span className="absolute bottom-2 right-2 bg-black/70 rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+              {Math.floor(b.dauerSek / 60)}:{String(b.dauerSek % 60).padStart(2, "0")}
             </span>
           )}
           {b.gesehen && (

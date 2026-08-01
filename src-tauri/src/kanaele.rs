@@ -61,6 +61,23 @@ pub struct Feed {
    Warum am ABO und nicht am einzelnen Beitrag: ein Kanal bleibt beim Thema.
    Einmal einsortiert, landet alles Neue von selbst richtig. */
 
+/* Ein echter Browser-Agent ist Pflicht: etliche Seiten (und YouTubes
+   Zustimmungswand) behandeln "GHGFlix/1.0" anders als einen Browser. */
+const UA: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+
+/* DAS ZUSTIMMUNGS-COOKIE IST DER SPRINGENDE PUNKT (gemessen am 01.08.2026):
+   Ohne es antwortet YouTube aus der EU auf JEDE Anfrage mit
+   302 -> consent.youtube.com. Die alte Shorts-Erkennung las das als
+   "Umleitung, also kein Short" und markierte damit ausnahmslos jedes Video
+   als normales Video. Der Filter hat deshalb nie funktioniert.
+   Mit SOCS/CONSENT antwortet /shorts/<id> ehrlich: 200 = Short,
+   303 = normales Video. An 10 echten Videos geprueft, 10 von 10 richtig. */
+const CONSENT_COOKIE: &str = "SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmRlIAEaBgiA_LyaBg; CONSENT=YES+cb";
+
+/// Ein Short darf hoechstens 3 Minuten lang sein (YouTube hat 2024 erhoeht).
+const MAX_SHORT_SEK: i64 = 185;
+
 pub const GRUPPEN_KEY: &str = "feed_gruppen";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +135,9 @@ pub struct Beitrag {
     pub gemerkt: bool,
     #[serde(default)]
     pub gesehen: bool,
+    /// Laufzeit in Sekunden, falls bekannt (kommt aus der Shorts-Pruefung).
+    #[serde(default)]
+    pub dauer_sek: Option<i64>,
     pub entdeckt: i64,
     /// Nur beim Ausliefern gefüllt (Name des Abos).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -229,8 +249,9 @@ async fn holen(http: &reqwest::Client, url: &str) -> Result<String> {
         .get(url)
         // Ohne erkennbaren Browser-Agenten liefert YouTube eine Zustimmungsseite
         // statt der Kanalseite — dann fände die Kanal-ID-Suche unten nichts.
-        .header("User-Agent", "Mozilla/5.0 (compatible; GHGFlix/1.0)")
+        .header("User-Agent", UA)
         .header("Accept-Language", "de,en;q=0.8")
+        .header("Cookie", CONSENT_COOKIE)
         .timeout(std::time::Duration::from_secs(15))
         .send()
         .await?;
@@ -290,31 +311,96 @@ static RE_FEED_LINK_B: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Aus einer Blog-Adresse den Feed heraussuchen (falls kein Feed angegeben).
+/* Uebliche Adressen, unter denen Blogsysteme ihren Feed anbieten.
+   Gemessen am 01.08.2026: "tumblr.com" hat keinen Feed im HTML, ein echter
+   Tumblr-Blog liefert aber unter /rss einen. Ohne dieses Abklopfen war
+   "Blog hinzufuegen" fuer solche Seiten schlicht unmoeglich. */
+const FEED_PFADE: &[&str] = &[
+    "/feed", "/feed/", "/rss", "/rss/", "/rss.xml", "/feed.xml", "/atom.xml",
+    "/index.xml", "/?feed=rss2", "/feeds/posts/default", "/blog/feed", "/news/feed",
+];
+
+fn sieht_nach_feed_aus(t: &str) -> bool {
+    let kopf: String = t.chars().take(3000).collect::<String>().to_lowercase();
+    kopf.contains("<rss") || kopf.contains("<feed") || kopf.contains("<rdf:rdf")
+}
+
+/// Aus einer Blog-Adresse den Feed heraussuchen.
+///
+/// Drei Stufen, weil jede fuer sich in echten Faellen scheitert:
+///   1. Ist die Adresse selbst schon ein Feed?
+///   2. Steht im HTML ein <link rel="alternate" type="application/rss+xml">?
+///   3. Sonst die ueblichen Pfade abklopfen (/feed, /rss, ...).
+///
+/// Dazu ein HTTP-Rueckfall: `serienblitz.de` verweigert die HTTPS-Verbindung
+/// rundweg (ECONNREFUSED auf Port 443), antwortet ueber http aber sauber.
+/// Ohne diesen Rueckfall bekam der Nutzer nur "error sending request for url".
 pub async fn blog_feed_ermitteln(http: &reqwest::Client, eingabe: &str) -> Result<String> {
-    let url = eingabe.trim();
-    if url.is_empty() {
+    let roh = eingabe.trim();
+    if roh.is_empty() {
         return Err(anyhow!("Bitte eine Adresse angeben"));
     }
-    let voll = if url.starts_with("http://") || url.starts_with("https://") {
-        url.to_string()
+
+    let versuche: Vec<String> = if roh.starts_with("http://") || roh.starts_with("https://") {
+        vec![roh.to_string()]
     } else {
-        format!("https://{url}")
+        vec![format!("https://{roh}"), format!("http://{roh}")]
     };
-    let text = holen(http, &voll).await.map_err(|e| anyhow!("Nicht erreichbar: {e}"))?;
-    let kopf: String = text.chars().take(2000).collect();
-    if kopf.contains("<rss") || kopf.contains("<feed") {
-        return Ok(voll);
+
+    let mut text: Option<String> = None;
+    let mut basis = String::new();
+    let mut fehler: Vec<String> = Vec::new();
+    for u in &versuche {
+        match holen(http, u).await {
+            Ok(t) => {
+                text = Some(t);
+                basis = u.clone();
+                break;
+            }
+            Err(e) => fehler.push(format!("{u}: {}", e.to_string().chars().take(80).collect::<String>())),
+        }
     }
-    let treffer = RE_FEED_LINK_A
-        .captures(&text)
-        .or_else(|| RE_FEED_LINK_B.captures(&text))
-        .map(|c| entschluesseln(&c[1]));
-    let roh = treffer.ok_or_else(|| {
-        anyhow!("Auf dieser Seite ist kein RSS-/Atom-Feed verlinkt. Bitte die Feed-Adresse direkt angeben.")
-    })?;
-    // reqwest reicht die `url`-Kiste durch — kein zusätzliches Paket nötig.
-    let basis = reqwest::Url::parse(&voll)?;
-    Ok(basis.join(&roh)?.to_string())
+    let Some(text) = text else {
+        return Err(anyhow!(
+            "Die Seite ist nicht erreichbar.
+{}
+Tipp: Laeuft die Seite nur ueber http://? Dann bitte mit \"http://\" davor eintragen.",
+            fehler.join("
+")
+        ));
+    };
+
+    // 1) Schon selbst ein Feed?
+    if sieht_nach_feed_aus(&text) {
+        return Ok(basis);
+    }
+
+    // 2) Im HTML verlinkt?
+    if let Some(c) = RE_FEED_LINK_A.captures(&text).or_else(|| RE_FEED_LINK_B.captures(&text)) {
+        let roh_link = entschluesseln(&c[1]);
+        let b = reqwest::Url::parse(&basis)?;
+        return Ok(b.join(&roh_link)?.to_string());
+    }
+
+    // 3) Uebliche Pfade abklopfen.
+    let b = reqwest::Url::parse(&basis)?;
+    let wurzel = format!("{}://{}", b.scheme(), b.host_str().unwrap_or_default());
+    for p in FEED_PFADE {
+        let Ok(kandidat) = reqwest::Url::parse(&wurzel).and_then(|u| u.join(p)) else { continue };
+        let k = kandidat.to_string();
+        if let Ok(t) = holen(http, &k).await {
+            if sieht_nach_feed_aus(&t) {
+                return Ok(k);
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "Auf \"{basis}\" ist kein RSS-/Atom-Feed zu finden - weder im Seitenkopf noch unter den ueblichen Adressen.
+         Zwei haeufige Gruende:
+         - Es ist die Startseite einer Plattform statt eines einzelnen Blogs. Bei Tumblr z. B. \"meinblog.tumblr.com\" statt \"tumblr.com\".
+         - Die Seite bietet gar keinen Feed an. Dann hilft nur die Feed-Adresse direkt, falls es eine gibt."
+    ))
 }
 
 /* ── Feeds verwalten ───────────────────────────────────────────────────── */
@@ -490,6 +576,7 @@ fn beitrag_aus(block: &str, feed: &Feed) -> Option<Beitrag> {
         ist_short: None,
         gemerkt: false,
         gesehen: false,
+        dauer_sek: None,
         entdeckt: jetzt(),
         feed_titel: None,
     })
@@ -614,7 +701,11 @@ pub async fn abholen(
         .take(25)
         .collect();
     for (i, vid) in offen {
-        vorhanden[i].ist_short = ist_short_pruefen(&vid).await;
+        let (ist_short, dauer) = ist_short_pruefen(&vid).await;
+        vorhanden[i].ist_short = ist_short;
+        if dauer.is_some() {
+            vorhanden[i].dauer_sek = dauer;
+        }
     }
 
     vorhanden.sort_by(|a, b| b.veroeffentlicht.cmp(&a.veroeffentlicht));
@@ -888,33 +979,59 @@ Deshalb wird die Umleitung bewusst NICHT gefolgt.
 
 Bei Fehler oder Zeitueberschreitung: None (unbekannt) statt zu raten.
 */
-/* Eigener HTTP-Client NUR fuer die Shorts-Pruefung.
-   WARUM: reqwest folgt Umleitungen standardmaessig. Genau die Umleitung ist
-   hier aber die Antwort — wuerde ihr gefolgt, kaeme immer 200 zurueck und
-   JEDES Video gaelte als Short. */
-static OHNE_UMLEITUNG: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
+async fn ist_short_pruefen(video_id: &str) -> (Option<bool>, Option<i64>) {
+    /* Eigener Client OHNE Umleitungsverfolgung. reqwest folgt sonst der
+       303 auf /watch und liefert 200 - dann waere JEDES Video ein Short. */
+    let Ok(client) = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(10))
         .build()
-        .unwrap_or_default()
-});
+    else {
+        return (None, None);
+    };
 
-async fn ist_short_pruefen(video_id: &str) -> Option<bool> {
-    let res = OHNE_UMLEITUNG
+    // Weg 1: die Adresse selbst fragen (billig, ein HEAD ohne Inhalt).
+    if let Ok(res) = client
         .head(format!("https://www.youtube.com/shorts/{video_id}"))
-        .header("User-Agent", "Mozilla/5.0 (compatible; GHGFlix/1.0)")
-        .timeout(std::time::Duration::from_secs(8))
+        .header("User-Agent", UA)
+        .header("Cookie", CONSENT_COOKIE)
         .send()
         .await
-        .ok()?;
-    let s = res.status().as_u16();
-    if (300..400).contains(&s) {
-        Some(false)
-    } else if s == 200 {
-        Some(true)
-    } else {
-        None
+    {
+        let s = res.status().as_u16();
+        if s == 200 {
+            return (Some(true), None);
+        }
+        if (300..400).contains(&s) {
+            return (Some(false), None);
+        }
     }
+
+    // Weg 2: die Videoseite lesen (Bildformat und Laenge).
+    let Ok(res) = client
+        .get(format!("https://www.youtube.com/watch?v={video_id}"))
+        .header("User-Agent", UA)
+        .header("Cookie", CONSENT_COOKIE)
+        .send()
+        .await
+    else {
+        return (None, None);
+    };
+    let Ok(t) = res.text().await else { return (None, None) };
+
+    static RE_LEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""lengthSeconds":"(\d+)""#).unwrap());
+    static RE_WH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""width":(\d+),"height":(\d+)"#).unwrap());
+
+    let dauer = RE_LEN.captures(&t).and_then(|c| c[1].parse::<i64>().ok());
+    let Some(wh) = RE_WH.captures(&t) else { return (None, dauer) };
+    let (w, h) = (
+        wh[1].parse::<i64>().unwrap_or(0),
+        wh[2].parse::<i64>().unwrap_or(0),
+    );
+    // Beides muss stimmen: hochkant UND kurz. Ein hochkant gedrehtes langes
+    // Video ist kein Short, ein kurzes Querformat auch nicht.
+    let ist = h > w && dauer.is_some_and(|d| d <= MAX_SHORT_SEK);
+    (Some(ist), dauer)
 }
 
 pub fn ungelesen_zahl(conn: &Connection, art: Option<&str>) -> i64 {
