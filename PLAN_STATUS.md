@@ -160,6 +160,46 @@ tatsächlich durchläuft, ob die OTA-Auslieferung auf dem Fernseher ankommt und
 ob der Signaturschlüssel bei EAS derselbe geblieben ist. Bleibt der erste
 Punkt der nächsten Sitzung.
 
+## Messungen am echten System (01.08.2026) — vor weiterer Arbeit lesen
+
+Drei Annahmen haben sich beim Nachmessen als falsch herausgestellt. Wer hier
+weiterarbeitet, spart sich damit die Suche an der falschen Stelle.
+
+**1. Die APK ist nicht beschädigt.** „Problem beim Parsen des Pakets" liess
+Datei-Beschädigung vermuten. Nachgemessen: die Datei auf dem Server ist
+byteweise identisch mit der lokalen (SHA-256 gleich), ein vollständiges ZIP,
+v2-signiert, `resources.arsc` STORED und 4-Byte-ausgerichtet, alle 48 `.so`
+4096-Byte-ausgerichtet, alle vier Architekturen vorhanden. Der Abbruch
+passiert beim **Herunterladen am Fernseher**. Lösung ist deshalb der
+ADB-Weg (`scripts/tv-installieren.ps1`), nicht weiteres Schrauben an der APK.
+
+**2. Die Erkennung von Miraculous Staffel 6 ist korrekt.** Gemeldet war
+„Staffel 6 wird nicht erkannt". Tatsächlich liegen in
+`Z:\TO-MOONDOOM\Series\Miraculouse - …\Season 06` genau **22 Videodateien**,
+und die App hat genau **22 Folgen** erkannt. Es fehlen die *Dateien* E18, E24
+und E25 (nach E17 springt es auf E19) — miraculous.to listet 25 Folgen. Am
+Scanner ist hier nichts zu reparieren.
+
+**3. Die falschen „Specials" kommen aus einem Dateinamen.** In `Season 01`
+liegt `… - S01E53 - Action.mkv`. Staffel 1 hat keine 53. Folge, deshalb wird
+die Datei zu `S00E02` und erscheint unter Specials. Die echten Specials
+(New York, Shanghai, Paris, London, Tokyo) und der Film „Awakening" sind als
+Dateien **gar nicht vorhanden** — sie können also auch nicht erscheinen.
+
+**4. Eine Website-Kopie ist als TV-Bibliothek eingetragen:**
+`C:\Users\basti\Documents\Websites Download\miraculous to\miraculous\miraculous.to\en`
+Dort liegen 170 HTML-Dateien und 18 Bilder, aber **kein einziges Video** (es
+ist ein HTTrack-Abzug der Website). Diese Bibliothek kann nie etwas liefern
+und sollte in den Einstellungen entfernt werden.
+
+**5. ADB zum Fernseher funktioniert.** 192.168.68.157, Port 5555 offen,
+Android 11, Gerät autorisiert (`device`). GHGFlix ist dort derzeit **nicht
+installiert** — die früheren Downloader-Versuche sind also nie durchgekommen.
+
+**6. Offener Fehler: Trailer.** Im Web (`/#/show/28`) meldet der
+YouTube-Einbettung „Fehler 153 – Fehler bei der Konfiguration des
+Videoplayers". Noch nicht untersucht.
+
 ## Phase 8 — Build-Pipeline vereinfachen (nach Phase 7)
 
 Ziel: EAS-Free-Tier-Wartezeit nicht mehr im täglichen Testzyklus. Entscheidung
