@@ -246,7 +246,24 @@ pub fn parse_episode(stem: &str, parent_dir: &str) -> Option<(i64, i64)> {
             return Some((season, cap_i64(&c, 1)));
         }
         if let Some(c) = RE_STANDALONE_NUM.captures(&norm) {
-            return Some((season, cap_i64(&c, 1)));
+            let zahl = cap_i64(&c, 1);
+            /* Zusammengezogene Nummer wie "101" in "Staffel 1" = 1x01, also
+               Folge 1. Diese Schreibweise benutzen Download-Seiten und alte
+               Rips.
+
+               Gemessen am 01.08.2026 an
+                 ...\miraculous to\Downloads\Staffel 1\101 - Stormy Weather.mp4
+               Vorher wurde daraus S01E101 — die Bibliothek zeigte dadurch
+               wilde Folgennummern und TMDb fand zu "Folge 101" nie einen Titel.
+
+               Bewusst nur, wenn die FUEHRENDE Ziffernfolge exakt die Staffel
+               aus dem Ordnernamen ist. Sonst wuerde aus "Staffel 1\250"
+               faelschlich S02E50, obwohl dort schlicht Folge 250 stehen kann. */
+            let rest = zahl % 100;
+            if zahl >= 100 && zahl / 100 == season && rest >= 1 {
+                return Some((season, rest));
+            }
+            return Some((season, zahl));
         }
     }
     None
@@ -315,5 +332,131 @@ mod tests {
         assert_eq!(show_key("Miraculouse"), "miraculouse");
         assert_eq!(show_key("Marvel's Daredevil Season 2 1080p"), show_key("Marvel's Daredevil Season 3"));
         assert_eq!(show_key("Daredevil S03"), "daredevil");
+    }
+}
+
+/// Ordnernamen, die NICHTS ueber den Inhalt aussagen.
+///
+/// Echtes Beispiel (gemessen am 01.08.2026):
+///   Websites Download\miraculous to\Downloads\Staffel 1\101 - Stormy Weather.mp4
+/// Der Serienordner heisst „Downloads" — daraus wurde in der Bibliothek eine
+/// Serie namens „Downloads" mit 90 Folgen, die TMDb natuerlich nicht kennt.
+/// Der bedeutungsvolle Name steht eine Ebene HOEHER („miraculous to").
+///
+/// Solche Namen kommen von Download-Programmen, Browsern und Aufraeumaktionen.
+/// Trifft einer zu, geht show_source_name eine Ebene nach oben.
+const GENERISCHE_ORDNER: &[&str] = &[
+    "downloads", "download", "downloaded", "dl",
+    "video", "videos", "media", "medien", "movie", "movies", "film", "filme",
+    "serie", "serien", "series", "show", "shows", "tv", "tvshows", "anime",
+    "neuer ordner", "new folder", "ordner", "folder", "temp", "tmp",
+    "complete", "completed", "fertig", "sonstiges", "misc", "diverses",
+    "web ui", "output", "ausgabe", "export", "unsortiert", "unsorted",
+];
+
+pub fn is_generic_dir(name: &str) -> bool {
+    let t: String = name
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c == '.' || c == '_' || c == '-' { ' ' } else { c })
+        .collect();
+    let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    if t.is_empty() {
+        return true;
+    }
+    if GENERISCHE_ORDNER.contains(&t.as_str()) {
+        return true;
+    }
+    // „Downloads (2)", „Neuer Ordner 3", „Video 1" — dieselbe Sorte mit Zusatz
+    let ohne_zahl = t
+        .trim_end_matches(|c: char| c.is_ascii_digit() || c == '(' || c == ')' || c == ' ')
+        .trim();
+    ohne_zahl != t && GENERISCHE_ORDNER.contains(&ohne_zahl)
+}
+
+/// Ein als Ordnername gespeicherter Domainname: „miraculous to" kommt von
+/// „miraculous.to" (Windows mag keinen Punkt am Ordnerende, bzw. das
+/// Kopierprogramm hat ihn ersetzt). Das angehaengte Laenderkuerzel gehoert
+/// NICHT zum Serientitel — ohne das sucht TMDb nach „miraculous to".
+const TLDS: &[&str] = &[
+    "to", "com", "net", "org", "tv", "cc", "me", "io", "co", "de", "at", "ch",
+    "ru", "se", "sx", "is", "li", "la", "ws", "info", "biz", "xyz", "site",
+    "online", "stream", "watch", "pw", "cx", "gs", "nu",
+];
+
+pub fn strip_domain_suffix(name: &str) -> String {
+    let roh = name.trim();
+    let teile: Vec<&str> = roh.split_whitespace().collect();
+    if teile.len() < 2 {
+        return roh.to_string();
+    }
+    let letztes: String = teile[teile.len() - 1]
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .collect();
+    if !TLDS.contains(&letztes.as_str()) {
+        return roh.to_string();
+    }
+    let rest = teile[..teile.len() - 1].join(" ");
+    let rest = rest.trim();
+    // Nur kuerzen, wenn wirklich noch ein Titel uebrig bleibt.
+    if rest.len() >= 3 { rest.to_string() } else { roh.to_string() }
+}
+
+#[cfg(test)]
+mod ordner_tests {
+    use super::*;
+
+    #[test]
+    fn generische_ordner_erkannt() {
+        for n in ["Downloads", "downloads", "Videos", "Neuer Ordner", "New Folder", "temp", "Downloads (2)", "Neuer Ordner 3"] {
+            assert!(is_generic_dir(n), "{n} sollte generisch sein");
+        }
+    }
+
+    #[test]
+    fn echte_titel_bleiben_erhalten() {
+        // Ohne diese Gegenprobe wuerde die Regel echte Serien schlucken.
+        for n in ["Miraculous", "Breaking Bad", "Downton Abbey", "Film Noir Collection", "The Movies of 1999", "Serienstar"] {
+            assert!(!is_generic_dir(n), "{n} darf NICHT generisch sein");
+        }
+    }
+
+    #[test]
+    fn zusammengezogene_folgennummer() {
+        // "101" in "Staffel 1" heisst 1x01 — vorher wurde daraus S01E101.
+        assert_eq!(parse_episode("101 - Stormy Weather", "Staffel 1"), Some((1, 1)));
+        assert_eq!(parse_episode("125 - The Origins", "Staffel 1"), Some((1, 25)));
+        assert_eq!(parse_episode("201 - The Collector", "Staffel 2"), Some((2, 1)));
+        assert_eq!(parse_episode("612 - Letzte", "Staffel 6"), Some((6, 12)));
+    }
+
+    #[test]
+    fn nur_bei_passender_staffel_zerlegen() {
+        // Fuehrende Ziffer passt NICHT zur Staffel -> Zahl bleibt die Folge.
+        assert_eq!(parse_episode("250 - Titel", "Staffel 1"), Some((1, 250)));
+        // Zweistellige Nummern bleiben unangetastet.
+        assert_eq!(parse_episode("07 - Titel", "Staffel 1"), Some((1, 7)));
+        // "100" waere Folge 0 - das ergibt keinen Sinn, also unveraendert.
+        assert_eq!(parse_episode("100 - Titel", "Staffel 1"), Some((1, 100)));
+    }
+
+    #[test]
+    fn domain_endung_faellt_weg() {
+        assert_eq!(strip_domain_suffix("miraculous to"), "miraculous");
+        assert_eq!(strip_domain_suffix("kinox to"), "kinox");
+        assert_eq!(strip_domain_suffix("serien stream sx"), "serien stream");
+    }
+
+    #[test]
+    fn echte_titel_mit_solchen_woertern_bleiben() {
+        // „Person of Interest" endet nicht auf einer TLD; „Chicago Med" schon
+        // fast — aber „med" steht nicht in der Liste. Wichtig ist vor allem,
+        // dass zu kurze Reste nicht abgeschnitten werden.
+        assert_eq!(strip_domain_suffix("Person of Interest"), "Person of Interest");
+        assert_eq!(strip_domain_suffix("Up to"), "Up to"); // Rest waere nur 2 Zeichen
+        assert_eq!(strip_domain_suffix("Miraculous"), "Miraculous");
     }
 }

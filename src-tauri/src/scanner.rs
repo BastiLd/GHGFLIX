@@ -139,15 +139,47 @@ fn show_source_name(root: &Path, path: &Path) -> String {
     let comps: Vec<_> = rel.components().collect();
     if comps.len() >= 2 {
         let first = comps[0].as_os_str().to_string_lossy().to_string();
+
+        /* Nichtssagender Ordnername („Downloads", „Videos", „Neuer Ordner")?
+           Dann steht der echte Titel eine Ebene HÖHER.
+
+           Gemessen am 01.08.2026:
+             Websites Download\miraculous to\Downloads\Staffel 1\101 - ….mp4
+           Als Bibliothek war „…\miraculous to" eingetragen, damit hieß die
+           Serie „Downloads" — 90 Folgen, von TMDb nie zu finden. */
+        if parser::is_generic_dir(&first) {
+            let mut hoch = root;
+            let mut kandidat = hoch.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            // Auch der Bibliotheksname kann nichtssagend sein — dann weiter
+            // hoch, aber höchstens drei Ebenen (sonst landet man bei „Users").
+            let mut i = 0;
+            while i < 3 && (kandidat.is_empty() || parser::is_generic_dir(&kandidat)) {
+                match hoch.parent() {
+                    Some(p) if p != hoch => {
+                        hoch = p;
+                        kandidat = hoch.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                    }
+                    _ => break,
+                }
+                i += 1;
+            }
+            if !kandidat.is_empty() && !parser::is_generic_dir(&kandidat) {
+                return parser::strip_domain_suffix(&kandidat);
+            }
+            // Nichts Brauchbares gefunden: lieber der Dateiname als „Downloads".
+            let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            return file_stem(&name);
+        }
+
         if is_pure_season_dir(&first) {
             // root itself is the show folder → use its name
             if let Some(rn) = root.file_name().map(|s| s.to_string_lossy().to_string()) {
-                if !rn.is_empty() {
-                    return rn;
+                if !rn.is_empty() && !parser::is_generic_dir(&rn) {
+                    return parser::strip_domain_suffix(&rn);
                 }
             }
         }
-        first
+        parser::strip_domain_suffix(&first)
     } else {
         // a file sitting directly in the root: if the root looks like a show
         // folder (has a real name), prefer it over the bare file stem

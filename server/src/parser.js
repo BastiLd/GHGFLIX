@@ -131,6 +131,57 @@ export function isJunkTitle(t) {
 }
 
 /**
+ * Ordnernamen, die NICHTS über den Inhalt aussagen.
+ *
+ * Echtes Beispiel (gemessen am 01.08.2026):
+ *   Websites Download\miraculous to\Downloads\Staffel 1\101 - Stormy Weather.mp4
+ * Der Serienordner heißt „Downloads" — daraus wurde in der Bibliothek eine
+ * Serie namens „Downloads" mit 90 Folgen, die TMDb natürlich nicht kennt.
+ * Der bedeutungsvolle Name steht eine Ebene HÖHER („miraculous to").
+ *
+ * Solche Namen kommen von Download-Programmen, Browsern und Aufräumaktionen.
+ * Trifft einer zu, geht showSourceName eine Ebene nach oben.
+ */
+const GENERISCHE_ORDNER = new Set([
+  "downloads", "download", "downloaded", "dl",
+  "video", "videos", "media", "medien", "movie", "movies", "film", "filme",
+  "serie", "serien", "series", "show", "shows", "tv", "tvshows", "anime",
+  "neuer ordner", "new folder", "ordner", "folder", "temp", "tmp",
+  "complete", "completed", "fertig", "sonstiges", "misc", "diverses",
+  "web ui", "output", "ausgabe", "export", "unsortiert", "unsorted",
+]);
+
+export function isGenericDir(name) {
+  const t = String(name ?? "").trim().toLowerCase().replace(/[._-]+/g, " ").replace(/\s+/g, " ");
+  if (!t) return true;
+  if (GENERISCHE_ORDNER.has(t)) return true;
+  // „Downloads (2)", „Neuer Ordner 3", „Video 1" — dieselbe Sorte mit Zusatz
+  const ohneZahl = t.replace(/\s*\(?\d+\)?$/, "").trim();
+  return ohneZahl !== t && GENERISCHE_ORDNER.has(ohneZahl);
+}
+
+/* Ein als Ordnername gespeicherter Domainname: „miraculous to" kommt von
+   „miraculous.to" (Windows mag keinen Punkt am Ordnerende, bzw. das
+   Kopierprogramm hat ihn ersetzt). Das angehängte Länderkürzel gehört NICHT
+   zum Serientitel — ohne diese Zeile sucht TMDb nach „miraculous to". */
+const TLDS = new Set([
+  "to", "com", "net", "org", "tv", "cc", "me", "io", "co", "de", "at", "ch",
+  "ru", "se", "sx", "is", "li", "la", "ws", "info", "biz", "xyz", "site",
+  "online", "stream", "watch", "pw", "cx", "gs", "nu",
+]);
+
+export function stripDomainSuffix(name) {
+  const roh = String(name ?? "").trim();
+  const teile = roh.split(/\s+/);
+  if (teile.length < 2) return roh;
+  const letztes = teile[teile.length - 1].toLowerCase().replace(/[^a-z]/g, "");
+  if (!TLDS.has(letztes)) return roh;
+  const rest = teile.slice(0, -1).join(" ").trim();
+  // Nur kürzen, wenn wirklich noch ein Titel übrig bleibt.
+  return rest.length >= 3 ? rest : roh;
+}
+
+/**
  * Ordner, der nur eine Release-Seite/Sammlung benennt („www.UIndex.org",
  * „[TGx] Torrents"). Solche Ordner sind KEINE Serie — die echte Serie steht
  * eine Ebene tiefer.
@@ -284,7 +335,25 @@ export function parseEpisode(stem, parentDir = "") {
     const me = RE_EP_ONLY.exec(norm);
     if (me) return { season, episode: parseInt(me[1], 10), episodeEnd: null };
     const ms = RE_STANDALONE_NUM.exec(norm);
-    if (ms) return { season, episode: parseInt(ms[1], 10), episodeEnd: null };
+    if (ms) {
+      const zahl = parseInt(ms[1], 10);
+      /* Zusammengezogene Nummer wie "101" in "Staffel 1" = 1x01, also Folge 1.
+         Diese Schreibweise benutzen Download-Seiten und alte Rips.
+
+         Gemessen am 01.08.2026 an
+           …\miraculous to\Downloads\Staffel 1\101 - Stormy Weather.mp4
+         Vorher wurde daraus S01E101 — die Bibliothek zeigte dadurch wilde
+         Folgennummern und TMDb fand zu "Folge 101" nie einen Titel.
+
+         Bewusst nur, wenn die FÜHRENDE Ziffernfolge exakt die Staffel aus dem
+         Ordnernamen ist. Sonst würde aus "Staffel 1\250 - Titel" fälschlich
+         S02E50, obwohl dort schlicht Folge 250 gemeint sein kann. */
+      const rest = zahl % 100;
+      if (zahl >= 100 && Math.floor(zahl / 100) === season && rest >= 1) {
+        return { season, episode: rest, episodeEnd: null };
+      }
+      return { season, episode: zahl, episodeEnd: null };
+    }
   }
   return null;
 }

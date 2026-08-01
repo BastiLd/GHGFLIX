@@ -6,7 +6,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "test": "node test/koppeln.test.mjs && node test/profile.test.mjs && node test/scan.test.mjs && node test/spuren.test.mjs && node test/routen.test.mjs && node test/hls.test.mjs && node test/ordnerwahl.test.mjs && node test/serienfilme.test.mjs && node test/kanaele.test.mjs"
+    "test": "node test/koppeln.test.mjs && node test/profile.test.mjs && node test/scan.test.mjs && node test/spuren.test.mjs && node test/routen.test.mjs && node test/hls.test.mjs && node test/ordnerwahl.test.mjs && node test/serienfilme.test.mjs && node test/kanaele.test.mjs && node test/ordnernamen.test.mjs"
   },
   "engines": {
     "node": ">=24"

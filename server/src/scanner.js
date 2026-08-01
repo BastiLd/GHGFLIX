@@ -26,7 +26,7 @@ import {
 import {
   isVideo, isJunkClip, isExtrasDir, fileStem, parseEpisode, parseSeasonFromDir, isPureSeasonDir,
   parseTitleYear, cleanShowTitle, showKey, movieKey, episodeTitleFromFile, providerId,
-  isJunkTitle, isSiteDir,
+  isJunkTitle, isSiteDir, isGenericDir, stripDomainSuffix,
 } from "./parser.js";
 import { ffprobe } from "./stream.js";
 import * as tmdb from "./tmdb.js";
@@ -208,10 +208,36 @@ function showSourceName(root, filePath) {
   const rel = relative(root, filePath);
   const comps = rel.split(sep).filter(Boolean);
   if (comps.length >= 2) {
-    const first = comps[0];
+    let first = comps[0];
+
+    /* Nichtssagender Ordnername („Downloads", „Videos", „Neuer Ordner")?
+       Dann steht der echte Titel eine Ebene HÖHER — also im Namen der
+       Bibliothek selbst bzw. deren Elternordner.
+
+       Gemessen am 01.08.2026:
+         Websites Download\miraculous to\Downloads\Staffel 1\101 - ….mp4
+       Als Bibliothek war „…\miraculous to" eingetragen, damit hieß die Serie
+       „Downloads" — 90 Folgen, von TMDb nie zu finden. Mit dieser Prüfung
+       heißt sie „miraculous to" → nach stripDomainSuffix „miraculous". */
+    if (isGenericDir(first)) {
+      let kandidat = basename(root);
+      let hoch = root;
+      // Auch der Bibliotheksname selbst kann nichtssagend sein — dann weiter
+      // hoch, aber höchstens drei Ebenen (sonst landet man bei „Users").
+      for (let i = 0; i < 3 && (isGenericDir(kandidat) || !kandidat); i++) {
+        const eltern = dirname(hoch);
+        if (!eltern || eltern === hoch) break;
+        hoch = eltern;
+        kandidat = basename(hoch);
+      }
+      if (kandidat && !isGenericDir(kandidat)) return stripDomainSuffix(kandidat);
+      // Nichts Brauchbares gefunden: lieber der Dateiname als „Downloads".
+      return fileStem(basename(filePath));
+    }
+
     if (isPureSeasonDir(first)) {
       const rn = basename(root);
-      if (rn) return rn;
+      if (rn) return isGenericDir(rn) ? fileStem(basename(filePath)) : stripDomainSuffix(rn);
     }
     // Sammelordner einer Release-Seite ("www.UIndex.org") ist KEINE Serie —
     // die echte Serie steht eine Ebene tiefer. Ohne das wurde aus so einem
@@ -223,10 +249,10 @@ function showSourceName(root, filePath) {
       // nur noch die Datei übrig — deren Name trägt den echten Titel
       return fileStem(basename(filePath));
     }
-    return first;
+    return stripDomainSuffix(first);
   }
   const rn = basename(root);
-  if (rn && !isSiteDir(rn)) return rn;
+  if (rn && !isSiteDir(rn) && !isGenericDir(rn)) return stripDomainSuffix(rn);
   return fileStem(basename(filePath));
 }
 
