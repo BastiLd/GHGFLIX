@@ -1,6 +1,6 @@
 [package]
 name = "ghgflix"
-version = "1.1.0"
+version = "1.2.0"
 description = "GHGFlix - your local media library"
 authors = ["GHGFlix"]
 edition = "2021"

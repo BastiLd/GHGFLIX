@@ -12,6 +12,7 @@ import { scanLibraries } from "./lib/api";
 import { loadAccent, useUiPrefs } from "./lib/uiPrefs";
 import { loadServerConfig, startServerSync } from "./lib/serverSync";
 import { useGlobalHorizontalWheel } from "./lib/useHorizontalWheel";
+import Feeds from "./pages/Feeds";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import MovieDetail from "./pages/MovieDetail";
@@ -196,6 +197,8 @@ export default function App() {
           <Route path="/show/:id" element={<ShowDetail />} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/stats" element={<Stats />} />
+          {/* Punkt 5: abonnierte YouTube-Kanäle plus Leaks/Blog */}
+          <Route path="/kanaele" element={<Feeds />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
         <Route path="/play/:type/:id" element={<Player />} />

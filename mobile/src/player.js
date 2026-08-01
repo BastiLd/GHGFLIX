@@ -41,7 +41,7 @@
  * NUR aus diesen gespeichert; jeder direkte Zugriff läuft über safe().
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Text, View } from "react-native";
 import { FKnopf, FokusReihe, useDialog, useFernbedienung, useFokusElement } from "./fokus.js";
 import { C, M, gross, st } from "./stile.js";
 import { Dialog, DialogListe, fmtZeit } from "./bausteine.js";
@@ -97,6 +97,7 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   const lebtRef = useRef(true);
   const versteckRef = useRef(null);
   const tonRef = useRef(null);   // aktuelle Tonspur für den Umwandel-Neustart
+  const hlsNeustartRef = useRef(0); // letzter HLS-Neustart (gegen Endlosschleifen)
 
   /** Jeder Zugriff auf das native Player-Objekt — niemals ungeschützt. */
   const safe = useCallback((fn, fallback = undefined) => {
@@ -144,14 +145,24 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, type, id]);
 
-  const tok = conn?.token ? `?token=${conn.token}` : "?";
   const quelleFuer = useCallback(
     (i, t) => {
-      if (modeRef.current === "direct") return `${base}${i.directUrl}${tok}&profile=1`;
+      /* Die Adressen aus /api/play tragen den Zugangsschlüssel bereits in
+         sich. Vorher wurde er ein ZWEITES Mal mit "?" angehängt — daraus
+         wurde "…?x=1&token=ABC?token=ABC", und der Server las als Token den
+         Text "ABC?token=ABC". Mit gesetztem Server-Passwort endete deshalb
+         jede Wiedergabe am Handy in einem 401. */
+      const dran = (url, zusatz) => `${base}${url}${url.includes("?") ? "&" : "?"}${zusatz}`;
+      if (modeRef.current === "direct") return dran(i.directUrl, "profile=1");
       const a = tonRef.current?.nr ?? 0;
-      return `${base}${i.transcodeUrl}${tok}&profile=1&a=${a}&t=${Math.floor(t)}`;
+      /* Punkt 2 der Übergabe: Auf iPhone und iPad spielt AVFoundation den
+         endlosen fragmentierten MP4-Strom von /api/transcode NICHT ab — das
+         Bild bleibt schwarz. Für Apple liefert der Server denselben Inhalt
+         als HLS (siehe server/src/hls.js). */
+      const weg = Platform.OS === "ios" && i.hlsUrl ? i.hlsUrl : i.transcodeUrl;
+      return dran(weg, `profile=1&a=${a}&t=${Math.floor(t)}`);
     },
-    [base, tok],
+    [base],
   );
 
   const player = useVideoPlayer(null, (p) => {
@@ -226,6 +237,21 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
             player.replace(quelleFuer(info, posRef.current));
             player.play();
           });
+        } else if (s === "error" && modeRef.current === "transcode" && info && Platform.OS === "ios") {
+          /* iOS/HLS: Der Server räumt eine Sitzung ab, die 5 Minuten lang
+             niemand abgerufen hat (langes Pausieren). Danach bliebe die
+             Wiedergabe einfach stehen. Also an derselben Stelle eine frische
+             Sitzung starten — der Abstand verhindert eine Endlosschleife,
+             falls die Datei wirklich kaputt ist. */
+          const jetzt = Date.now();
+          if (jetzt - hlsNeustartRef.current > 5000) {
+            hlsNeustartRef.current = jetzt;
+            offsetRef.current = posRef.current;
+            safe(() => {
+              player.replace(quelleFuer(info, posRef.current));
+              player.play();
+            });
+          }
         }
       }));
     } catch {}

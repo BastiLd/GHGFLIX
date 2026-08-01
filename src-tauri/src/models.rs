@@ -193,7 +193,30 @@ pub struct CastMember {
 #[serde(rename_all = "camelCase")]
 pub struct Extras {
     pub trailer_key: Option<String>,
+    /// Alle Trailer/Teaser/Clips mit Sprache (Punkt 4).
+    #[serde(default)]
+    pub videos: Vec<TrailerVideo>,
     pub cast: Vec<CastMember>,
+}
+
+/// Ein YouTube-Video von TMDb — Trailer, Teaser, Clip, Featurette …
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrailerVideo {
+    pub key: String,
+    pub name: String,
+    pub site: String,
+    /// „Trailer", „Teaser", „Clip" … (in der TMDb-Antwort heißt das Feld `type`)
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// Sprachkürzel wie „de", „en" — Grundlage der Sprachauswahl.
+    pub lang: Option<String>,
+    pub region: Option<String>,
+    pub official: bool,
+    pub published_at: Option<String>,
+    pub size: Option<i64>,
+    /// Bei Serien: zu welcher Staffel das Video gehört (null = zur ganzen Serie).
+    pub season: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,4 +241,8 @@ pub struct SeasonGroup {
 pub struct ShowDetail {
     pub show: Show,
     pub seasons: Vec<SeasonGroup>,
+    /// Kinofilme, die zu dieser Serie gehören (Reiter „Filme" in der
+    /// Serienansicht) — siehe serienfilme.rs.
+    #[serde(default)]
+    pub movies: Vec<Movie>,
 }

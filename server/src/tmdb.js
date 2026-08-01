@@ -374,22 +374,70 @@ export async function bestLogo(kind, tmdbId) {
   return pool.sort((a, b) => (b.vote_average ?? 0) - (a.vote_average ?? 0))[0]?.file_path ?? null;
 }
 
+/* ── Trailer (Punkt 4) ─────────────────────────────────────────────────────
+   TMDb liefert Videos IMMER nur in genau einer Sprache. Bisher wurde deshalb
+   die eingestellte Sprache geholt und erst bei völliger Leere auf Englisch
+   ausgewichen — Ergebnis: gibt es einen deutschen Teaser, sah man den
+   englischen Haupttrailer nie.
+
+   Jetzt werden beide Sprachen geholt und zusammengeführt; die Oberfläche
+   bietet die gefundenen Sprachen zur Auswahl an. Doppelte (gleicher
+   YouTube-Schlüssel) fallen weg. */
+const VIDEO_RANG = { Trailer: 0, Teaser: 1, Clip: 2, Featurette: 3, "Behind the Scenes": 4, Bloopers: 5 };
+
+function videoAus(v, season = null) {
+  return {
+    key: v.key,
+    name: v.name ?? "",
+    site: v.site ?? "",
+    type: v.type ?? "",
+    lang: v.iso_639_1 || null,
+    region: v.iso_3166_1 || null,
+    official: !!v.official,
+    publishedAt: v.published_at ?? null,
+    size: v.size ?? null,
+    season,
+  };
+}
+
+function videosSortieren(list) {
+  return list.sort(
+    (a, b) =>
+      (VIDEO_RANG[a.type] ?? 9) - (VIDEO_RANG[b.type] ?? 9) ||
+      Number(b.official) - Number(a.official) ||
+      String(b.publishedAt ?? "").localeCompare(String(a.publishedAt ?? "")),
+  );
+}
+
+/** Videos zu einem Titel — oder zu EINER Staffel, wenn `season` gesetzt ist. */
+export async function videos(kind, tmdbId, season = null) {
+  const base = kind === "movie" ? `/movie/${tmdbId}` : `/tv/${tmdbId}`;
+  const pfad = season != null ? `${base}/season/${season}/videos` : `${base}/videos`;
+  // Eingestellte Sprache UND Englisch — sonst fehlen je nach Titel die Hälfte.
+  const [eigene, en] = await Promise.all([get(pfad), get(pfad, { language: "en-US" })]);
+  const zusammen = [...(eigene?.results ?? []), ...(en?.results ?? [])];
+  const gesehen = new Set();
+  const raus = [];
+  for (const v of zusammen) {
+    if (v.site !== "YouTube" || !v.key || gesehen.has(v.key)) continue;
+    gesehen.add(v.key);
+    raus.push(videoAus(v, season));
+  }
+  return videosSortieren(raus);
+}
+
 /** Trailer + Besetzung für die Detailseiten. */
 export async function extras(kind, tmdbId) {
   const base = kind === "movie" ? `/movie/${tmdbId}` : `/tv/${tmdbId}`;
-  const [videos, credits] = await Promise.all([get(`${base}/videos`), get(`${base}/credits`)]);
-  let all = videos?.results ?? [];
-  // Fallback auf englische Trailer, wenn es in der eingestellten Sprache keine gibt
-  if (all.length === 0) {
-    const en = await get(`${base}/videos`, { language: "en-US" });
-    all = en?.results ?? [];
-  }
+  const [alle, credits] = await Promise.all([videos(kind, tmdbId), get(`${base}/credits`)]);
+  // trailerKey bleibt für den alten "Trailer ansehen"-Knopf erhalten.
   const trailer =
-    all.find((v) => v.site === "YouTube" && v.type === "Trailer" && v.official) ??
-    all.find((v) => v.site === "YouTube" && v.type === "Trailer") ??
-    all.find((v) => v.site === "YouTube");
+    alle.find((v) => v.type === "Trailer" && v.official) ??
+    alle.find((v) => v.type === "Trailer") ??
+    alle[0];
   return {
     trailerKey: trailer?.key ?? null,
+    videos: alle,
     cast: (credits?.cast ?? []).slice(0, 20).map((c) => ({
       name: c.name,
       character: c.character ?? null,

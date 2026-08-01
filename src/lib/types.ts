@@ -110,6 +110,8 @@ export interface SeasonGroup {
 export interface ShowDetail {
   show: Show;
   seasons: SeasonGroup[];
+  /** Kinofilme, die zu dieser Serie gehören (Reiter „Filme"). */
+  movies?: Movie[];
 }
 
 export interface Progress {
@@ -171,8 +173,27 @@ export interface CastMember {
   profilePath?: string | null;
 }
 
+/** Ein YouTube-Video von TMDb — Trailer, Teaser, Clip, Featurette … */
+export interface TrailerVideo {
+  key: string;
+  name: string;
+  site: string;
+  /** „Trailer“, „Teaser“, „Clip“ … */
+  type: string;
+  /** Sprachkürzel wie „de“, „en“ — Grundlage der Sprachauswahl. */
+  lang?: string | null;
+  region?: string | null;
+  official: boolean;
+  publishedAt?: string | null;
+  size?: number | null;
+  /** Bei Serien: zu welcher Staffel (null = zur ganzen Serie). */
+  season?: number | null;
+}
+
 export interface Extras {
   trailerKey?: string | null;
+  /** Alle gefundenen Videos mit Sprache (Punkt 4). */
+  videos?: TrailerVideo[];
   cast: CastMember[];
 }
 
@@ -181,4 +202,76 @@ export interface Stats {
   moviesWatched: number;
   episodesWatched: number;
   inProgress: number;
+}
+
+// ===== Auswahl-Fenster für Ordner (Punkt 1) =====
+
+/** Ein im Ordner gefundenes Video, so wie es das Auswahl-Fenster anzeigt. */
+export interface FolderHit {
+  path: string;
+  name: string;
+  /** Ordner der Datei — die Oberfläche gruppiert danach. */
+  dir: string;
+  sizeBytes: number;
+  /** Geraten; der Nutzer kann beim Bestätigen noch umstellen. */
+  kind: "movie" | "episode";
+  title: string;
+  year?: number | null;
+  season?: number | null;
+  episode?: number | null;
+  /** Schon in der Bibliothek? Dann ist nichts zu tun. */
+  inLibrary: boolean;
+  /** Früher schon abgelehnt? */
+  ignored: boolean;
+}
+
+export interface FolderPreview {
+  path: string;
+  hits: FolderHit[];
+  /** Übersprungene Schnipsel/Winzdateien — nur als Zahl. */
+  skipped: number;
+  truncated: boolean;
+}
+
+export interface ImportSummary {
+  accepted: number;
+  rejected: number;
+  libraryId?: number | null;
+  libraryCreated: boolean;
+  removed: number;
+}
+
+// ===== Kanäle & Feeds (Punkt 5) =====
+
+/** Ein Abo — YouTube-Kanal oder Blog/Leak-Feed. */
+export interface Feed {
+  id: string;
+  art: "youtube" | "blog";
+  titel: string;
+  kanalId?: string | null;
+  feedUrl: string;
+  /** Seite zum Anklicken (Kanalseite bzw. Blog). */
+  seite: string;
+  benachrichtigen: boolean;
+  hinzugefuegt: number;
+  /** Zeitpunkt des letzten erfolgreichen Abrufs (0 = noch nie). */
+  zuletzt: number;
+  fehler?: string | null;
+}
+
+/** Ein Beitrag aus einem Abo. */
+export interface FeedBeitrag {
+  id: string;
+  feedId: string;
+  art: "youtube" | "blog";
+  videoId?: string | null;
+  titel: string;
+  url?: string | null;
+  bild?: string | null;
+  beschreibung?: string | null;
+  veroeffentlicht: number;
+  gelesen: boolean;
+  entdeckt: number;
+  /** Name des Abos — nur beim Abrufen gefüllt. */
+  feedTitel?: string | null;
 }

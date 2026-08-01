@@ -155,7 +155,23 @@ export function detectLibraries() {
 
 const MIN_VIDEO_BYTES = Math.max(0, parseInt(process.env.MIN_VIDEO_MB || "1", 10) || 1) * 1024 * 1024;
 
+/* Im Auswahl-Fenster abgelehnte Dateien (Punkt 1 der Übergabe).
+   Bewusst hier direkt aus den Einstellungen gelesen statt aus ordnerwahl.js
+   importiert — sonst würden sich die beiden Module gegenseitig importieren.
+   Ohne diese Prüfung wäre jede Ablehnung beim nächsten Scan wieder aufgehoben. */
+function ignorierteDateien() {
+  try {
+    const arr = JSON.parse(getSetting("ignored_files") || "[]");
+    return new Set(
+      (Array.isArray(arr) ? arr : []).map((p) => String(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 function* walkVideos(root, maxDepth = 8) {
+  const ignoriert = ignorierteDateien();
   const stack = [{ dir: root, depth: 0 }];
   while (stack.length) {
     const { dir, depth } = stack.pop();
@@ -167,6 +183,7 @@ function* walkVideos(root, maxDepth = 8) {
       } else if (e.isFile() && isVideo(e.name)) {
         const stem = fileStem(e.name);
         if (isJunkClip(stem)) continue;
+        if (ignoriert.size && ignoriert.has(p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase())) continue;
         // Winzige Dateien sind fast immer Reste/Werbeschnipsel. Bewusst NIEDRIG
         // (1 MB), damit kurze Zeichentrickfolgen oder 240p-Rips nicht verschwinden.
         try {

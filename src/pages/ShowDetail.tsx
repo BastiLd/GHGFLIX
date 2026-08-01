@@ -3,8 +3,8 @@ import clsx from "clsx";
 import { ArrowLeft, Check, ImageIcon, MoreVertical, Pencil, Play, Plus, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { listShows } from "../lib/api";
-import { ShowCardItem } from "../components/cards";
+import { linkMovieToShow, listShows } from "../lib/api";
+import { MovieCardItem, ShowCardItem } from "../components/cards";
 import { MediaRow } from "../components/MediaRow";
 import { detectIntros, getSeasonArt, getShowDetail, listFavorites, listProgress, mediaThumbnail, repairSeasonTitles, revealInExplorer, setSeasonWatched, setShowIntro, setShowWatched, setWatched, toggleFavorite } from "../lib/api";
 import { openCtx } from "../lib/contextmenu";
@@ -34,6 +34,10 @@ export default function ShowDetail() {
   const [introTo, setIntroTo] = useState("60");
   const [reassign, setReassign] = useState<ReassignTarget | null>(null);
   const [artworkTab, setArtworkTab] = useState<"poster" | "backdrop" | undefined>(undefined);
+  /* Punkt 3: „Filme" ist ein eigener Reiter NEBEN den Staffeln, kein
+     Staffelwert — sonst müsste selectedSeason plötzlich auch Nicht-Zahlen
+     tragen und jede Rechnung darauf (Fortschritt, „Alle gesehen") bräche. */
+  const [filmeTab, setFilmeTab] = useState(false);
 
   const qc = useQueryClient();
   const toast = useStore((s) => s.toast);
@@ -107,6 +111,8 @@ export default function ShowDetail() {
   if (!detail.data) return <EmptyState title="Serie nicht gefunden" />;
 
   const { show } = detail.data;
+  const showMovies = detail.data.movies ?? [];
+  const hasSpecials = seasons.some((s) => s.season === 0);
   const genres = parseGenres(show.genres);
   const rating = ratingText(show.rating);
   const currentSeason = seasons.find((s) => s.season === selectedSeason);
@@ -322,27 +328,109 @@ export default function ShowDetail() {
         </div>
       </div>
 
-      {/* season tabs */}
+      {/* Reiter: Staffeln — dann abgesetzt Specials und Filme (Punkt 3) */}
       <div className="px-10 mt-10">
-        <div className="flex gap-2 flex-wrap mb-5">
-          {seasons.map((s) => (
+        <div className="flex gap-2 flex-wrap mb-5 items-center">
+          {seasons
+            .filter((s) => s.season > 0)
+            .map((s) => (
+              <button
+                key={s.season}
+                onClick={() => {
+                  setSelectedSeason(s.season);
+                  setFilmeTab(false);
+                }}
+                className={clsx(
+                  "px-4 py-2 rounded-lg text-sm font-semibold transition",
+                  !filmeTab && selectedSeason === s.season
+                    ? "bg-ghg-red text-white"
+                    : "bg-ghg-surface2 text-ghg-muted hover:text-ghg-text",
+                )}
+              >
+                Staffel {s.season}
+                {seasonAllWatched(s.season) && <Check className="w-3.5 h-3.5 inline-block ml-1.5 -mt-0.5" />}
+              </button>
+            ))}
+
+          {(hasSpecials || showMovies.length > 0) && (
+            <span className="w-px h-6 bg-ghg-line mx-1" aria-hidden />
+          )}
+
+          {hasSpecials && (
             <button
-              key={s.season}
-              onClick={() => setSelectedSeason(s.season)}
+              onClick={() => {
+                setSelectedSeason(0);
+                setFilmeTab(false);
+              }}
+              title="Specials, Kurzfolgen und alles, was keiner Staffel zugeordnet ist"
               className={clsx(
                 "px-4 py-2 rounded-lg text-sm font-semibold transition",
-                selectedSeason === s.season
+                !filmeTab && selectedSeason === 0
                   ? "bg-ghg-red text-white"
                   : "bg-ghg-surface2 text-ghg-muted hover:text-ghg-text",
               )}
             >
-              {s.season === 0 ? "Specials" : `Staffel ${s.season}`}
-              {seasonAllWatched(s.season) && <Check className="w-3.5 h-3.5 inline-block ml-1.5 -mt-0.5" />}
+              Specials
+              <span className="ml-1.5 text-xs opacity-70">
+                {seasons.find((s) => s.season === 0)?.episodes.length ?? 0}
+              </span>
+              {seasonAllWatched(0) && <Check className="w-3.5 h-3.5 inline-block ml-1.5 -mt-0.5" />}
             </button>
-          ))}
+          )}
+
+          {showMovies.length > 0 && (
+            <button
+              onClick={() => setFilmeTab(true)}
+              title="Kinofilme, die zu dieser Serie gehören"
+              className={clsx(
+                "px-4 py-2 rounded-lg text-sm font-semibold transition",
+                filmeTab ? "bg-ghg-red text-white" : "bg-ghg-surface2 text-ghg-muted hover:text-ghg-text",
+              )}
+            >
+              Filme <span className="ml-1 text-xs opacity-70">{showMovies.length}</span>
+            </button>
+          )}
         </div>
 
-        {currentSeason && selectedSeason !== null && (
+        {filmeTab && (
+          <div className="mb-6">
+            <h3 className="text-lg font-bold mb-1">
+              Filme zu dieser Serie
+              <span className="text-ghg-muted font-normal text-sm ml-2">{showMovies.length}</span>
+            </h3>
+            <p className="text-xs text-ghg-muted mb-4">
+              Erkannt an ihrem Ordner oder ihrem Titel. Passt einer nicht dazu, entfernst du ihn hier per Rechtsklick →
+              „Gehört nicht zu dieser Serie“ — die Entscheidung bleibt auch nach einem Neuaufbau der Bibliothek erhalten.
+            </p>
+            <div className="flex gap-4 flex-wrap">
+              {showMovies.map((mv) => (
+                <div
+                  key={mv.id}
+                  onContextMenu={(e) =>
+                    openCtx(e, [
+                      { label: "Abspielen", onClick: () => navigate(`/play/movie/${mv.id}`) },
+                      { label: "Details", onClick: () => navigate(`/movie/${mv.id}`) },
+                      {
+                        label: "Gehört nicht zu dieser Serie",
+                        onClick: () =>
+                          void linkMovieToShow(sid, mv.id, false)
+                            .then(() => {
+                              qc.invalidateQueries({ queryKey: ["show", sid] });
+                              toast(`„${mv.title}“ wird hier nicht mehr angezeigt`, "success");
+                            })
+                            .catch((e) => toast(String(e), "error")),
+                      },
+                    ])
+                  }
+                >
+                  <MovieCardItem movie={mv} onIdentify={() => setIdentify({ type: "movie", id: mv.id, title: mv.title })} />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!filmeTab && currentSeason && selectedSeason !== null && (
           <div className="flex items-center gap-3 mb-4">
             {seasonArt.get(selectedSeason) && (
               <img
@@ -438,7 +526,7 @@ export default function ShowDetail() {
           </div>
         )}
 
-        <div className="space-y-2">
+        <div className={clsx("space-y-2", filmeTab && "hidden")}>
           {currentSeason?.episodes.map((ep) => (
             <EpisodeRow
               key={ep.id}
@@ -488,7 +576,8 @@ export default function ShowDetail() {
       </div>
 
       <div className="px-10 mt-10">
-        <Extras mediaType="tv" tmdbId={show.tmdbId} />
+        {/* Staffelnummern mitgeben: TMDb führt Trailer auch je Staffel */}
+        <Extras mediaType="tv" tmdbId={show.tmdbId} seasons={seasons.map((s) => s.season)} />
       </div>
 
       {similar.length >= 3 && (

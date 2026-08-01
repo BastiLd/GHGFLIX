@@ -34,6 +34,7 @@ import {
   getLibraries,
   getSetting,
   importData,
+  listIgnoredFiles,
   openAppData,
   probeQualities,
   refreshMetadata,
@@ -42,6 +43,7 @@ import {
   scanLibraries,
   setSetting,
   thumbCacheSize,
+  unignoreFiles,
   type ToolsReport,
 } from "../lib/api";
 import { comboFromEvent, comboHasKey, comboLabel } from "../lib/keys";
@@ -54,6 +56,7 @@ import { setTvModePref, tvModePref } from "../lib/tvMode";
 import { loadServerConfig, loginServer, saveServerConfig, startServerSync, syncOnce, testServer, type ServerConfig } from "../lib/serverSync";
 import { Button, InfoButton, Modal, Spinner, TextInput } from "../components/ui";
 import { ThemeStore } from "../components/ThemeStore";
+import { FolderScanDialog, IgnoredFilesList } from "../components/FolderScanDialog";
 
 type TabId =
   | "allgemein"
@@ -306,6 +309,7 @@ export default function Settings() {
   const toast = useStore((s) => s.toast);
 
   const libs = useQuery({ queryKey: ["libraries"], queryFn: getLibraries });
+  const ignored = useQuery({ queryKey: ["ignoredFiles"], queryFn: listIgnoredFiles });
 
   const [tmdbKey, setTmdbKey] = useState("");
   const [lang, setLang] = useState("de-DE");
@@ -317,7 +321,11 @@ export default function Settings() {
   const [markerKey, setMarkerKey] = useState("k");
   const [email, setEmail] = useState<string | null>(null);
   const [detecting, setDetecting] = useState(false);
-  const [webPick, setWebPick] = useState<{ kind: "movie" | "tv" } | null>(null);
+  /* `zweck` unterscheidet die zwei Wege, die denselben Ordner-Browser benutzen:
+     "bibliothek" fügt den Ordner direkt hinzu, "auswahl" öffnet danach das
+     Auswahl-Fenster mit allen gefundenen Videos (Punkt 1 der Übergabe). */
+  const [webPick, setWebPick] = useState<{ kind: "movie" | "tv"; zweck: "bibliothek" | "auswahl" } | null>(null);
+  const [scanRoot, setScanRoot] = useState<{ path: string; kind: "movie" | "tv" } | null>(null);
   const [showTheme, setShowTheme] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [autoScan, setAutoScan] = useState(true);
@@ -490,10 +498,20 @@ export default function Settings() {
     toast("Steuerung gespeichert", "success");
   };
 
+  /** Ordner wählen und danach das Auswahl-Fenster öffnen (Punkt 1). */
+  const pickFolderForScan = async () => {
+    if (IS_WEB) {
+      setWebPick({ kind: "tv", zweck: "auswahl" });
+      return;
+    }
+    const dir = await openDialog({ directory: true, multiple: false });
+    if (typeof dir === "string") setScanRoot({ path: dir, kind: "tv" });
+  };
+
   const pickFolder = async (kind: "movie" | "tv") => {
     if (IS_WEB) {
       // server paths → server folder browser instead of a native dialog
-      setWebPick({ kind });
+      setWebPick({ kind, zweck: "bibliothek" });
       return;
     }
     const dir = await openDialog({ directory: true, multiple: false });
@@ -1205,7 +1223,14 @@ export default function Settings() {
               <Button variant="ghost" onClick={() => pickFolder("tv")}>
                 <FolderPlus className="w-4 h-4" /> Serienordner
               </Button>
+              <Button variant="ghost" onClick={() => void pickFolderForScan()}>
+                <ScanSearch className="w-4 h-4" /> Ordner durchsuchen &amp; auswählen
+              </Button>
             </div>
+            <p className="text-xs text-ghg-muted mb-3">
+              „Ordner durchsuchen &amp; auswählen“ sucht rekursiv nach Videos und zeigt jeden Fund einzeln mit
+              Vorschaubild — du entscheidest, was in die Bibliothek kommt und was nicht.
+            </p>
             <label className="flex items-center gap-3 mb-1 cursor-pointer">
               <input
                 type="checkbox"
@@ -1230,6 +1255,29 @@ export default function Settings() {
               />
               <span className="text-sm">Ordner live überwachen (neue Dateien automatisch erkennen)</span>
             </label>
+
+            {/* Abgelehntes bleibt dauerhaft draußen — dann muss man es auch
+                wieder hereinholen können, sonst ist ein Fehlklick endgültig. */}
+            {(ignored.data?.length ?? 0) > 0 && (
+              <div className="mt-5">
+                <h3 className="text-sm font-bold mb-2">
+                  Abgelehnte Dateien <span className="text-ghg-muted font-normal">({ignored.data?.length})</span>
+                </h3>
+                <p className="text-xs text-ghg-muted mb-2">
+                  Diese Dateien überspringt der Scanner. Mit dem Pfeil wieder zulassen — beim nächsten Scan kommen sie
+                  zurück.
+                </p>
+                <IgnoredFilesList
+                  paths={ignored.data ?? []}
+                  onUnignore={(p) =>
+                    void unignoreFiles([p]).then(() => {
+                      void ignored.refetch();
+                      toast("Wieder zugelassen — beim nächsten Scan wird die Datei aufgenommen", "success");
+                    })
+                  }
+                />
+              </div>
+            )}
           </Section>
 
           <Section title="Wartung" desc="Scannen, Metadaten, Qualität, Neuaufbau, Datensicherung.">
@@ -1522,10 +1570,21 @@ export default function Settings() {
       <ThemeStore open={showTheme} onClose={() => setShowTheme(false)} />
       {webPick && (
         <ServerFolderPicker
-          title={webPick.kind === "tv" ? "Serien-Ordner auf dem Server wählen" : "Film-Ordner auf dem Server wählen"}
+          title={
+            webPick.zweck === "auswahl"
+              ? "Ordner auf dem Server durchsuchen"
+              : webPick.kind === "tv"
+                ? "Serien-Ordner auf dem Server wählen"
+                : "Film-Ordner auf dem Server wählen"
+          }
           onClose={() => setWebPick(null)}
           onPick={async (path) => {
+            const zweck = webPick.zweck;
             setWebPick(null);
+            if (zweck === "auswahl") {
+              setScanRoot({ path, kind: "tv" });
+              return;
+            }
             try {
               await addLibrary(path, webPick.kind);
               qc.invalidateQueries({ queryKey: ["libraries"] });
@@ -1533,6 +1592,20 @@ export default function Settings() {
             } catch (e) {
               toast(String(e), "error");
             }
+          }}
+        />
+      )}
+
+      {/* Auswahl-Fenster: zeigt jeden Fund einzeln mit Vorschaubild (Punkt 1) */}
+      {scanRoot && (
+        <FolderScanDialog
+          open
+          root={scanRoot.path}
+          defaultKind={scanRoot.kind}
+          onClose={() => setScanRoot(null)}
+          onDone={() => {
+            qc.invalidateQueries({ queryKey: ["libraries"] });
+            void ignored.refetch();
           }}
         />
       )}

@@ -84,6 +84,22 @@ console.log("\n── Grundlagen ───────────────�
   pruefe("/api/library ist ohne Token gesperrt", geschuetzt.status === 401);
 }
 
+/* ── REGRESSION: YouTube-Fehler 153 ───────────────────────────────────────
+   Hier stand `Referrer-Policy: no-referrer`. Damit schickt der Browser beim
+   Laden des YouTube-<iframe> keinen Referer, und YouTube verweigert die
+   Einbettung mit „Fehler 153 – Fehler bei der Konfiguration des
+   Videoplayers" — genau der gemeldete Trailer-Fehler unter /#/show/28.
+   Wird der Header je wieder auf no-referrer gesetzt, schlägt das hier fehl. */
+console.log("\n── Sicherheitsheader (Trailer-Einbettung) ──────────────────");
+{
+  const r = await hole("/api/ping");
+  const rp = (r.headers.get("referrer-policy") || "").toLowerCase();
+  pruefe("Referrer-Policy ist NICHT no-referrer (sonst YouTube-Fehler 153)", rp !== "no-referrer");
+  pruefe("sondern strict-origin-when-cross-origin", rp === "strict-origin-when-cross-origin");
+  pruefe("nosniff bleibt gesetzt", r.headers.get("x-content-type-options") === "nosniff");
+  pruefe("X-Frame-Options bleibt gesetzt", (r.headers.get("x-frame-options") || "").toUpperCase() === "SAMEORIGIN");
+}
+
 /* ── DER EIGENTLICHE REGRESSIONSTEST ──────────────────────────────────────
    Jede dieser Routen war durch die Verschachtelung im /api/apk-Block tot.
    Wichtig ist hier vor allem: NICHT 404/401 — das wäre das alte Verhalten. */

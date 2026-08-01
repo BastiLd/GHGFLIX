@@ -1,11 +1,12 @@
 {
   "name": "ghgflix-server",
-  "version": "2.4.2",
+  "version": "2.5.0",
   "description": "GHGFlix media server — Plex/Jellyfin-style streaming for your own library (ZimaOS/Docker)",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node test/koppeln.test.mjs && node test/profile.test.mjs && node test/scan.test.mjs && node test/spuren.test.mjs && node test/routen.test.mjs && node test/hls.test.mjs && node test/ordnerwahl.test.mjs && node test/serienfilme.test.mjs && node test/kanaele.test.mjs"
   },
   "engines": {
     "node": ">=24"

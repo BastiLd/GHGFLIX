@@ -25,6 +25,8 @@ export interface WebPlayInfo {
   direct: boolean;
   directUrl: string;
   transcodeUrl: string;
+  /** Umwandlung als HLS — der einzige Weg, der auf Safari/iOS funktioniert. */
+  hlsUrl?: string | null;
   width?: number | null;
   height?: number | null;
   audioStreams: { index: number; lang?: string | null; title?: string | null; codec?: string | null }[];
@@ -159,19 +161,54 @@ function createVideo(): HTMLVideoElement {
     } else emit("eof-reached", true);
   });
   v.addEventListener("error", () => {
+    if (!S.info) return;
     // direct play failed (unsupported codec despite probe) → fall back to transcode
-    if (!S.transcoding && S.info) {
+    if (!S.transcoding) {
+      void startStream(mediaPos(), true);
+      return;
+    }
+    /* HLS: Der Server räumt eine Sitzung ab, die 5 Minuten lang niemand
+       abgerufen hat (langes Pausieren). Danach antwortet die Häppchen-Liste
+       mit 404 und die Wiedergabe bliebe einfach stehen. Also an derselben
+       Stelle eine frische Sitzung starten. Der Zeitabstand verhindert eine
+       Endlosschleife, falls die Datei wirklich kaputt ist. */
+    if (brauchtHls() && S.info.hlsUrl) {
+      const jetzt = Date.now();
+      if (jetzt - letzterHlsNeustart < 5000) return;
+      letzterHlsNeustart = jetzt;
       void startStream(mediaPos(), true);
     }
   });
   return v;
 }
 
+let letzterHlsNeustart = 0;
+
+/* Braucht dieser Browser HLS statt des fragmentierten MP4?
+   Bewusst als Fähigkeitsprüfung statt Browsererkennung: nur die
+   WebKit-/AVFoundation-Familie (Safari auf dem Mac, ALLE Browser auf iPhone
+   und iPad) kann .m3u8 nativ abspielen — und genau die ist es auch, die den
+   endlosen fragmentierten MP4-Strom von /api/transcode nicht abspielt und
+   stattdessen ein schwarzes Bild zeigt. Eine Prüfung, zwei Fliegen. */
+let hlsFaehigCache: boolean | null = null;
+function brauchtHls(): boolean {
+  if (hlsFaehigCache !== null) return hlsFaehigCache;
+  try {
+    const v = document.createElement("video");
+    hlsFaehigCache = !!v.canPlayType("application/vnd.apple.mpegurl");
+  } catch {
+    hlsFaehigCache = false;
+  }
+  return hlsFaehigCache;
+}
+
 function streamUrl(t: number): string {
   const info = S.info!;
   if (!S.transcoding) return withToken(info.directUrl);
   const a = Math.max(0, S.aid - 1);
-  return withToken(`${info.transcodeUrl}&t=${Math.max(0, Math.round(t * 10) / 10)}&a=${a}`);
+  const sek = Math.max(0, Math.round(t * 10) / 10);
+  if (info.hlsUrl && brauchtHls()) return withToken(`${info.hlsUrl}&t=${sek}&a=${a}`);
+  return withToken(`${info.transcodeUrl}&t=${sek}&a=${a}`);
 }
 
 async function startStream(at: number, forceTranscode = false) {

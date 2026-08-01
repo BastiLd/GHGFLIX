@@ -4,6 +4,10 @@ import type {
   Episode,
   Extras,
   Favorite,
+  Feed,
+  FeedBeitrag,
+  FolderPreview,
+  ImportSummary,
   Library,
   LibraryKind,
   EpisodeFile,
@@ -14,6 +18,7 @@ import type {
   Stats,
   TmdbImage,
   TmdbResult,
+  TrailerVideo,
 } from "./types";
 
 // ===== settings =====
@@ -25,6 +30,33 @@ export const getLibraries = () => invoke<Library[]>("get_libraries");
 export const addLibrary = (path: string, kind: LibraryKind) => invoke<number>("add_library", { path, kind });
 export const detectLibraries = (root: string) => invoke<Library[]>("detect_libraries", { root });
 export const removeLibrary = (id: number) => invoke<void>("remove_library", { id });
+
+// ===== Auswahl-Fenster für Ordner (Punkt 1) =====
+/** Ordner rekursiv nach Videos durchsuchen — verändert nichts. */
+export const previewFolder = (path: string) => invoke<FolderPreview>("preview_folder", { path });
+/** Auswahl übernehmen: `accept` in die Bibliothek, `reject` in die Ignorierliste. */
+export const applyFolderSelection = (root: string, kind: LibraryKind, accept: string[], reject: string[]) =>
+  invoke<ImportSummary>("apply_folder_selection", { root, kind, accept, reject });
+/** Einen Film von Hand zur Serie zuordnen oder aus deren Filme-Reiter nehmen. */
+export const linkMovieToShow = (showId: number, movieId: number, linked: boolean) =>
+  invoke<void>("link_movie_to_show", { showId, movieId, linked });
+export const listIgnoredFiles = () => invoke<string[]>("list_ignored_files");
+export const unignoreFiles = (paths: string[]) => invoke<number>("unignore_files", { paths });
+
+// ===== Kanäle & Feeds (Punkt 5) =====
+export const feedsList = () => invoke<Feed[]>("feeds_list");
+/** `art` entscheidet, wie die Eingabe gedeutet wird: YouTube-Kanal oder RSS/Atom. */
+export const feedAdd = (url: string, art: "youtube" | "blog") => invoke<Feed>("feed_add", { url, art });
+export const feedRemove = (id: string) => invoke<boolean>("feed_remove", { id });
+export const feedUpdate = (id: string, benachrichtigen?: boolean, titel?: string) =>
+  invoke<Feed>("feed_update", { id, benachrichtigen: benachrichtigen ?? null, titel: titel ?? null });
+export const feedItems = (art?: "youtube" | "blog" | null, limit = 60, unreadOnly = false) =>
+  invoke<FeedBeitrag[]>("feed_items", { art: art ?? null, limit, unreadOnly });
+export const feedRefresh = (id?: string | null) =>
+  invoke<{ neu: number; beitraege: FeedBeitrag[] }>("feed_refresh", { id: id ?? null });
+export const feedUnread = (art?: "youtube" | "blog" | null) => invoke<number>("feed_unread", { art: art ?? null });
+/** Ohne `ids` gilt alles als gelesen. */
+export const feedMarkRead = (ids?: string[] | null) => invoke<number>("feed_mark_read", { ids: ids ?? null });
 
 // ===== scanning =====
 export const scanLibraries = () => invoke<void>("scan_libraries");
@@ -132,6 +164,9 @@ export const setSeasonWatched = (profileId: string, showId: number, season: numb
 export const getStats = (profileId: string) => invoke<Stats>("get_stats", { profileId });
 export const tmdbExtras = (mediaType: "movie" | "tv", tmdbId: number) =>
   invoke<Extras>("tmdb_extras", { mediaType, tmdbId });
+/** Alle Trailer/Teaser/Clips — mit `season` die einer einzelnen Staffel. */
+export const tmdbVideos = (mediaType: "movie" | "tv", tmdbId: number, season?: number | null) =>
+  invoke<TrailerVideo[]>("tmdb_videos", { mediaType, tmdbId, season: season ?? null });
 
 // ===== artwork (Plex-style) + quality =====
 export const tmdbImages = (

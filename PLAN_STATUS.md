@@ -252,11 +252,50 @@ inzwischen ggf. zurückgesetzt/erhöht), dann gezielt nacharbeiten.
 | OPS-021 | 📋 | Sobald Phase 7 grün ist: `feature/zimaos-docker-server` → `main` mergen (main ist seit v0.9.6 nicht aktualisiert). |
 | REL-001 | 📋 | Desktop-Auto-Updater prüfen (`tauri-plugin-updater` o. ä.) statt jedes Mal `scripts\rebuild-windows.ps1` manuell laufen zu lassen. |
 
+## Phase 11 — die fünf offenen Punkte der Übergabe ✅ (01.08.2026)
+
+Reihenfolge wie vom Nutzer vorgegeben. Jeder Punkt hat Tests, die den
+FEHLERFALL abbilden, nicht nur den Erfolgsfall.
+
+| ID | Status | Notiz |
+|---|---|---|
+| PKT-1 | ✅ | **Auswahl-Fenster für Ordner** (Desktop + Web, nicht in der TV-App). Ordner angeben → rekursiv nach Videos durchsuchen → schwebendes Fenster mit Vorschaubild, erratenem Titel und Staffel/Folge je Fund; einzeln oder alle auf einmal bestätigen/ablehnen. Neu: `src-tauri/src/ordnerwahl.rs`, `server/src/ordnerwahl.js`, `src/components/FolderScanDialog.tsx`; Einstieg in Einstellungen → Bibliotheken → „Ordner durchsuchen & auswählen“. **Der Kern ist die Ignorierliste** (Einstellung `ignored_files`): der Scanner läuft später von selbst wieder — ohne gemerkte Ablehnung wäre jede Ablehnung beim nächsten Scan aufgehoben. Genau dieser Durchlauf ist getestet (`server/test/ordnerwahl.test.mjs`, 27 Prüfungen, mit echtem Scan gegen echte Dateien). Rückgängig machen geht in Einstellungen → „Abgelehnte Dateien“. Vorschaubilder für noch nicht indexierte Dateien brauchten eine eigene Freigabe, weil `media_thumbnail` sonst nur Bibliotheksdateien zulässt. |
+| PKT-2 | ✅ | **iPhone-Video repariert (HLS).** Ursache belegt: `serveTranscode()` liefert einen ENDLOSEN fragmentierten MP4-Strom (`frag_keyframe+empty_moov`, `-f mp4` in eine Pipe). Chrome/Android spielen das; AVFoundation (jedes `<video>` unter iOS, alle iPhone-Browser, Safari am Mac) verlangt vor dem ersten Bild einen vollständigen Kopf und wartet bei einem Strom ohne Länge ewig → schwarzes Bild. Neu: `server/src/hls.js` mit `/api/hls/<art>/<id>/master.m3u8` → Sitzung + `index.m3u8` + MPEG-TS-Häppchen. Client-Wahl per **Fähigkeitsprüfung** (`canPlayType("application/vnd.apple.mpegurl")`), nicht per Browsererkennung; `/api/play` liefert `hlsUrl` und `hlsPflicht`. Drei Härtungen fürs NAS: (a) `-readrate 1.5 -readrate_initial_burst 30`, damit nicht die ganze Datei vorab auf die Platte geschrieben wird — der MP4-Weg bremst sich über die Pipe von selbst, HLS nicht; welche Schalter das vorhandene ffmpeg kennt, wird **einmal nachgesehen** statt aus der Version geraten (unbekannter Schalter = ffmpeg bricht ab = wieder schwarzes Bild). (b) höchstens 2 Sitzungen je Datei, sonst häuft mehrfaches Spulen ffmpeg-Prozesse an und `TRANSCODE_MAX` ist sofort erreicht. (c) Häppchen unter `DATA_DIR/hls-cache` statt `/tmp` (im Container klein), umstellbar per `HLS_DIR`. Test `server/test/hls.test.mjs` (30 Prüfungen) erzeugt ein echtes Video, holt Playlist und Häppchen und prüft das **Sync-Byte 0x47 alle 188 Byte** — also dass wirklich abspielbares Material herauskommt, nicht nur ein Statuscode 200. |
+| PKT-2b | ✅ | **Nebenbefund, blockierte PKT-2:** `mobile/src/player.js` hängte den Zugangsschlüssel ein ZWEITES Mal an eine Adresse, die ihn schon trug (`…?x=1&token=ABC?token=ABC`). Der Server las als Token den Text „ABC?token=ABC“ → mit gesetztem Server-Passwort endete **jede** Wiedergabe am Handy in einem 401. Behoben. |
+| PKT-3 | ✅ | **Filme- und Specials-Tabs.** Desktop `ShowDetail.tsx` und Handy `mobile/src/seiten.js`: Staffeln, dann abgesetzt „Specials“ und „Filme“. Zuordnung in `serienfilme.rs`/`serienfilme.js`: (1) Film liegt im Serienordner, (2) Filmtitel beginnt mit dem Serientitel und geht darüber hinaus — reine Gleichheit zählt **nicht**, sonst erschiene bei jeder Serie der gleichnamige Film. (3) Handentscheidungen des Nutzers schlagen beides und hängen an TMDb-ID/Titel statt an der Zeilen-ID, damit sie „Bibliothek neu aufbauen“ überleben — genau das ist getestet (`server/test/serienfilme.test.mjs`, 14 Prüfungen; 4 weitere in Rust). |
+| PKT-4 | ✅ | **Trailer + Fehler 153.** Ursache von „Fehler 153 – Fehler bei der Konfiguration des Videoplayers“ gefunden: `Referrer-Policy: no-referrer` (aus SRV-034) — damit sendet der Browser beim Laden des YouTube-`<iframe>` keinen Referer, und YouTube verweigert die Einbettung. Jetzt `strict-origin-when-cross-origin` (Browser-Standard; fremde Seiten sehen nur den Ursprung, nie Pfad oder Token) plus `referrerPolicy` direkt am `<iframe>` — Letzteres ist nötig, weil die Desktop-App gar keine Server-Header hat. Regressionstest in `routen.test.mjs`. Außerdem: TMDb liefert Videos immer nur in EINER Sprache; bisher wurde hart `en-US` geholt und es gab genau einen Trailer. Jetzt werden eingestellte Sprache und Englisch zusammengeführt, Doppelte fallen raus, und das neue Fenster bietet **Staffelauswahl** (TMDb führt Trailer auch je Staffel), **Sprachauswahl** und Gruppierung nach Art (Trailer/Teaser/Ausschnitt/…) plus „Auf YouTube öffnen“ als Rückfallebene. |
+| PKT-5 | ✅ | **YouTube-Kanäle abonnieren + Benachrichtigung + Leaks/Blog.** Neue Seite „Kanäle“ (`/kanaele`) mit zwei Bereichen: YouTube und Leaks & Blog. Bewusst über den **offenen Atom-Feed** `youtube.com/feeds/videos.xml?channel_id=UC…` — kein API-Schlüssel, kein Kontingent. Eingabe darf Kanal-Adresse, `@name` oder Kanal-ID sein; für Blogs reicht die Seitenadresse, der verlinkte RSS-/Atom-Feed wird gefunden. Server (`kanaele.js`) und Desktop (`kanaele.rs`) holen alle 30 Minuten im Hintergrund ab — deshalb stimmt die Zahl auch, wenn die Oberfläche stundenlang zu war. Zähler in der Seitenleiste (rot), Toast plus Systembenachrichtigung, wenn sie steigt. **Beim ERSTEN Abruf eines neuen Abos gilt nichts als neu** — sonst löste ein frisch abonnierter Kanal sofort 15 Meldungen aus. Test `server/test/kanaele.test.mjs` (39 Prüfungen) fährt einen eigenen Feed-Server hoch, holt zweimal ab und ergänzt dazwischen genau einen Eintrag — das ist die einzige Art, die beiden stillen Fehler („meldet nichts“ / „meldet alles immer wieder“) zu sehen. 5 weitere Prüfungen in Rust. |
+
+**Testlage nach Phase 11:** Server **9 Dateien, alle grün** (32 Kopplung, Profile,
+Scanner, 41 Spuren, 20 Routen, 30 HLS, 27 Ordnerwahl, 14 Serienfilme, 39 Kanäle) ·
+Rust **20 Unit-Tests grün** (`cargo test --lib`) · `cargo check` und
+`npx tsc --noEmit` ohne Fehler · Handy `test/laden.test.mjs` 28 grün.
+
+**Offen und ehrlich benannt:**
+- `mobile/test/oberflaeche.test.mjs` läuft in dieser Umgebung nicht durch (über
+  200 s ohne Ergebnis). **Nachgemessen: das passiert auch mit den
+  unveränderten Dateien** (per `git stash` gegengeprüft) — es liegt also nicht
+  an den Änderungen dieser Sitzung, sondern ist ein bestehendes Problem des
+  Testaufbaus (Babel-Übersetzung ohne Zwischenspeicher). Sollte separat
+  angesehen werden.
+- Punkt 4 und 5 sind **Desktop + Web**. Die Handy-/TV-App bekam aus dieser
+  Runde Punkt 3 (Filme-/Specials-Reiter), den HLS-Weg für iOS und den
+  Token-Fehler behoben. Trailer-Fenster und Kanäle dort nachzuziehen ist
+  danach eine reine JavaScript-Änderung und geht per OTA ohne neuen Bau.
+- Nicht am Gerät geprüft (kann diese Umgebung nicht): ob ein EAS-Bau
+  durchläuft, ob die OTA-Auslieferung ankommt und ob das iPhone das neue HLS
+  wirklich abspielt.
+
 ## Versionen
 
-Stand `feature/zimaos-docker-server`: Handy-/TV-App **3.2.0** (versionCode 14,
-runtimeVersion 1) · Server **2.4.1** · Desktop-App **v0.9.6**.
+Stand `feature/zimaos-docker-server`: Handy-/TV-App **3.3.0** (versionCode 15,
+runtimeVersion 1) · Server **2.5.0** · Desktop-App **1.2.0**.
 
-In ZimaOS also `ghcr.io/bastild/ghgflix-server:2.4.1` eintragen — oder einfach
+In ZimaOS also `ghcr.io/bastild/ghgflix-server:2.5.0` eintragen — oder einfach
 `:latest`. Nachprüfen unter `http://<server-ip>:8484/api/ping`. `main` steht
 weiterhin auf v0.9.6 und hat nichts davon (OPS-021).
+
+**Neue Umgebungsvariablen (alle mit brauchbarem Standard, nichts muss gesetzt
+werden):** `HLS_DIR` (wohin die HLS-Häppchen geschrieben werden, Standard
+`DATA_DIR/hls-cache`) · `FEED_INTERVAL_SEC` (wie oft Kanäle geprüft werden,
+Standard 1800).

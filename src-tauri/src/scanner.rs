@@ -89,6 +89,9 @@ pub fn run_scan(db_path: PathBuf, http: reqwest::Client, app: AppHandle) -> Resu
 }
 
 fn scan_movies(conn: &Connection, root: &Path) -> Result<()> {
+    // Im Auswahl-Fenster abgelehnte Dateien bleiben draußen. Ohne diese Prüfung
+    // wäre jede Ablehnung beim nächsten Scan wieder rückgängig gemacht.
+    let ignored = crate::ordnerwahl::ignored(conn);
     for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
         if !entry.file_type().is_file() {
             continue;
@@ -101,8 +104,11 @@ fn scan_movies(conn: &Connection, root: &Path) -> Result<()> {
         if is_junk_clip(&stem) {
             continue;
         }
-        let (title, year) = parser::parse_title_year(&stem);
         let path = entry.path().to_string_lossy().to_string();
+        if ignored.contains(&crate::ordnerwahl::norm(&path)) {
+            continue;
+        }
+        let (title, year) = parser::parse_title_year(&stem);
         db::insert_movie_if_absent(conn, &path, &title, year)?;
     }
     Ok(())
@@ -175,6 +181,8 @@ fn backfill_show_keys(conn: &Connection, libs: &[crate::models::Library]) -> Res
 }
 
 fn scan_tv(conn: &Connection, root: &Path) -> Result<()> {
+    // siehe scan_movies: Ablehnungen aus dem Auswahl-Fenster müssen halten.
+    let ignored = crate::ordnerwahl::ignored(conn);
     for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
         if !entry.file_type().is_file() {
             continue;
@@ -185,6 +193,9 @@ fn scan_tv(conn: &Connection, root: &Path) -> Result<()> {
         }
         let path_buf = entry.path();
         let path = path_buf.to_string_lossy().to_string();
+        if ignored.contains(&crate::ordnerwahl::norm(&path)) {
+            continue;
+        }
 
         // Group ALL seasons of a show under one entry by cleaning the season/junk
         // off the folder (or file) name. "Marvel's Daredevil Season 2" and

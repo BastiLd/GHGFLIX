@@ -267,6 +267,9 @@ pub fn get_show_detail(state: State<AppState>, id: i64) -> R<Option<ShowDetail>>
         None => return Ok(None),
     };
     let episodes = db::list_episodes(&conn, id).map_err(err)?;
+    // Filme dieser Serie (Reiter „Filme") — VOR dem Verbrauchen der Folgenliste,
+    // weil daraus der Serienordner abgeleitet wird.
+    let movies = crate::serienfilme::fuer_serie(&conn, &show, &episodes).map_err(err)?;
     let mut seasons: Vec<SeasonGroup> = Vec::new();
     for ep in episodes {
         match seasons.last_mut() {
@@ -274,7 +277,18 @@ pub fn get_show_detail(state: State<AppState>, id: i64) -> R<Option<ShowDetail>>
             _ => seasons.push(SeasonGroup { season: ep.season, episodes: vec![ep] }),
         }
     }
-    Ok(Some(ShowDetail { show, seasons }))
+    Ok(Some(ShowDetail { show, seasons, movies }))
+}
+
+/// Einen Film von Hand zu einer Serie zuordnen (`linked = true`) oder ihn aus
+/// deren Filme-Reiter herausnehmen. Die Entscheidung überlebt einen Neuaufbau
+/// der Bibliothek, weil sie an Titel/TMDb-ID hängt und nicht an der Zeilen-ID.
+#[tauri::command]
+pub fn link_movie_to_show(state: State<AppState>, show_id: i64, movie_id: i64, linked: bool) -> R<()> {
+    let conn = state.conn.lock().unwrap();
+    let show = db::get_show(&conn, show_id).map_err(err)?.ok_or("Serie nicht gefunden")?;
+    let movie = db::get_movie(&conn, movie_id).map_err(err)?.ok_or("Film nicht gefunden")?;
+    crate::serienfilme::verknuepfen(&conn, &show, &movie, linked).map_err(err)
 }
 
 #[tauri::command]
@@ -1150,6 +1164,23 @@ pub async fn tmdb_extras(state: State<'_, AppState>, media_type: String, tmdb_id
     tmdb.extras(&media_type, tmdb_id).await.map_err(err)
 }
 
+/// Alle Trailer/Teaser/Clips — mit `season` die einer einzelnen Staffel
+/// (Punkt 4 der Übergabe).
+#[tauri::command]
+pub async fn tmdb_videos(
+    state: State<'_, AppState>,
+    media_type: String,
+    tmdb_id: i64,
+    season: Option<i64>,
+) -> R<Vec<crate::models::TrailerVideo>> {
+    let (key, lang) = read_key_lang(&state);
+    if key.trim().is_empty() {
+        return Err("Kein TMDb-Key gesetzt".into());
+    }
+    let tmdb = Tmdb::new(state.http.clone(), key, lang);
+    tmdb.videos(&media_type, tmdb_id, season).await.map_err(err)
+}
+
 // ===== artwork (Plex-style) + quality =====
 
 /// List available artwork for an item from TMDb.
@@ -1536,4 +1567,141 @@ pub fn apply_remote_progress(state: State<AppState>, profile_id: String, rows: V
         }
     }
     Ok(())
+}
+
+// ===== Auswahl-Fenster fuer Ordner (Punkt 1) =====
+
+/// Einen Ordner rekursiv nach Videos durchsuchen, ohne etwas zu veraendern.
+/// Das Ergebnis fuellt das schwebende Auswahl-Fenster.
+#[tauri::command]
+pub fn preview_folder(state: State<AppState>, path: String) -> R<crate::ordnerwahl::FolderPreview> {
+    let conn = state.conn.lock().unwrap();
+    crate::ordnerwahl::preview(&conn, &path).map_err(err)
+}
+
+/// Auswahl aus dem Fenster uebernehmen: Bestaetigtes kommt in die Bibliothek,
+/// Abgelehntes in die Ignorierliste. Danach laeuft ein Scan.
+#[tauri::command]
+pub fn apply_folder_selection(
+    app: AppHandle,
+    state: State<AppState>,
+    root: String,
+    kind: String,
+    accept: Vec<String>,
+    reject: Vec<String>,
+) -> R<crate::ordnerwahl::ImportSummary> {
+    let summary = {
+        let conn = state.conn.lock().unwrap();
+        crate::ordnerwahl::apply(&conn, &root, &kind, &accept, &reject).map_err(err)?
+    };
+    if summary.library_created {
+        watcher::rewatch(&app);
+    }
+    if !accept.is_empty() || summary.removed > 0 {
+        // Der Scan laeuft in einem eigenen Thread; scan_libraries kuemmert sich
+        // um das "laeuft schon"-Flag.
+        let _ = scan_libraries(app, state);
+    }
+    Ok(summary)
+}
+
+/// Die abgelehnten Dateien (fuer die Liste in den Einstellungen).
+#[tauri::command]
+pub fn list_ignored_files(state: State<AppState>) -> R<Vec<String>> {
+    let conn = state.conn.lock().unwrap();
+    let mut v: Vec<String> = crate::ordnerwahl::ignored(&conn).into_iter().collect();
+    v.sort();
+    Ok(v)
+}
+
+/// Eine Ablehnung zuruecknehmen. Beim naechsten Scan wird die Datei wieder
+/// aufgenommen.
+#[tauri::command]
+pub fn unignore_files(state: State<AppState>, paths: Vec<String>) -> R<usize> {
+    let conn = state.conn.lock().unwrap();
+    let mut ign = crate::ordnerwahl::ignored(&conn);
+    let before = ign.len();
+    for p in &paths {
+        ign.remove(&crate::ordnerwahl::norm(p));
+    }
+    crate::ordnerwahl::set_ignored(&conn, &ign).map_err(err)?;
+    Ok(before.saturating_sub(ign.len()))
+}
+
+// ===== Kanaele & Feeds (Punkt 5) =====
+//
+// Die Sperre auf die Datenbank darf NIE ueber ein await gehalten werden —
+// sonst steht die ganze App still, waehrend YouTube antwortet. Deshalb
+// bekommen die async-Funktionen in kanaele.rs eine Schliessung, die die
+// Sperre bei Bedarf kurz nimmt, statt einer bereits genommenen Sperre.
+
+#[tauri::command]
+pub fn feeds_list(state: State<AppState>) -> R<Vec<crate::kanaele::Feed>> {
+    let conn = state.conn.lock().unwrap();
+    Ok(crate::kanaele::feeds_laden(&conn))
+}
+
+#[tauri::command]
+pub async fn feed_add(state: State<'_, AppState>, url: String, art: String) -> R<crate::kanaele::Feed> {
+    crate::kanaele::abonnieren(&state.conn, &state.http, &url, &art).await.map_err(err)
+}
+
+#[tauri::command]
+pub fn feed_remove(state: State<AppState>, id: String) -> R<bool> {
+    let conn = state.conn.lock().unwrap();
+    crate::kanaele::abbestellen(&conn, &id).map_err(err)
+}
+
+#[tauri::command]
+pub fn feed_update(
+    state: State<AppState>,
+    id: String,
+    benachrichtigen: Option<bool>,
+    titel: Option<String>,
+) -> R<crate::kanaele::Feed> {
+    let conn = state.conn.lock().unwrap();
+    crate::kanaele::feed_aendern(&conn, &id, benachrichtigen, titel).map_err(err)
+}
+
+#[tauri::command]
+pub fn feed_items(
+    state: State<AppState>,
+    art: Option<String>,
+    limit: Option<usize>,
+    unread_only: Option<bool>,
+) -> R<Vec<crate::kanaele::Beitrag>> {
+    let conn = state.conn.lock().unwrap();
+    Ok(crate::kanaele::beitraege(
+        &conn,
+        art.as_deref(),
+        limit.unwrap_or(60),
+        unread_only.unwrap_or(false),
+    ))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedAbrufErgebnis {
+    pub neu: usize,
+    pub beitraege: Vec<crate::kanaele::Beitrag>,
+}
+
+#[tauri::command]
+pub async fn feed_refresh(state: State<'_, AppState>, id: Option<String>) -> R<FeedAbrufErgebnis> {
+    let neue = crate::kanaele::abholen(&state.conn, &state.http, id.as_deref())
+        .await
+        .map_err(err)?;
+    Ok(FeedAbrufErgebnis { neu: neue.len(), beitraege: neue })
+}
+
+#[tauri::command]
+pub fn feed_unread(state: State<AppState>, art: Option<String>) -> R<i64> {
+    let conn = state.conn.lock().unwrap();
+    Ok(crate::kanaele::ungelesen_zahl(&conn, art.as_deref()))
+}
+
+#[tauri::command]
+pub fn feed_mark_read(state: State<AppState>, ids: Option<Vec<String>>) -> R<i64> {
+    let conn = state.conn.lock().unwrap();
+    crate::kanaele::als_gelesen(&conn, ids).map_err(err)
 }

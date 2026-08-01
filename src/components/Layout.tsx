@@ -1,10 +1,10 @@
 import { getVersion, listen } from "../lib/backend";
 import clsx from "clsx";
-import { Film, Heart, House, RefreshCw, Search, Settings as SettingsIcon, Tv, User } from "lucide-react";
+import { Film, Heart, House, RefreshCw, Rss, Search, Settings as SettingsIcon, Tv, User } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { getSetting, listMovies, listShows, scanLibraries, setSetting } from "../lib/api";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { feedUnread, getSetting, listMovies, listShows, scanLibraries, setSetting } from "../lib/api";
 import { dedupeMovies } from "../lib/format";
 import { miniClipPath, usePlayback } from "../lib/playback";
 import { useStore } from "../lib/store";
@@ -19,6 +19,7 @@ const NAV = [
   { to: "/movies", label: "Filme", icon: Film, end: false },
   { to: "/shows", label: "Serien", icon: Tv, end: false },
   { to: "/list", label: "Meine Liste", icon: Heart, end: false },
+  { to: "/kanaele", label: "Kanäle", icon: Rss, end: false },
   { to: "/settings", label: "Einstellungen", icon: SettingsIcon, end: false },
 ];
 
@@ -50,9 +51,18 @@ export function Layout() {
   const [, resizeTick] = useState(0);
   const moviesQ = useQuery({ queryKey: ["movies"], queryFn: listMovies });
   const showsQ = useQuery({ queryKey: ["shows"], queryFn: listShows });
+  /* Punkt 5: ungelesene Beiträge aus abonnierten Kanälen. Alle 60 Sekunden
+     nachfragen reicht — der Server holt die Feeds ohnehin nur alle 30 Minuten
+     ab, und die Abfrage kostet nur eine Zeile aus den Einstellungen. */
+  const ungelesenQ = useQuery({
+    queryKey: ["feedUnread"],
+    queryFn: () => feedUnread(),
+    refetchInterval: 60_000,
+  });
   const counts: Record<string, number | undefined> = {
     "/movies": moviesQ.data ? dedupeMovies(moviesQ.data).length : undefined,
     "/shows": showsQ.data?.length,
+    "/kanaele": ungelesenQ.data || undefined,
   };
 
   // while the mini-player is active, cut a transparent hole into the opaque
@@ -130,6 +140,46 @@ export function Layout() {
     return () => clearInterval(id);
   }, [scan]);
 
+  /* ── Benachrichtigung bei neuen Kanal-Beiträgen (Punkt 5) ────────────────
+     Der Vergleich läuft über die zuletzt GESEHENE Zahl, nicht über ein
+     Ereignis: so meldet sich die App auch dann, wenn der Server die Feeds
+     abgeholt hat, während die Oberfläche zu war — und sie meldet sich NICHT
+     erneut, wenn man nur die Seite neu lädt. */
+  const ungelesen = ungelesenQ.data ?? 0;
+  const zuletztGemeldet = useRef<number | null>(null);
+  useEffect(() => {
+    const vorher = zuletztGemeldet.current;
+    zuletztGemeldet.current = ungelesen;
+    // Erster Durchlauf: nur merken, nicht melden.
+    if (vorher === null || ungelesen <= vorher) return;
+    const neu = ungelesen - vorher;
+    const text = neu === 1 ? "1 neuer Beitrag in deinen Kanälen" : `${neu} neue Beiträge in deinen Kanälen`;
+    toast(text, "info");
+    // Zusätzlich die Systembenachrichtigung, falls der Nutzer sie erlaubt hat.
+    // Ohne Erlaubnis passiert schlicht nichts — es wird NICHT von selbst
+    // gefragt, das wäre aufdringlich.
+    try {
+      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+        new Notification("GHGFlix", { body: text });
+      }
+    } catch {
+      /* manche Browser verbieten den Aufruf ganz — dann bleibt der Toast */
+    }
+  }, [ungelesen, toast]);
+
+  // Desktop: der Hintergrund-Abruf meldet sich direkt, statt auf den
+  // 60-Sekunden-Takt zu warten.
+  const qcFeeds = useQueryClient();
+  useEffect(() => {
+    const un = listen<number>("feeds://neu", () => {
+      void qcFeeds.invalidateQueries({ queryKey: ["feedUnread"] });
+      void qcFeeds.invalidateQueries({ queryKey: ["feedItems"] });
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, [qcFeeds]);
+
   const rescan = async () => {
     try {
       await scanLibraries();
@@ -171,12 +221,28 @@ export function Layout() {
                 )
               }
             >
-              <item.icon className="w-5 h-5" />
+              <span className="relative">
+                <item.icon className="w-5 h-5" />
+                {/* In der schmalen Leiste ist kein Platz für eine Zahl — ein
+                    roter Punkt zeigt trotzdem an, dass etwas Neues da ist. */}
+                {compact && item.to === "/kanaele" && (counts["/kanaele"] ?? 0) > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-ghg-red" />
+                )}
+              </span>
               {!compact && (
                 <>
                   <span className="flex-1">{item.label}</span>
                   {counts[item.to] != null && (
-                    <span className="text-[10px] tabular-nums text-ghg-muted bg-ghg-surface2 rounded-full px-1.5 py-0.5">
+                    <span
+                      className={clsx(
+                        "text-[10px] tabular-nums rounded-full px-1.5 py-0.5",
+                        // Ungelesene Beiträge sind eine Meldung, keine Statistik —
+                        // deshalb rot statt grau wie die Bibliothekszahlen.
+                        item.to === "/kanaele"
+                          ? "bg-ghg-red text-white font-bold"
+                          : "text-ghg-muted bg-ghg-surface2",
+                      )}
+                    >
                       {counts[item.to]}
                     </span>
                   )}

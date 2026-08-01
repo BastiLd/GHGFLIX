@@ -18,6 +18,9 @@ import {
 import { canDirectPlay, ffprobe } from "./stream.js";
 import * as tmdb from "./tmdb.js";
 import { asLocalRef, isLocalRef } from "./artwork.js";
+import * as ordnerwahl from "./ordnerwahl.js";
+import * as serienfilme from "./serienfilme.js";
+import * as kanaele from "./kanaele.js";
 import { makeThumb, trickplayInfo, ensureTrickplay, dirSize, clearThumbCache, THUMB_DIR, TRICK_DIR } from "./thumbs.js";
 
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
@@ -274,6 +277,48 @@ export async function handleInvoke(cmd, a = {}) {
       if (lib) removeLibraryContent(lib.path, lib.kind);
       return null;
     }
+    // ===== Auswahl-Fenster für Ordner (Punkt 1) =====
+    case "preview_folder":
+      return ordnerwahl.preview(String(a.path || ""));
+    case "apply_folder_selection": {
+      const summary = ordnerwahl.apply({
+        root: String(a.root || ""),
+        kind: String(a.kind || "tv") === "movie" ? "movie" : "tv",
+        accept: Array.isArray(a.accept) ? a.accept.map(String) : [],
+        reject: Array.isArray(a.reject) ? a.reject.map(String) : [],
+      });
+      if (summary.accepted > 0 || summary.removed > 0) void scanLibrary();
+      return summary;
+    }
+    // ===== Kanäle & Feeds (Punkt 5) =====
+    case "feeds_list":
+      return kanaele.feedsLaden();
+    case "feed_add":
+      return kanaele.abonnieren(String(a.url || ""), a.art === "blog" ? "blog" : "youtube");
+    case "feed_remove":
+      return kanaele.abbestellen(String(a.id || ""));
+    case "feed_update":
+      return kanaele.feedAendern(String(a.id || ""), { benachrichtigen: a.benachrichtigen, titel: a.titel });
+    case "feed_items":
+      return kanaele.beitraege({
+        art: a.art ? String(a.art) : null,
+        limit: Number(a.limit) || 60,
+        nurUngelesen: !!a.unreadOnly,
+      });
+    case "feed_refresh": {
+      const neu = await kanaele.abholen(a.id ? String(a.id) : null);
+      return { neu: neu.length, beitraege: neu };
+    }
+    case "feed_unread":
+      return kanaele.ungelesenZahl(a.art ? String(a.art) : null);
+    case "feed_mark_read":
+      return kanaele.alsGelesen(Array.isArray(a.ids) ? a.ids.map(String) : null);
+
+    case "list_ignored_files":
+      return ordnerwahl.listIgnored();
+    case "unignore_files":
+      return ordnerwahl.unignore(Array.isArray(a.paths) ? a.paths.map(String) : []);
+
     case "browse_dirs": {
       const root = primaryRoot();
       let target = a.path ? String(a.path) : root;
@@ -395,7 +440,17 @@ export async function handleInvoke(cmd, a = {}) {
         if (!grp) seasons.push((grp = { season: e.season, episodes: [] }));
         grp.episodes.push(episodeOut(e, s.title));
       }
-      return { show: showOut(s), seasons };
+      // Punkt 3: Kinofilme dieser Serie für den Reiter „Filme".
+      const movies = serienfilme.fuerSerie(s, eps).map(movieOut);
+      return { show: showOut(s), seasons, movies };
+    }
+    case "link_movie_to_show": {
+      const s = d.prepare("SELECT * FROM shows WHERE id=?").get(Number(a.showId));
+      const mv = d.prepare("SELECT * FROM movies WHERE id=?").get(Number(a.movieId));
+      if (!s) throw new Error("Serie nicht gefunden");
+      if (!mv) throw new Error("Film nicht gefunden");
+      serienfilme.verknuepfen(s, mv, !!a.linked);
+      return null;
     }
     case "get_episode":
       return episodeOut(getEpisodeRow(Number(a.id)));
@@ -688,6 +743,13 @@ export async function handleInvoke(cmd, a = {}) {
     }
     case "tmdb_extras":
       return tmdb.extras(a.mediaType === "movie" ? "movie" : "tv", Number(a.tmdbId));
+    // Punkt 4: alle Trailer/Teaser/Clips — wahlweise zu einer einzelnen Staffel
+    case "tmdb_videos":
+      return tmdb.videos(
+        a.mediaType === "movie" ? "movie" : "tv",
+        Number(a.tmdbId),
+        a.season == null ? null : Number(a.season),
+      );
 
     // ===== artwork + quality =====
     case "tmdb_images":
@@ -709,7 +771,11 @@ export async function handleInvoke(cmd, a = {}) {
       return d.prepare("SELECT season, path FROM season_art WHERE show_id=?").all(Number(a.showId)).map((r) => [r.season, r.path]);
     case "media_thumbnail": {
       const path = String(a.path || "");
-      if (!isLibraryFile(d, path)) throw new Error("Datei nicht in der Bibliothek");
+      // Das Auswahl-Fenster zeigt Dateien, die noch NICHT in der Bibliothek
+      // stehen — für die gibt ordnerwahl.js die Vorschau eigens frei.
+      if (!isLibraryFile(d, path) && !ordnerwahl.istVorschauDatei(path)) {
+        throw new Error("Datei nicht in der Bibliothek");
+      }
       const t = Math.max(0, Number(a.timeSec) || 0);
       // Breite kommt aus der Einstellung "Vorschaubild-Größe" — vorher wurde
       // IMMER mit 320 px erzeugt und große Kacheln waren unscharf hochskaliert.
@@ -855,6 +921,9 @@ export async function handleInvoke(cmd, a = {}) {
         direct: canDirectPlay(row),
         directUrl: `/api/stream/${row.mt}/${row.id}?x=1`,
         transcodeUrl: `/api/transcode/${row.mt}/${row.id}?x=1`,
+        // Punkt 2: Safari/iOS spielen das fragmentierte MP4 von /api/transcode
+        // nicht ab (schwarzes Bild) — für sie gibt es denselben Inhalt als HLS.
+        hlsUrl: `/api/hls/${row.mt}/${row.id}/master.m3u8?x=1`,
         width: row.width ?? null,
         height: row.height ?? null,
         aspect: row.aspect ?? (row.width && row.height ? row.width / row.height : null),

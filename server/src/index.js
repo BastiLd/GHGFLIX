@@ -9,11 +9,14 @@ import { fileURLToPath } from "node:url";
 import { openDb, getSetting, setSetting, settingOr, listLibraries, addLibrary, removeLibrary } from "./db.js";
 import { scanLibrary, scanState, removeLibraryContent, detectLibraries, BROWSE_ROOTS, primaryRoot, isSystemDir } from "./scanner.js";
 import { canDirectPlay, ffprobe, killAllTranscodes, serveFile, serveTranscode } from "./stream.js";
+import { alleHlsBeenden, haeppchenListe, haeppchenSenden, istAppleClient, masterPlaylist, sitzung, sitzungStarten } from "./hls.js";
 import { alleSpuren, dateiAlsVtt, eingebettetAlsVtt, spurenLaden, spurenSpeichern } from "./spuren.js";
 import { kopplungsSeite, loeseKopplungEin, pruefeKopplung, starteKopplung } from "./koppeln.js";
 import { cachedImage, tmdbEnabled } from "./tmdb.js";
 import * as supabase from "./supabase.js";
 import { handleInvoke } from "./invoke.js";
+import * as serienfilme from "./serienfilme.js";
+import * as kanaele from "./kanaele.js";
 import { makeThumb, trickplayInfo, ensureTrickplay, pruneThumbCache, TRICK_DIR } from "./thumbs.js";
 import { isLocalRef, localRefPath, imageMime } from "./artwork.js";
 import { isImage } from "./parser.js";
@@ -26,7 +29,7 @@ const SERVER_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const WEBAPP_DIR = join(SERVER_ROOT, "webapp");
 const LEGACY_DIR = join(SERVER_ROOT, "web");
 const WEB_DIR = existsSync(join(WEBAPP_DIR, "index.html")) ? WEBAPP_DIR : LEGACY_DIR;
-const VERSION = "2.4.2";
+const VERSION = "2.5.0";
 
 const db = openDb();
 
@@ -347,7 +350,18 @@ async function handle(req, res) {
   // SRV-034: Basis-Sicherheitsheader für die Web-Oberfläche
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
-  res.setHeader("Referrer-Policy", "no-referrer");
+  /* URSACHE VON "Fehler 153" IN DER YOUTUBE-EINBETTUNG — nicht zurückdrehen:
+     Hier stand `no-referrer`. Damit schickt der Browser beim Laden des
+     YouTube-<iframe> KEINEN Referer-Header. YouTube verweigert die
+     Einbettung dann mit "Fehler 153 – Fehler bei der Konfiguration des
+     Videoplayers", weil es nicht feststellen kann, wer da einbettet.
+
+     `strict-origin-when-cross-origin` ist der heutige Browser-Standard:
+     fremde Seiten bekommen NUR den Ursprung (kein Pfad, keine Parameter,
+     also auch kein Token), und bei einem Rückschritt von https auf http gar
+     nichts. Der Datenschutz-Gewinn von `no-referrer` gegenüber dieser
+     Einstellung ist minimal — der Preis war ein kaputter Trailer. */
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   if (req.method === "OPTIONS") return res.writeHead(204).end();
 
   // ── App-Verteilung: Installationsseite + APK-Download ──────────────────────
@@ -571,7 +585,10 @@ async function handle(req, res) {
       if (!s) seasons.push((s = { season: e.season, episodes: [] }));
       s.episodes.push(withArt(e));
     }
-    return json(res, { show: withArt(show), seasons });
+    // Punkt 3: Kinofilme dieser Serie — die Handy-App zeigt sie als eigenen
+    // Reiter neben den Staffeln und den Specials.
+    const movies = serienfilme.fuerSerie(show, eps).map(withArt);
+    return json(res, { show: withArt(show), seasons, movies });
   }
   if ((m = p.match(/^\/api\/movies\/(\d+)$/))) {
     const movie = db.prepare("SELECT * FROM movies WHERE id = ?").get(+m[1]);
@@ -726,6 +743,13 @@ async function handle(req, res) {
       aspect: row.aspect ?? (row.width && row.height ? row.width / row.height : null),
       directUrl: `/api/stream/${m[1]}/${row.id}?x=1${tq}`,
       transcodeUrl: `/api/transcode/${m[1]}/${row.id}?x=1${tq}`,
+      /* Punkt 2: Apple-Geräte können das fragmentierte MP4 von
+         /api/transcode nicht abspielen (schwarzes Bild). Für sie gibt es
+         denselben Inhalt als HLS. `hlsPflicht` sagt dem Client, dass er
+         diesen Weg nehmen MUSS — der Server erkennt das Gerät am User-Agent,
+         der Client kann es aber auch selbst entscheiden. */
+      hlsUrl: `/api/hls/${m[1]}/${row.id}/master.m3u8?x=1${tq}`,
+      hlsPflicht: istAppleClient(req.headers["user-agent"]),
       trickplayUrl: trickplayInfo(row.path) ? `/api/trickplay?path=${encodeURIComponent(row.path)}${tq}` : null,
       trickplay: trickplayInfo(row.path),
       audioStreams: row.audioStreams ?? [],
@@ -787,6 +811,60 @@ async function handle(req, res) {
       audioIndex: parseInt(url.searchParams.get("a") || "0", 10) || 0,
     });
   }
+  /* ── HLS für Apple-Geräte (Punkt 2) ──────────────────────────────────
+     Warum überhaupt: siehe Kopf von src/hls.js. Kurz — iOS spielt das
+     fragmentierte MP4 von /api/transcode nicht ab, das Bild bleibt schwarz. */
+  if ((m = p.match(/^\/api\/hls\/(movie|episode)\/(\d+)\/master\.m3u8$/))) {
+    const row = mediaRow(m[1], +m[2]);
+    if (!row) return res.writeHead(404).end();
+    if (!row.vcodec) {
+      const info = await ffprobe(row.path);
+      if (info) Object.assign(row, info);
+    }
+    const token = url.searchParams.get("token");
+    const tq = token ? `?token=${encodeURIComponent(token)}` : "";
+    let s;
+    try {
+      s = sitzungStarten(row, {
+        start: parseFloat(url.searchParams.get("t") || "0") || 0,
+        quality: url.searchParams.get("q") || "original",
+        audioIndex: parseInt(url.searchParams.get("a") || "0", 10) || 0,
+      });
+    } catch (e) {
+      res.writeHead(e.code === 503 ? 503 : 500, {
+        "Content-Type": "application/json; charset=utf-8",
+        ...(e.code === 503 ? { "Retry-After": "10" } : {}),
+      });
+      return res.end(JSON.stringify({ error: String(e.message || e) }));
+    }
+    res.writeHead(200, {
+      "Content-Type": "application/vnd.apple.mpegurl",
+      "Cache-Control": "no-store",
+      // wie beim MP4-Weg: der Client kennt damit den Versatz des Datenstroms
+      "X-GHG-Stream-Start": String(s.start),
+    });
+    return res.end(masterPlaylist(s, tq));
+  }
+  if ((m = p.match(/^\/api\/hls\/s\/([a-f0-9]+)\/index\.m3u8$/))) {
+    const s = sitzung(m[1]);
+    if (!s) return res.writeHead(404).end("Sitzung abgelaufen");
+    const token = url.searchParams.get("token");
+    const tq = token ? `?token=${encodeURIComponent(token)}` : "";
+    try {
+      const liste = await haeppchenListe(s, tq);
+      res.writeHead(200, { "Content-Type": "application/vnd.apple.mpegurl", "Cache-Control": "no-store" });
+      return res.end(liste);
+    } catch (e) {
+      res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+      return res.end(JSON.stringify({ error: String(e.message || e) }));
+    }
+  }
+  if ((m = p.match(/^\/api\/hls\/s\/([a-f0-9]+)\/([^/]+)$/))) {
+    const s = sitzung(m[1]);
+    if (!s) return res.writeHead(404).end("Sitzung abgelaufen");
+    return haeppchenSenden(res, s, m[2]);
+  }
+
   if ((m = p.match(/^\/api\/thumb\/(movie|episode)\/(\d+)$/))) {
     const row = mediaRow(m[1], +m[2]);
     if (!row) return res.writeHead(404).end();
@@ -991,6 +1069,7 @@ const shutdown = (sig) => {
   try {
     server.close();
   } catch {}
+  alleHlsBeenden(); // beendet die HLS-ffmpegs und räumt deren Temp-Ordner weg
   killAllTranscodes();
   setTimeout(() => process.exit(0), 400).unref();
 };
@@ -1002,6 +1081,25 @@ void scanLibrary();
 const every = Math.max(300, parseInt(process.env.SCAN_INTERVAL_SEC || "1800", 10)) * 1000;
 setInterval(() => void scanLibrary(), every).unref();
 supabase.startSupabaseLoop();
+
+/* ── Kanäle & Feeds (Punkt 5) ──────────────────────────────────────────────
+   Abonnierte YouTube-Kanäle und Blogs regelmäßig abholen. Der Server macht
+   das, damit die Benachrichtigung auch dann ankommt, wenn gerade niemand die
+   Oberfläche offen hat — beim nächsten Öffnen steht die Zahl da.
+   Standard 30 Minuten; YouTubes Atom-Feed hat kein Kontingent, öfter wäre
+   trotzdem nur unnötiger Verkehr. */
+const feedTakt = Math.max(300, parseInt(process.env.FEED_INTERVAL_SEC || "1800", 10)) * 1000;
+const feedsAbholen = () =>
+  void kanaele
+    .abholen()
+    .then((neu) => {
+      if (neu.length > 0) console.log(`[feeds] ${neu.length} neue Beiträge`);
+    })
+    .catch((e) => console.warn("[feeds]", String(e)));
+// Erster Abruf 20 s nach dem Start — nicht sofort, damit der Boot nicht auf
+// externe Server wartet.
+setTimeout(feedsAbholen, 20_000).unref();
+setInterval(feedsAbholen, feedTakt).unref();
 
 // S-030: pending_progress nicht unbegrenzt wachsen lassen — Einträge, die nach
 // 180 Tagen immer noch keinem Medium zugeordnet werden konnten (Medien, die es

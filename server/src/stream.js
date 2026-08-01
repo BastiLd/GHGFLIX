@@ -115,11 +115,21 @@ export function killAllTranscodes() {
   activeFF.clear();
 }
 
+/* Der HLS-Weg (hls.js, für iPhone/iPad) startet eigene ffmpeg-Prozesse. Sie
+   müssen in DERSELBEN Liste stehen wie die hier — sonst würde die Obergrenze
+   TRANSCODE_MAX doppelt vergeben und ein SIGTERM ließe sie als Waisen zurück
+   (genau der Fehler, der beim Studio-Port schon einmal Stunden gekostet hat). */
+export const ffAnmelden = (p) => activeFF.add(p);
+export const ffAbmelden = (p) => activeFF.delete(p);
+/** Wie viele Umwandlungen dürfen höchstens gleichzeitig laufen? */
+export const transcodeMax = () =>
+  Math.max(1, parseInt(settingOr("transcode_max", "TRANSCODE_MAX", "3"), 10) || 3);
+
 /** Live transcode from `start` seconds → fragmented MP4 piped to the client.
  *  h264 video is stream-copied when only the audio/container is the problem. */
 export function serveTranscode(req, res, row, { start = 0, quality = "original", audioIndex = 0 } = {}) {
   // SRV-017: Limit gleichzeitiger Transcodes (Setting/ENV TRANSCODE_MAX, Standard 3)
-  const maxFF = Math.max(1, parseInt(settingOr("transcode_max", "TRANSCODE_MAX", "3"), 10) || 3);
+  const maxFF = transcodeMax();
   if (activeFF.size >= maxFF) {
     res.writeHead(503, { "Content-Type": "application/json; charset=utf-8", "Retry-After": "10" });
     res.end(JSON.stringify({ error: `Zu viele gleichzeitige Video-Umwandlungen (max. ${maxFF}). Kurz warten — oder TRANSCODE_MAX erhöhen.` }));

@@ -294,6 +294,10 @@ export function SerienSeite({ api, img, id, startStaffel, aufAbspielen, aufZurue
   const [favorit, setFavorit] = useState(false);
   const [staffel, setStaffel] = useState(startStaffel ?? null);
   const [dialog, setDialog] = useState(false);
+  /* Punkt 3: "Filme" ist ein eigener Bereich NEBEN den Staffeln — kein
+     Staffelwert, sonst müsste jede Rechnung auf `staffel` plötzlich auch
+     Nicht-Zahlen vertragen. */
+  const [filmeAn, setFilmeAn] = useState(false);
 
   const laden = useCallback(() => {
     api(`/api/shows/${id}`).then(setDaten).catch(() => {});
@@ -313,6 +317,11 @@ export function SerienSeite({ api, img, id, startStaffel, aufAbspielen, aufZurue
 
   if (!daten) return <Laden />;
   const { show, seasons } = daten;
+  const filme = daten.movies ?? [];
+  const hatSpecials = seasons.some((s) => s.season === 0);
+  // Specials (Staffel 0) sind keine eigene Staffel — sie bekommen einen
+  // eigenen Reiter und dürfen die Staffelzahl nicht mitzählen.
+  const echteStaffeln = seasons.filter((s) => s.season > 0);
   const aktuelle =
     staffel != null && seasons.some((s) => s.season === staffel)
       ? staffel
@@ -352,7 +361,7 @@ export function SerienSeite({ api, img, id, startStaffel, aufAbspielen, aufZurue
           {[
             show.year,
             show.rating ? `★ ${Number(show.rating).toFixed(1)}` : null,
-            `${seasons.length} Staffel${seasons.length > 1 ? "n" : ""}`,
+            `${echteStaffeln.length} Staffel${echteStaffeln.length > 1 ? "n" : ""}`,
             `${alleFolgen.length} Folgen`,
             ...parseGenres(show.genres).slice(0, 3),
           ].filter(Boolean).join("   ·   ")}
@@ -378,18 +387,87 @@ export function SerienSeite({ api, img, id, startStaffel, aufAbspielen, aufZurue
               spalte={1}
               onPress={favUm}
             />
-            {seasons.length > 1 && (
-              <Knopf text={`Staffel ${aktuelle}`} symbol="▾" spalte={2} onPress={() => setDialog(true)} />
+            {echteStaffeln.length > 1 && (
+              <Knopf
+                text={filmeAn || aktuelle === 0 ? "Staffeln" : `Staffel ${aktuelle}`}
+                symbol="▾" spalte={2}
+                onPress={() => setDialog(true)}
+              />
             )}
-            <Knopf text="Zurück" symbol="←" spalte={3} onPress={aufZurueck} />
+            {/* Punkt 3: Specials und Filme als eigene Reiter */}
+            {hatSpecials && (
+              <Knopf
+                text="Specials"
+                symbol="★" spalte={3}
+                onPress={() => { setFilmeAn(false); setStaffel(0); }}
+              />
+            )}
+            {filme.length > 0 && (
+              <Knopf
+                text={`Filme (${filme.length})`}
+                symbol="▣" spalte={4}
+                onPress={() => setFilmeAn(true)}
+              />
+            )}
+            {/* Feste Spaltennummern mit Lücken — das Fokus-System kommt damit
+                zurecht (bei nur einer Staffel fehlt Spalte 2 schon immer). */}
+            <Knopf text="Zurück" symbol="←" spalte={5} onPress={aufZurueck} />
           </View>
         </FokusReihe>
 
         <Text style={[st.h2, { marginTop: gross ? 30 : 22, marginBottom: 10 }]}>
-          Staffel {aktuelle} · {folgen.length} Folgen
+          {filmeAn
+            ? `Filme zu dieser Serie · ${filme.length}`
+            : aktuelle === 0
+              ? `Specials · ${folgen.length} Folgen`
+              : `Staffel ${aktuelle} · ${folgen.length} Folgen`}
         </Text>
       </View>
 
+      {/* Reiter „Filme": Kinofilme dieser Serie (Punkt 3) */}
+      {filmeAn && (
+        <View style={{ paddingHorizontal: M.rand }}>
+          {filme.map((mv, i) => (
+            <FokusReihe key={mv.id} zeile={i + 1}>
+              <FKnopf
+                spalte={0}
+                onPress={() => aufAbspielen({ type: "movie", id: mv.id, title: mv.title, subtitle: "" })}
+                style={[
+                  st.kachel,
+                  { flexDirection: "row", gap: 14, padding: 8, marginBottom: 8, alignItems: "center" },
+                ]}
+                fokusStil={st.fokus}
+              >
+                {mv.poster ? (
+                  <Image
+                    source={{ uri: img(mv.poster, "w300") }}
+                    style={{ width: gross ? 100 : 70, height: gross ? 150 : 105, borderRadius: 8, backgroundColor: C.surface }}
+                  />
+                ) : (
+                  <View style={{ width: gross ? 100 : 70, height: gross ? 150 : 105, borderRadius: 8, backgroundColor: C.surface }} />
+                )}
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ color: C.text, fontWeight: "700", fontSize: gross ? 17 : 13.5 }}>
+                    {mv.title}
+                    {mv.year ? `  (${mv.year})` : ""}
+                  </Text>
+                  {!!mv.overview && (
+                    <Text numberOfLines={3} style={[st.gedaempft, { marginTop: 3 }]}>{mv.overview}</Text>
+                  )}
+                  {mv.duration > 0 && (
+                    <Text style={[st.gedaempft, { marginTop: 3, fontSize: M.klein }]}>{fmtZeit(mv.duration)}</Text>
+                  )}
+                </View>
+              </FKnopf>
+            </FokusReihe>
+          ))}
+        </View>
+      )}
+
+      {/* Bewusst NICHT nur ausgeblendet: beide Listen melden ihre Knöpfe beim
+          Fokus-System unter denselben Zeilen/Spalten an. Lägen sie gleichzeitig
+          im Baum, würde die Fernbedienung auf unsichtbare Einträge springen. */}
+      {!filmeAn && (
       <View style={{ paddingHorizontal: M.rand }}>
         {folgen.map((e, i) => {
           const f = fMap.get(e.id);
@@ -444,15 +522,19 @@ export function SerienSeite({ api, img, id, startStaffel, aufAbspielen, aufZurue
           Tipp: OK lange gedrückt halten markiert eine Folge als gesehen.
         </Text>
       </View>
+      )}
 
       {dialog && (
         <Dialog titel="Staffel wählen">
           <DialogListe
             aktiv={aktuelle}
-            aufWahl={(w) => { setStaffel(w); setDialog(false); }}
+            aufWahl={(w) => { setStaffel(w); setFilmeAn(false); setDialog(false); }}
             eintraege={seasons.map((s) => ({
               wert: s.season,
-              text: `Staffel ${s.season} · ${s.episodes.length} Folgen`,
+              // Staffel 0 heißt überall „Specials" — „Staffel 0" versteht niemand.
+              text: s.season === 0
+                ? `Specials · ${s.episodes.length} Folgen`
+                : `Staffel ${s.season} · ${s.episodes.length} Folgen`,
             }))}
           />
         </Dialog>

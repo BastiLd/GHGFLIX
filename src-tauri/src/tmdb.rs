@@ -231,6 +231,16 @@ struct Video {
     kind: String,
     #[serde(default)]
     official: bool,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    iso_639_1: Option<String>,
+    #[serde(default)]
+    iso_3166_1: Option<String>,
+    #[serde(default)]
+    published_at: Option<String>,
+    #[serde(default)]
+    size: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -432,23 +442,91 @@ impl Tmdb {
         Ok(if non_special.is_empty() { nums } else { non_special })
     }
 
+    /* ── Trailer (Punkt 4) ──────────────────────────────────────────────
+       TMDb liefert Videos immer nur in EINER Sprache. Bisher wurde hart
+       "en-US" geholt — deutsche Teaser waren dadurch nie zu sehen, und es
+       gab immer nur genau einen Trailer.
+
+       Jetzt: eingestellte Sprache UND Englisch holen, zusammenführen,
+       doppelte YouTube-Schlüssel entfernen, nach Art sortieren. Mit
+       `season` liefert TMDb die Videos EINER Staffel. */
+    pub async fn videos(
+        &self,
+        media_type: &str,
+        id: i64,
+        season: Option<i64>,
+    ) -> Result<Vec<crate::models::TrailerVideo>> {
+        let mt = if media_type == "tv" { "tv" } else { "movie" };
+        let pfad = match season {
+            Some(s) => format!("{BASE}/{mt}/{id}/season/{s}/videos"),
+            None => format!("{BASE}/{mt}/{id}/videos"),
+        };
+        let mut roh: Vec<Video> = Vec::new();
+        for sprache in [self.lang.as_str(), "en-US"] {
+            let r: Result<VideosResp, _> = async {
+                self.client
+                    .get(&pfad)
+                    .query(&[("api_key", self.key.as_str()), ("language", sprache)])
+                    .send()
+                    .await?
+                    .json::<VideosResp>()
+                    .await
+            }
+            .await;
+            // Eine Staffel ohne eigene Videos antwortet mit 404 — das ist kein
+            // Fehler, sondern der Normalfall. Deshalb still überspringen.
+            if let Ok(v) = r {
+                roh.extend(v.results);
+            }
+        }
+
+        let mut gesehen = std::collections::HashSet::new();
+        let mut out: Vec<crate::models::TrailerVideo> = Vec::new();
+        for v in roh {
+            if v.site != "YouTube" || v.key.is_empty() || !gesehen.insert(v.key.clone()) {
+                continue;
+            }
+            out.push(crate::models::TrailerVideo {
+                key: v.key,
+                name: v.name,
+                site: v.site,
+                kind: v.kind,
+                lang: v.iso_639_1,
+                region: v.iso_3166_1,
+                official: v.official,
+                published_at: v.published_at,
+                size: v.size,
+                season,
+            });
+        }
+        let rang = |t: &str| match t {
+            "Trailer" => 0,
+            "Teaser" => 1,
+            "Clip" => 2,
+            "Featurette" => 3,
+            "Behind the Scenes" => 4,
+            "Bloopers" => 5,
+            _ => 9,
+        };
+        out.sort_by(|a, b| {
+            rang(&a.kind)
+                .cmp(&rang(&b.kind))
+                .then_with(|| b.official.cmp(&a.official))
+                .then_with(|| b.published_at.cmp(&a.published_at))
+        });
+        Ok(out)
+    }
+
     pub async fn extras(&self, media_type: &str, id: i64) -> Result<crate::models::Extras> {
         let mt = if media_type == "tv" { "tv" } else { "movie" };
 
-        let vids: VideosResp = self
-            .client
-            .get(format!("{BASE}/{mt}/{id}/videos"))
-            .query(&[("api_key", self.key.as_str()), ("language", "en-US")])
-            .send()
-            .await?
-            .json()
-            .await?;
-        let trailer_key = vids
-            .results
+        let videos = self.videos(media_type, id, None).await.unwrap_or_default();
+        // trailer_key bleibt für den bestehenden „Trailer ansehen"-Knopf.
+        let trailer_key = videos
             .iter()
-            .filter(|v| v.site == "YouTube" && v.kind == "Trailer")
-            .max_by_key(|v| v.official as i32)
-            .or_else(|| vids.results.iter().find(|v| v.site == "YouTube"))
+            .find(|v| v.kind == "Trailer" && v.official)
+            .or_else(|| videos.iter().find(|v| v.kind == "Trailer"))
+            .or_else(|| videos.first())
             .map(|v| v.key.clone());
 
         let credits: CreditsResp = self
@@ -471,7 +549,7 @@ impl Tmdb {
             })
             .collect();
 
-        Ok(crate::models::Extras { trailer_key, cast })
+        Ok(crate::models::Extras { trailer_key, videos, cast })
     }
 
     /// Available artwork for an item. `media_type` = "movie" | "tv" | "season" | "episode".

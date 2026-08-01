@@ -1,11 +1,14 @@
 mod commands;
 mod db;
 mod intro;
+mod kanaele;
 mod models;
+mod ordnerwahl;
 mod parser;
 mod paths;
 mod probe;
 mod scanner;
+mod serienfilme;
 mod tmdb;
 mod watcher;
 
@@ -14,7 +17,7 @@ use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 pub struct AppState {
     pub db_path: PathBuf,
@@ -110,6 +113,29 @@ pub fn run() {
 
             watcher::rewatch(app.handle());
 
+            /* Kanäle & Feeds (Punkt 5): abonnierte YouTube-Kanäle und Blogs
+               im Hintergrund abholen — erst 20 s nach dem Start (der Start
+               soll nicht auf fremde Server warten), danach alle 30 Minuten.
+               Neue Beiträge lösen ein Ereignis aus, auf das die Oberfläche
+               hört und die Benachrichtigung zeigt. */
+            let feed_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                loop {
+                    {
+                        let state = feed_app.state::<AppState>();
+                        match kanaele::abholen(&state.conn, &state.http, None).await {
+                            Ok(neue) if !neue.is_empty() => {
+                                let _ = feed_app.emit("feeds://neu", neue.len());
+                            }
+                            Ok(_) => {}
+                            Err(e) => eprintln!("[feeds] {e}"),
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(1800)).await;
+                }
+            });
+
             // Safety net: the window starts hidden (so the transparent webview never
             // flashes the desktop before React paints). The frontend reveals it as
             // soon as it has rendered; this guarantees it shows even if the frontend
@@ -187,6 +213,20 @@ pub fn run() {
             commands::repair_season_titles,
             commands::file_info,
             commands::recently_watched,
+            commands::preview_folder,
+            commands::apply_folder_selection,
+            commands::list_ignored_files,
+            commands::unignore_files,
+            commands::link_movie_to_show,
+            commands::tmdb_videos,
+            commands::feeds_list,
+            commands::feed_add,
+            commands::feed_remove,
+            commands::feed_update,
+            commands::feed_items,
+            commands::feed_refresh,
+            commands::feed_unread,
+            commands::feed_mark_read,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
