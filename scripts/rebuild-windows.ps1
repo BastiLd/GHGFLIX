@@ -21,7 +21,10 @@
 # Nur bauen, ohne Pruefungen:  ... -File scripts\rebuild-windows.ps1 -Schnell
 # ============================================================================
 param(
-  [switch]$Schnell
+  [switch]$Schnell,
+  # Installiert den frischen Bau gleich mit und rettet dabei die
+  # Taskleisten-Verknuepfung (siehe Schritt 7 am Ende der Datei).
+  [switch]$Installieren
 )
 
 $ErrorActionPreference = "Stop"
@@ -110,10 +113,74 @@ Get-ChildItem -Path $bundle -Recurse -Include *.exe, *.msi -ErrorAction Silently
   ForEach-Object { Write-Host ("     Installer:  " + $_.FullName) -ForegroundColor Green }
 if (Test-Path $exe) { Write-Host ("     Portable:   " + $exe) -ForegroundColor Green }
 
+# ---------------------------------------------------------------------------
+# 7) Optional: gleich installieren - und die Taskleiste retten
+#
+# WARUM DAS HIER STEHT (gemessen am 01.08.2026):
+# Der NSIS-Installer entfernt beim Ersetzen der alten Fassung die angeheftete
+# TASKLEISTEN-Verknuepfung. Startmenue und Desktop legt er neu an, die
+# Taskleiste NICHT - dort ist das Symbol danach einfach weg.
+#
+# Und es laesst sich auch nicht per Programm wieder anheften: Windows hat das
+# Verb "An Taskleiste anheften" seit Windows 10 gesperrt (nachgeprueft - die
+# Verbenliste einer .exe kennt nur noch "An Start anheften"). Was bleibt: die
+# .lnk-Datei vorher sichern und sofort nach der Installation zurueckschreiben,
+# BEVOR der Explorer das Fehlen bemerkt und den Platz aus der Registrierung
+# wirft. Klappt auch das nicht, sagt das Skript klar, dass ein Rechtsklick
+# noetig ist - statt es stillschweigend kaputt zu lassen.
+# ---------------------------------------------------------------------------
+if ($Installieren) {
+  Schritt "7/7  Installieren"
+
+  $tbOrdner = Join-Path $env:APPDATA "Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+  $tbDatei  = Join-Path $tbOrdner "GHGFlix.lnk"
+  $warAngeheftet = Test-Path $tbDatei
+  if ($warAngeheftet) { Write-Host "     Taskleisten-Verknuepfung gefunden - wird nachher zurueckgeholt." }
+
+  $setup = Get-ChildItem -Path (Join-Path $bundle "nsis") -Filter "*-setup.exe" -ErrorAction SilentlyContinue |
+           Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if (-not $setup) { throw "Kein Installer im Ordner 'nsis' gefunden." }
+
+  Get-Process -Name "ghgflix", "GHGFlix" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Write-Host "     $($setup.Name) laeuft (still) ..."
+  $p = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
+  if ($p.ExitCode -ne 0) { throw "Der Installer endete mit Code $($p.ExitCode)." }
+
+  $ziel = Join-Path $env:LOCALAPPDATA "GHGFlix\ghgflix.exe"
+  if (Test-Path $ziel) {
+    Write-Host ("     Installiert: Version " + (Get-Item $ziel).VersionInfo.FileVersion) -ForegroundColor Green
+  } else {
+    Write-Host "     WARNUNG: $ziel nicht gefunden." -ForegroundColor Yellow
+  }
+
+  if ($warAngeheftet -and -not (Test-Path $tbDatei) -and (Test-Path $ziel)) {
+    New-Item -ItemType Directory -Force -Path $tbOrdner | Out-Null
+    $sh  = New-Object -ComObject WScript.Shell
+    $lnk = $sh.CreateShortcut($tbDatei)
+    $lnk.TargetPath       = $ziel
+    $lnk.WorkingDirectory = Split-Path $ziel
+    $lnk.IconLocation     = "$ziel,0"
+    $lnk.Description      = "GHGFlix"
+    $lnk.Save()
+    Write-Host "     Taskleisten-Verknuepfung zurueckgeschrieben." -ForegroundColor Green
+    Write-Host "     Ist das Symbol trotzdem weg, hat der Explorer den Platz schon"
+    Write-Host "     freigegeben - dann einmal Rechtsklick auf GHGFlix im Startmenue"
+    Write-Host "     und 'An Taskleiste anheften'. Windows laesst das nur von Hand zu."
+  }
+
+  Write-Host ""
+  Write-Host "Fertig. Bibliothek, Einstellungen und Gesehen-Stand sind unberuehrt" -ForegroundColor Green
+  Write-Host "(sie liegen in $env:APPDATA\com.ghgflix.app)." -ForegroundColor Green
+  Write-Host ""
+  exit 0
+}
+
 Write-Host ""
 Write-Host "So geht es weiter:" -ForegroundColor Yellow
 Write-Host "  * Den Installer (.exe im Ordner 'nsis') ausfuehren - er ersetzt die alte"
 Write-Host "    Version und aktualisiert Startmenue- und Desktop-Verknuepfung automatisch."
+Write-Host "  * ACHTUNG: die angeheftete TASKLEISTEN-Verknuepfung entfernt er dabei."
+Write-Host "    Mit '-Installieren' erledigt dieses Skript das Zurueckholen selbst."
 Write-Host "  * Deine Bibliothek, Einstellungen und der Gesehen-Stand bleiben erhalten"
 Write-Host "    (sie liegen in $env:APPDATA\com.ghgflix.app, nicht im Programmordner)."
 Write-Host ""
