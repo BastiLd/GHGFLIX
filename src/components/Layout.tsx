@@ -1,10 +1,11 @@
 import { getVersion, listen } from "../lib/backend";
 import clsx from "clsx";
-import { Film, Heart, House, RefreshCw, Rss, Search, Settings as SettingsIcon, Tv, User } from "lucide-react";
+import { Film, Heart, House, RefreshCw, Rss, ScrollText, Search, Settings as SettingsIcon, Tv, User } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { feedUnread, getSetting, listMovies, listShows, scanLibraries, setSetting } from "../lib/api";
+import { Protokoll } from "./Protokoll";
 import { dedupeMovies } from "../lib/format";
 import { miniClipPath, usePlayback } from "../lib/playback";
 import { useStore } from "../lib/store";
@@ -59,6 +60,10 @@ export function Layout() {
     queryFn: () => feedUnread(),
     refetchInterval: 60_000,
   });
+  const [protokollOffen, setProtokollOffen] = useState(false);
+  /* Nur FEHLER zeigen einen Zaehler — bei jedem Hinweis zu blinken waere Lärm. */
+  const fehlerZahl = useStore((s) => s.protokoll.filter((e) => e.kind === "error").length);
+
   const counts: Record<string, number | undefined> = {
     "/movies": moviesQ.data ? dedupeMovies(moviesQ.data).length : undefined,
     "/shows": showsQ.data?.length,
@@ -337,8 +342,24 @@ export function Layout() {
             >
               <RefreshCw className="w-4 h-4" />
             </button>
+            {/* Meldungs-Protokoll: die kurzen Meldungen unten rechts sind weg,
+                bevor man sie lesen oder kopieren kann. Hier stehen sie alle. */}
+            <button
+              onClick={() => setProtokollOffen(true)}
+              className="relative p-2 rounded-lg bg-ghg-surface2 hover:bg-ghg-elevated text-ghg-text transition"
+              title="Meldungen (alles Gemeldete zum Nachlesen und Kopieren)"
+            >
+              <ScrollText className="w-4 h-4" />
+              {fehlerZahl > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-ghg-red text-white text-[10px] font-bold flex items-center justify-center">
+                  {fehlerZahl > 9 ? "9+" : fehlerZahl}
+                </span>
+              )}
+            </button>
           </div>
         </header>
+
+        <Protokoll open={protokollOffen} onClose={() => setProtokollOffen(false)} />
 
         <main className="flex-1 overflow-y-auto">
           {/* re-mount on route change for a subtle page-transition fade (configurable) */}

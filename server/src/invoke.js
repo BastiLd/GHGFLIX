@@ -691,6 +691,22 @@ export async function handleInvoke(cmd, a = {}) {
               .get(s.id, season, n, e.id).n > 0
           ) n++;
           d.prepare("UPDATE episodes SET episode=? WHERE id=?").run(n, e.id);
+
+          /* WAS NICHT ZUGEORDNET WERDEN KONNTE, DARF NICHTS FALSCHES ZEIGEN.
+             Gemeldet an den Miraculous-Specials: über
+             „001 - New York United Heroez.mp4" stand der TMDb-Titel
+             „A Christmas Special" samt dessen Bild — nur weil das die Folge 1
+             der Staffel 0 ist. Solche Sammlungen nummerieren anders als TMDb.
+             Lieber der ehrliche Name aus dem Dateinamen und GAR KEIN Bild
+             als ein fremder Titel mit fremdem Bild. */
+          const stem = basename(e.path).replace(/\.[^.]+$/, "");
+          const mSe = /s\d{1,2}\s*[-. _]*e\d{1,3}[-. _]*/i.exec(stem);
+          const mNr = /^\s*\d{1,4}\s*(?:x\s*\d{1,3})?\s*[-._)\]]+\s*/.exec(stem);
+          const rest = mSe ? stem.slice(mSe.index + mSe[0].length) : mNr ? stem.slice(mNr[0].length) : null;
+          const ausDatei = rest ? rest.replace(/[._]+/g, " ").split(/\s+/).filter(Boolean).join(" ") : null;
+          if (ausDatei && ausDatei.length >= 3) {
+            d.prepare("UPDATE episodes SET title=?, still=NULL, overview=NULL WHERE id=?").run(ausDatei, e.id);
+          }
         }
       }
       await enrichShow(s.id, s.tmdb_id).catch(() => {});

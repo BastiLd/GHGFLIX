@@ -877,6 +877,25 @@ pub async fn repair_season_titles(
     fn norm(s: &str) -> String {
         crate::parser::letters_only(s).to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
     }
+/// Lesbarer Titel aus einem Dateinamen: alles nach der Nummer, in
+/// Grossschreibung belassen (anders als `candidate_of`, das kleinschreibt und
+/// nur zum VERGLEICHEN dient).
+fn titel_aus_dateiname(stem: &str) -> Option<String> {
+    let rest = {
+        let re_se = regex::Regex::new(r"(?i)s\d{1,2}\s*[-. _]*e\d{1,3}[-. _]*").ok()?;
+        if let Some(m) = re_se.find(stem) {
+            stem[m.end()..].to_string()
+        } else {
+            let re_num = regex::Regex::new(r"^\s*\d{1,4}\s*(?:x\s*\d{1,3})?\s*[-._)\]]+\s*").ok()?;
+            let m = re_num.find(stem)?;
+            stem[m.end()..].to_string()
+        }
+    };
+    let t = rest.trim().replace(['.', '_'], " ");
+    let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    if t.chars().count() < 3 { None } else { Some(t) }
+}
+
     /// Der Titeltext aus einem Dateinamen: alles NACH der Nummer.
     ///
     /// Zwei Schreibweisen, beide kommen in echten Sammlungen vor:
@@ -1018,6 +1037,31 @@ pub async fn repair_season_titles(
             }
             conn.execute("UPDATE episodes SET episode=?2 WHERE id=?1", params![eid, n]).map_err(err)?;
             // BEWUSST KEIN set_placement - siehe Erklaerung oben.
+
+            /* WAS NICHT ZUGEORDNET WERDEN KONNTE, DARF NICHTS FALSCHES ZEIGEN.
+               Gemeldet am 01.08.2026 an den Miraculous-Specials: ueber
+               "001 - New York United Heroez.mp4" stand der TMDb-Titel
+               "A Christmas Special" samt dessen Vorschaubild - schlicht weil
+               das die Folge Nummer 1 der Staffel 0 ist. Solche Sammlungen
+               nummerieren anders als TMDb, und dann ist die Nummer wertlos.
+
+               Lieber der ehrliche Name aus dem Dateinamen und GAR KEIN Bild
+               als ein fremder Titel mit fremdem Bild. Das Bild wird nur
+               geloescht, wenn es nicht von Hand gesetzt wurde. */
+            if let Some(stem) = std::path::Path::new(
+                &eps.iter().find(|(x, _, _)| x == eid).map(|(_, p, _)| p.clone()).unwrap_or_default(),
+            )
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            {
+                if let Some(aus_datei) = titel_aus_dateiname(&stem) {
+                    let _ = conn.execute(
+                        "UPDATE episodes SET title=?2, still_path=NULL, overview=NULL
+                         WHERE id=?1 AND COALESCE(still_locked,0)=0",
+                        params![eid, aus_datei],
+                    );
+                }
+            }
         }
         let _ = db::set_all_episode_primaries(&conn);
     }
