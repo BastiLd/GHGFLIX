@@ -6,7 +6,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { linkMovieToShow, listShows } from "../lib/api";
 import { MovieCardItem, ShowCardItem } from "../components/cards";
 import { MediaRow } from "../components/MediaRow";
-import { detectIntros, getSeasonArt, getShowDetail, listFavorites, listProgress, mediaThumbnail, repairSeasonTitles, revealInExplorer, setSeasonWatched, setShowIntro, setShowWatched, setWatched, toggleFavorite } from "../lib/api";
+import { detectIntros, getSeasonArt, getShowDetail, listFavorites, listProgress, mediaThumbnail, repairSeasonTitles, resetEpisodeNumbersFromFiles, revealInExplorer, setSeasonWatched, setShowIntro, setShowWatched, setWatched, toggleFavorite } from "../lib/api";
 import { openCtx } from "../lib/contextmenu";
 import { enqueueSeasonRest, playback } from "../lib/playback";
 import { useUiPrefs } from "../lib/uiPrefs";
@@ -496,6 +496,30 @@ export default function ShowDetail() {
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-ghg-surface2 hover:bg-ghg-elevated text-sm text-ghg-muted hover:text-ghg-text transition"
             >
               Titel-Abgleich
+            </button>
+            {/* Die Rücknahme zum Titel-Abgleich. Ohne sie gab es keinen Weg
+                zurück: der Abgleich speichert dauerhafte Platzierungen, die
+                bei JEDEM Scan neu greifen — auch nach „Bibliothek neu
+                aufbauen". Bei Miraculous Staffel 6 standen dadurch 17 von 22
+                Folgen falsch. */}
+            <button
+              onClick={() => {
+                void resetEpisodeNumbersFromFiles(show.id, selectedSeason)
+                  .then(([n, t]) => {
+                    qc.invalidateQueries({ queryKey: ["show", sid] });
+                    toast(
+                      n > 0
+                        ? `${n} von ${t} Folgen auf die Nummern aus den Dateinamen zurückgesetzt`
+                        : `Alle ${t} Folgen standen schon so, wie es die Dateinamen sagen`,
+                      "success",
+                    );
+                  })
+                  .catch((e) => toast(String(e), "error"));
+              }}
+              title="Zurück auf das SxxEyy aus den Dateinamen — hebt einen falsch gelaufenen Titel-Abgleich auf"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-ghg-surface2 hover:bg-ghg-elevated text-sm text-ghg-muted hover:text-ghg-text transition"
+            >
+              Nummern aus Dateinamen
             </button>
             <button
               onClick={() => {

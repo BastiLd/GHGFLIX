@@ -883,7 +883,29 @@ pub async fn repair_season_titles(
         let m = re.find(stem)?;
         let rest = &stem[m.end()..];
         let c = norm(rest);
-        if c.len() < 3 { None } else { Some(c) }
+        /* MINDESTQUALITAET - gemessen am 01.08.2026 an Miraculous Staffel 6:
+           Dort heissen Dateien "S06E02 - The", "S06E09 - Mr",
+           "S06E14 - WEqp4g7h", "S06E17 - M1IqG0Eu". Solche Reste sind KEIN
+           Titel. Frueher gingen sie trotzdem in den Abgleich, fanden nichts -
+           und bekamen anschliessend als "unerkannt" trotzdem eine neue Nummer
+           DAUERHAFT angeheftet. 17 von 22 Folgen standen danach falsch, und
+           weil Platzierungen bei jedem Scan neu angewandt werden, half auch
+           "Bibliothek neu aufbauen" nicht.
+
+           Deshalb: mindestens 5 Zeichen, ein Wort mit mindestens 4 Zeichen
+           und wenigstens ein Vokal. "the", "mr", "b", "de" fallen raus,
+           ebenso Zufallskennungen ohne Vokal. Lieber nicht zuordnen als
+           falsch zuordnen. */
+        if c.len() < 5 {
+            return None;
+        }
+        if c.split_whitespace().map(|w| w.chars().count()).max().unwrap_or(0) < 4 {
+            return None;
+        }
+        if !c.chars().any(|ch| "aeiouäöü".contains(ch)) {
+            return None;
+        }
+        Some(c)
     }
 
     // collect this season's episodes (id, primary path)
@@ -942,11 +964,22 @@ pub async fn repair_season_titles(
                 let _ = db::set_placement(&conn, &p, tmdb_id, season, *real);
             }
         }
-        // unmatched files: keep their old number when free, else next free slot.
-        // Pin them with a placement too — otherwise the NEXT scan/rebuild re-derives
-        // the raw SxxEyy tag from the filename and silently re-collides them with
-        // whatever matched file already claimed that slot (the bug that let already
-        // "fixed" seasons quietly break again on every rescan).
+        /* Nicht erkannte Dateien: alte Nummer behalten, wenn sie frei ist,
+           sonst den naechsten freien Platz.
+
+           WICHTIG - HIER STAND EINMAL EIN set_placement (01.08.2026 entfernt):
+           Auch nicht erkannte Dateien bekamen ihre AUSWEICH-Nummer dauerhaft
+           angeheftet. Bei Miraculous Staffel 6 standen danach 17 von 22 Folgen
+           falsch, und weil Platzierungen bei jedem Scan neu angewandt werden,
+           liess sich das nicht mehr rueckgaengig machen - auch nicht mit
+           "Bibliothek neu aufbauen".
+
+           Die Begruendung von damals ("sonst kollidieren sie beim naechsten
+           Scan wieder") stimmt zwar, wiegt aber weniger schwer: eine
+           Kollision faellt sofort auf und laesst sich beheben, eine
+           eingefrorene falsche Nummer nicht. Wer die Reihenfolge wirklich
+           festzurren will, benutzt "Nummern aus Dateinamen" oder
+           "Identifizieren". */
         for (eid, _, old_num) in &eps {
             if assign.iter().any(|(a, _)| a == eid) {
                 continue;
@@ -966,9 +999,7 @@ pub async fn repair_season_titles(
                 n += 1;
             }
             conn.execute("UPDATE episodes SET episode=?2 WHERE id=?1", params![eid, n]).map_err(err)?;
-            for p in db::file_paths_of_episode(&conn, *eid).map_err(err)? {
-                let _ = db::set_placement(&conn, &p, tmdb_id, season, n);
-            }
+            // BEWUSST KEIN set_placement - siehe Erklaerung oben.
         }
         let _ = db::set_all_episode_primaries(&conn);
     }
@@ -1704,4 +1735,117 @@ pub fn feed_unread(state: State<AppState>, art: Option<String>) -> R<i64> {
 pub fn feed_mark_read(state: State<AppState>, ids: Option<Vec<String>>) -> R<i64> {
     let conn = state.conn.lock().unwrap();
     crate::kanaele::als_gelesen(&conn, ids).map_err(err)
+}
+
+/// Folgennummern einer Staffel wieder aus den DATEINAMEN uebernehmen.
+///
+/// WARUM ES DAS BRAUCHT (gemessen am 01.08.2026 an Miraculous Staffel 6):
+/// Der Titel-Abgleich hatte 17 von 22 Folgen falsch zugeordnet und das
+/// Ergebnis als dauerhafte Platzierung gespeichert. Platzierungen werden bei
+/// JEDEM Scan neu angewandt - "Bibliothek neu aufbauen" half deshalb nicht,
+/// die falschen Nummern kamen jedes Mal zurueck. Ohne diesen Weg gab es
+/// ueberhaupt keine Moeglichkeit, das rueckgaengig zu machen.
+///
+/// Diese Funktion loescht die Platzierungen der Staffel und setzt die Nummern
+/// auf das, was im Dateinamen steht (SxxEyy) - die verlaesslichste Quelle,
+/// solange der Dateiname ein Kuerzel traegt. Dateien ohne erkennbares Kuerzel
+/// bleiben unangetastet.
+#[tauri::command]
+pub fn reset_episode_numbers_from_files(
+    app: AppHandle,
+    state: State<AppState>,
+    show_id: i64,
+    season: i64,
+) -> R<(i64, i64)> {
+    let conn = state.conn.lock().unwrap();
+
+    let eps: Vec<(i64, String, i64)> = {
+        let mut stmt = conn
+            .prepare("SELECT id, path, episode FROM episodes WHERE show_id=?1 AND season=?2")
+            .map_err(err)?;
+        let rows = stmt
+            .query_map(params![show_id, season], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(err)?;
+        rows
+    };
+    let total = eps.len() as i64;
+    if total == 0 {
+        return Ok((0, 0));
+    }
+
+    // Was sagt der Dateiname? Nur Dateien mit erkennbarem Kuerzel zaehlen.
+    let mut ziel: Vec<(i64, i64)> = Vec::new();
+    for (eid, path, _) in &eps {
+        let p = std::path::Path::new(path);
+        let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let eltern = p
+            .parent()
+            .and_then(|d| d.file_name())
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if let Some((s, e)) = crate::parser::parse_episode(&stem, &eltern) {
+            if s == season && e >= 1 {
+                ziel.push((*eid, e));
+            }
+        }
+    }
+    if ziel.is_empty() {
+        return Err("In den Dateinamen dieser Staffel steht keine Folgennummer (kein SxxEyy).".into());
+    }
+
+    // Platzierungen der ganzen Staffel loeschen - sonst waere beim naechsten
+    // Scan alles wieder wie vorher.
+    for (eid, _, _) in &eps {
+        for p in db::file_paths_of_episode(&conn, *eid).map_err(err)? {
+            let _ = db::clear_placement(&conn, &p);
+        }
+        let einzeln: String = conn
+            .query_row("SELECT path FROM episodes WHERE id=?1", [eid], |r| r.get(0))
+            .unwrap_or_default();
+        if !einzeln.is_empty() {
+            let _ = db::clear_placement(&conn, &einzeln);
+        }
+    }
+
+    // Zweistufig umnummerieren, sonst kollidiert UNIQUE(show,season,episode).
+    let mut geaendert = 0i64;
+    for (eid, _, alt) in &eps {
+        conn.execute("UPDATE episodes SET episode = -id WHERE id=?1", [eid]).map_err(err)?;
+        if let Some((_, neu)) = ziel.iter().find(|(z, _)| z == eid) {
+            if neu != alt {
+                geaendert += 1;
+            }
+        }
+    }
+    for (eid, neu) in &ziel {
+        conn.execute("UPDATE episodes SET episode=?2 WHERE id=?1", params![eid, neu]).map_err(err)?;
+    }
+    // Dateien ohne Kuerzel bekommen den naechsten freien Platz, damit die
+    // UNIQUE-Bedingung haelt und nichts verschwindet.
+    for (eid, _, alt) in &eps {
+        if ziel.iter().any(|(z, _)| z == eid) {
+            continue;
+        }
+        let mut n = (*alt).max(1);
+        loop {
+            let belegt: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM episodes WHERE show_id=?1 AND season=?2 AND episode=?3 AND id<>?4",
+                    params![show_id, season, n, eid],
+                    |r| r.get(0),
+                )
+                .map_err(err)?;
+            if belegt == 0 {
+                break;
+            }
+            n += 1;
+        }
+        conn.execute("UPDATE episodes SET episode=?2 WHERE id=?1", params![eid, n]).map_err(err)?;
+    }
+
+    drop(conn);
+    let _ = app.emit("library://updated", ());
+    Ok((geaendert, total))
 }

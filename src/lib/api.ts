@@ -40,6 +40,11 @@ export const applyFolderSelection = (root: string, kind: LibraryKind, accept: st
 /** Einen Film von Hand zur Serie zuordnen oder aus deren Filme-Reiter nehmen. */
 export const linkMovieToShow = (showId: number, movieId: number, linked: boolean) =>
   invoke<void>("link_movie_to_show", { showId, movieId, linked });
+/** Folgennummern einer Staffel wieder aus den Dateinamen (SxxEyy) übernehmen
+ *  und die dauerhaften Platzierungen dieser Staffel löschen. Gibt
+ *  [geändert, gesamt] zurück. */
+export const resetEpisodeNumbersFromFiles = (showId: number, season: number) =>
+  invoke<[number, number]>("reset_episode_numbers_from_files", { showId, season });
 export const listIgnoredFiles = () => invoke<string[]>("list_ignored_files");
 export const unignoreFiles = (paths: string[]) => invoke<number>("unignore_files", { paths });
 
