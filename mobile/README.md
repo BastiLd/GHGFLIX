@@ -53,6 +53,33 @@ Profil `preview` → APK statt AAB wählen). Der Build läuft in der
 Expo-Cloud; am Ende gibt es einen Download-Link zur fertigen `GHGFlix.apk`.
 Installation siehe `../tv/README.md` (gleiche APK läuft auf Handy und TV).
 
+### Warum `eas.json` so aussieht — und warum dort keine Kommentare stehen
+
+`eas.json` wird von eas-cli gegen ein **festes Schema** geprüft. Eigene
+Erklärfelder (`_hinweis…`) hat die CLI eine Weile stillschweigend geduldet,
+ab Fassung 21 bricht sie damit ab:
+
+```
+eas.json is not valid.
+- "cli._hinweis_appVersionSource" is not allowed
+```
+
+Deshalb stehen die Begründungen hier statt in der Datei — nicht wieder
+hineinschreiben:
+
+- **`cli.appVersionSource: "local"`** — es gilt die `versionCode`-Zahl aus
+  `app.json`. Vorher stand hier `"remote"`: dann führt EAS den Zähler auf
+  seinem Server und ignoriert `app.json`. Stand dieser Serverzähler
+  niedriger als die auf dem Fernseher bereits installierte Fassung, war
+  jeder neue Bau aus Android-Sicht ein Rückschritt — die Installation brach
+  ohne brauchbare Meldung ab („App nicht installiert"). Mit `"local"` steht
+  die Zahl sichtbar in `app.json` und ist nachvollziehbar.
+- **`build.preview.android.buildType: "apk"`** — das ist das Profil für
+  Handy und Fernseher. APK statt App-Bundle (`aab`), weil sich ein Bundle
+  weder per Downloader noch per ADB installieren lässt.
+- **`build.preview.channel: "preview"`** — der OTA-Kanal. Nur Bauten aus
+  diesem Kanal bekommen `npx eas-cli update --branch preview`.
+
 ## Sicherheitshinweis (MOB-033)
 
 `usesCleartextTraffic`/`NSAllowsArbitraryLoads` sind bewusst offen: Der
