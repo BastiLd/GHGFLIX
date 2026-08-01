@@ -272,6 +272,34 @@ if ($text -match "Success") {
 # ---------------------------------------------------------------------------
 # 5) Starten
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Welche Fassung liegt jetzt WIRKLICH auf dem Fernseher?
+#
+# WARUM DAS WICHTIG IST: Die Versionsnummer, die der Server zu einer APK
+# anzeigt, stammt aus mobile/app.json zum Zeitpunkt des Hochladens - NICHT aus
+# der Datei selbst. Passt beides nicht zusammen (etwa weil eine aeltere APK
+# hochgeladen wurde), behauptet der Server eine Fassung, die gar nicht in der
+# Datei steckt. Genau so ist eine 2.0.0 auf dem Fernseher gelandet, die als
+# "3.1.0" gefuehrt wurde - und niemand verstand, warum Funktionen fehlten.
+# Deshalb wird hier NACH der Installation am Geraet selbst nachgesehen.
+# ---------------------------------------------------------------------------
+$dump = Invoke-Adb -s "$TvIp`:5555" shell dumpsys package com.bastild.ghgflix
+$vName = ([regex]::Match($dump, "versionName=([^\s]+)")).Groups[1].Value
+$vCode = ([regex]::Match($dump, "versionCode=(\d+)")).Groups[1].Value
+if ($vName) {
+  Write-Host ""
+  Gut "Auf dem Fernseher laeuft jetzt: Version $vName (versionCode $vCode)"
+  try {
+    $srv = Invoke-RestMethod -Uri "$($Server.TrimEnd('/'))/api/apk/status" -TimeoutSec 10
+    if ($srv.version -and $srv.version -ne $vName) {
+      Write-Host ""
+      Warn "Hinweis: Der Server fuehrt diese Datei als Version $($srv.version),"
+      Warn "in der APK steht aber $vName. Die Angabe auf dem Server kommt aus"
+      Warn "app.json und kann daneben liegen - es gilt, was hier steht."
+    }
+  } catch { /* Server nicht erreichbar - nicht schlimm */ }
+}
+
 Schritt "5/5  App auf dem Fernseher starten"
 
 # ACHTUNG, HIER STAND EINMAL "monkey":

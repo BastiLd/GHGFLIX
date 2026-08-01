@@ -200,6 +200,23 @@ installiert** — die früheren Downloader-Versuche sind also nie durchgekommen.
 YouTube-Einbettung „Fehler 153 – Fehler bei der Konfiguration des
 Videoplayers". Noch nicht untersucht.
 
+**7. Die Versionsangabe zur APK war falsch — und das hat in die Irre geführt.**
+Auf dem Fernseher liegt laut `dumpsys` **Version 2.0.0 (versionCode 4)**,
+während der Server dieselbe Datei als „3.1.0" führte. Grund: Das
+Upload-Skript legt die Nummer aus `mobile/app.json` als Textdatei neben die
+APK — sie stammt also vom Zeitpunkt des Hochladens und **nicht aus der Datei
+selbst**. Wurde eine ältere APK hochgeladen, behauptet der Server eine
+Fassung, die gar nicht drinsteckt. Genau deshalb schien die automatische
+Serversuche „zu fehlen": Sie kam mit 3.0.0, auf dem Gerät lief aber 2.0.0.
+`scripts/tv-installieren.ps1` liest die Version jetzt nach der Installation
+am Gerät selbst aus und warnt, wenn sie von der Server-Angabe abweicht.
+
+**Folgerung für den nächsten Bau:** Alles, was seither an der App gemacht
+wurde (Netflix-Leiste, Netzsuche, SDK 54, `expo-updates`), ist auf dem
+Fernseher noch NICHT vorhanden. Sobald einmal ein Bau mit `expo-updates`
+installiert ist, kommen alle weiteren reinen JavaScript-Änderungen
+(Filme-/Specials-Tabs, Trailer, Feinschliff) ohne neuen Bau per OTA nach.
+
 ## Phase 8 — Build-Pipeline vereinfachen (nach Phase 7)
 
 Ziel: EAS-Free-Tier-Wartezeit nicht mehr im täglichen Testzyklus. Entscheidung
