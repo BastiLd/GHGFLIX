@@ -33,3 +33,8 @@ src-tauri/target/
 # GHGFlix personal server config (enthält TMDb-Key)
 server/docker-compose.zimaos.yml
 docker-compose.zimaos.yml
+
+# Von scripts/tv-installieren.ps1 heruntergeladene Android-Werkzeuge (adb).
+# Rund 17 MB Fremdbinaerdateien - gehoeren nicht ins Repo, holt sich das
+# Skript bei Bedarf selbst von Google.
+werkzeuge/

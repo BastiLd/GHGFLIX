@@ -46,6 +46,32 @@ function Warn($t)    { Write-Host "     $t" -ForegroundColor Yellow }
 function Gut($t)     { Write-Host "     $t" -ForegroundColor Green }
 
 # ---------------------------------------------------------------------------
+# adb aufrufen, ohne dass PowerShell aussteigt
+#
+# STOLPERSTELLE: adb schreibt auch voellig harmlose Hinweise nach stderr -
+# etwa "error: no such device", wenn man eine gar nicht bestehende Verbindung
+# trennt. Windows PowerShell macht daraus zusammen mit $ErrorActionPreference
+# = "Stop" einen ABBRUCH des ganzen Skripts. Genau daran ist der erste
+# Versuch gescheitert, obwohl nichts kaputt war.
+#
+# Deshalb laufen ALLE adb-Aufrufe durch diese Funktion: sie faengt die
+# Ausgabe ein, gibt sie als Text zurueck und laesst das Skript weiterlaufen.
+# ---------------------------------------------------------------------------
+function Invoke-Adb {
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Argumente)
+  $vorher = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $roh = & $script:AdbExe @Argumente 2>&1
+    return (($roh | ForEach-Object { $_.ToString() }) -join "`n").Trim()
+  } catch {
+    return "FEHLER: $($_.Exception.Message)"
+  } finally {
+    $ErrorActionPreference = $vorher
+  }
+}
+
+# ---------------------------------------------------------------------------
 # 1) adb besorgen
 # ---------------------------------------------------------------------------
 Schritt "1/5  Werkzeug (adb) suchen"
@@ -56,12 +82,12 @@ $AdbKandidaten = @(
   "${env:ProgramFiles(x86)}\Android\platform-tools\adb.exe",
   "$env:USERPROFILE\Documents\GHGFlix\werkzeuge\platform-tools\adb.exe"
 )
-$Adb = $null
+$AdbExe = $null
 $imPfad = Get-Command adb -ErrorAction SilentlyContinue
-if ($imPfad) { $Adb = $imPfad.Source }
-if (-not $Adb) { $Adb = $AdbKandidaten | Where-Object { Test-Path $_ } | Select-Object -First 1 }
+if ($imPfad) { $AdbExe = $imPfad.Source }
+if (-not $AdbExe) { $AdbExe = $AdbKandidaten | Where-Object { Test-Path $_ } | Select-Object -First 1 }
 
-if (-not $Adb) {
+if (-not $AdbExe) {
   Warn "adb ist nicht vorhanden - es wird einmalig heruntergeladen (ca. 6 MB, von Google)."
   $Ziel = Join-Path $PSScriptRoot "..\werkzeuge"
   New-Item -ItemType Directory -Force -Path $Ziel | Out-Null
@@ -73,7 +99,7 @@ if (-not $Adb) {
                       -OutFile $Zip -UseBasicParsing -TimeoutSec 300
     Expand-Archive -Path $Zip -DestinationPath $Ziel -Force
     Remove-Item $Zip -Force -ErrorAction SilentlyContinue
-    $Adb = Join-Path $Ziel "platform-tools\adb.exe"
+    $AdbExe = Join-Path $Ziel "platform-tools\adb.exe"
   } catch {
     Write-Host ""
     Write-Host "Der Download hat nicht geklappt: $($_.Exception.Message)" -ForegroundColor Red
@@ -84,8 +110,8 @@ if (-not $Adb) {
     exit 1
   }
 }
-if (-not (Test-Path $Adb)) { throw "adb konnte nicht bereitgestellt werden." }
-Info $Adb
+if (-not (Test-Path $AdbExe)) { throw "adb konnte nicht bereitgestellt werden." }
+Info $AdbExe
 
 # ---------------------------------------------------------------------------
 # 2) APK finden und pruefen
@@ -156,23 +182,46 @@ if (-not $TvIp) {
 $TvIp = $TvIp.Trim()
 if ($TvIp -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { throw "Das sieht nicht nach einer IP-Adresse aus: $TvIp" }
 
-& $Adb disconnect "$TvIp`:5555" 2>&1 | Out-Null
-$verbinde = & $Adb connect "$TvIp`:5555" 2>&1
-Info $verbinde
-if ($verbinde -notmatch "connected") {
+$null = Invoke-Adb disconnect "$TvIp`:5555"   # darf fehlschlagen, wenn nichts offen ist
+
+# Beim ersten Mal antwortet der Fernseher oft erst nach ein, zwei Anlaeufen -
+# der ADB-Dienst dort wird teilweise erst durch den Verbindungsversuch selbst
+# gestartet. Deshalb bis zu drei Versuche statt sofort aufzugeben.
+$verbunden = $false
+foreach ($versuch in 1..3) {
+  $verbinde = Invoke-Adb connect "$TvIp`:5555"
+  Info $verbinde
+  if ($verbinde -match "connected to") { $verbunden = $true; break }
+  if ($versuch -lt 3) {
+    Info "  ... noch einmal (Versuch $($versuch + 1) von 3)"
+    Start-Sleep -Seconds 2
+    $null = Invoke-Adb "kill-server"
+    Start-Sleep -Seconds 1
+  }
+}
+
+if (-not $verbunden) {
   Write-Host ""
-  Write-Host "Verbindung nicht moeglich." -ForegroundColor Red
-  Write-Host "Bitte am Fernseher pruefen:"
-  Write-Host "  - Einstellungen -> System -> Info -> 7x auf 'Build' tippen"
-  Write-Host "  - Einstellungen -> System -> Entwickleroptionen -> 'USB-Debugging' EIN"
-  Write-Host "  - Fernseher und PC muessen im GLEICHEN WLAN sein"
+  Write-Host "Der Fernseher nimmt keine Netzwerkverbindung an." -ForegroundColor Red
+  Write-Host ""
+  Write-Host "Das liegt fast immer daran, dass 'USB-Debugging' allein NICHT reicht:" -ForegroundColor Yellow
+  Write-Host "Viele Google-TV-Geraete oeffnen den Netzwerkzugang erst mit einem"
+  Write-Host "ZWEITEN Schalter. Schau in Einstellungen -> System -> Entwickleroptionen"
+  Write-Host "nach einem Eintrag, der so oder aehnlich heisst:"
+  Write-Host "    'ADB-Debugging'            'Netzwerk-Debugging'"
+  Write-Host "    'Drahtloses Debugging'     'Wireless debugging'"
+  Write-Host "    'ADB ueber Netzwerk'       'Remote debugging'"
+  Write-Host "und schalte ihn EIN. Danach dieses Skript noch einmal starten."
+  Write-Host ""
+  Write-Host "Findest du keinen solchen Schalter, geht es trotzdem - siehe" -ForegroundColor Yellow
+  Write-Host "'Weg B' unten in dieser Datei bzw. in tv/README.md."
   exit 1
 }
 
 # Der Fernseher fragt beim ersten Mal nach einer Bestaetigung. Bis die gegeben
 # ist, meldet adb "unauthorized" - darauf wird hier ausdruecklich hingewiesen,
 # sonst sucht man den Fehler an der falschen Stelle.
-$geraete = & $Adb devices 2>&1
+$geraete = Invoke-Adb devices
 if ($geraete -match "unauthorized") {
   Write-Host ""
   Write-Host "Der Fernseher wartet auf deine Bestaetigung." -ForegroundColor Yellow
@@ -188,8 +237,7 @@ Gut "verbunden"
 # ---------------------------------------------------------------------------
 Schritt "4/5  Installieren (dauert bei 60 MB etwa eine Minute)"
 
-$ausgabe = & $Adb -s "$TvIp`:5555" install -r "$Datei" 2>&1
-$text = ($ausgabe | Out-String).Trim()
+$text = Invoke-Adb -s "$TvIp`:5555" install -r "$Datei"
 Write-Host $text
 
 if ($text -match "Success") {
@@ -200,7 +248,7 @@ if ($text -match "Success") {
   Write-Host "unterschrieben. Android laesst das Ueberschreiben dann nicht zu."
   Write-Host "Loesung - alte Fassung entfernen und neu installieren:"
   Write-Host ""
-  Write-Host "  `"$Adb`" -s $TvIp`:5555 uninstall com.bastild.ghgflix" -ForegroundColor Green
+  Write-Host "  `"$AdbExe`" -s $TvIp`:5555 uninstall com.bastild.ghgflix" -ForegroundColor Green
   Write-Host ""
   Write-Host "Danach dieses Skript noch einmal starten."
   Write-Host "Deine Bibliothek und Fortschritte liegen auf dem Server - es geht nichts verloren."
@@ -225,11 +273,11 @@ if ($text -match "Success") {
 # 5) Starten
 # ---------------------------------------------------------------------------
 Schritt "5/5  App auf dem Fernseher starten"
-& $Adb -s "$TvIp`:5555" shell monkey -p com.bastild.ghgflix -c android.intent.category.LAUNCHER 1 2>&1 | Out-Null
+$null = Invoke-Adb -s "$TvIp`:5555" shell monkey -p com.bastild.ghgflix -c android.intent.category.LAUNCHER 1
 Gut "GHGFlix sollte jetzt auf dem Fernseher laufen."
 Write-Host ""
 Write-Host "Ab jetzt brauchst du das nur noch selten:" -ForegroundColor Yellow
 Write-Host "Reine Anzeige-Aenderungen kommen ueber die Luft (OTA) in die App -"
 Write-Host "dafuer genuegt am PC:  npx eas-cli update --branch preview"
 Write-Host ""
-& $Adb disconnect "$TvIp`:5555" 2>&1 | Out-Null
+$null = Invoke-Adb disconnect "$TvIp`:5555"
