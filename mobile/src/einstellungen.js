@@ -41,6 +41,8 @@ export const STANDARD = {
   /* ── Oberfläche ──────────────────────────────────────────────────── */
   leisteAus: 5,                // Sekunden bis die Bedienleiste verschwindet
   updatePruefen: true,         // beim Start nach neuer App-Fassung sehen
+  /* auto | unten | seite — siehe FELDER unten für die Begründung. */
+  navigation: "auto",
 };
 
 /** Auswahlmöglichkeiten und Beschreibungen für die Einstellungsseite. */
@@ -105,6 +107,18 @@ export const FELDER = [
   {
     gruppe: "Bedienung",
     eintraege: [
+      { name: "navigation", titel: "Navigation",
+        werte: ["auto", "unten", "seite"],
+        anzeige: (v) => ({
+          auto: "Automatisch (empfohlen)",
+          unten: "Leiste unten (wie Netflix)",
+          seite: "Seitenleiste links",
+        }[v]),
+        hinweis:
+          "„Automatisch“ heißt: am Handy die Leiste unten, am Fernseher die Seitenleiste. " +
+          "Am Handy nimmt eine Seitenleiste die halbe Bildbreite ein — dann brechen Titel " +
+          "mitten im Wort um. Am Fernseher ist es umgekehrt: dort ist seitlich richtig, " +
+          "weil man mit der Fernbedienung hoch und runter wandert." },
       { name: "leisteAus", titel: "Bedienleiste ausblenden nach", einheit: "Sek",
         werte: [3, 5, 8, 15, 0],
         anzeige: (v) => (v === 0 ? "Nie" : v + " Sek"),

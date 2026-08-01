@@ -11,7 +11,7 @@
  *   node test/netzsuche.test.mjs
  */
 import http from "node:http";
-import { netzTeil, normUrl, ping, portTeil, sucheImNetz, sucheServer } from "../src/netzsuche.js";
+import { netzTeil, normAdresse, normUrl, ping, portTeil, sucheImNetz, sucheServer } from "../src/netzsuche.js";
 
 let gut = 0;
 const fehler = [];
@@ -118,6 +118,47 @@ console.log("\n── Abbruch wirkt ──────────────�
   await sucheImNetz("203.0.113", [8484], null, () => abgebrochen);
   const dauer = Date.now() - start;
   pruefe(`Abbruch beendet die Suche zügig (${dauer} ms < 6000)`, dauer < 6000);
+}
+
+/* ── Eingabe von Hand ───────────────────────────────────────────────────
+   „Es ist nicht bei allen 192.168.68" — wer in einem anderen Netz sitzt,
+   muss die drei Zahlen eintippen können, ohne die letzte zu kennen. */
+console.log("\n── Adresse/Netz von Hand eingeben ──────────────────────────");
+{
+  const f = (t) => JSON.stringify(normAdresse(t));
+  pruefe("volle Adresse", f("192.168.78.10") === JSON.stringify({ art: "adresse", url: "http://192.168.78.10:8484" }));
+  pruefe("mit eigenem Port", f("192.168.78.10:8080") === JSON.stringify({ art: "adresse", url: "http://192.168.78.10:8080" }));
+  pruefe("mit http:// davor", f("http://192.168.78.10:8484") === JSON.stringify({ art: "adresse", url: "http://192.168.78.10:8484" }));
+  pruefe("nur die drei Zahlen = ganzes Netz",
+    f("192.168.78") === JSON.stringify({ art: "netz", netz: "192.168.78", port: 8484 }));
+  pruefe("auch als 192.168.78.x geschrieben",
+    f("192.168.78.x") === JSON.stringify({ art: "netz", netz: "192.168.78", port: 8484 }));
+  pruefe("Netz mit eigenem Port", normAdresse("10.0.5:9000")?.port === 9000);
+  pruefe("Name statt Zahlen geht auch", normAdresse("ghgflix.local")?.url === "http://ghgflix.local:8484");
+  pruefe("Unsinn wird abgelehnt", normAdresse("   ") === null && normAdresse("!!!") === null);
+  pruefe("zu grosse Zahlen werden nicht als Netz gelesen", normAdresse("999.1.1")?.art !== "netz");
+}
+
+console.log("\n── Von Hand angegebene Adresse wird zuerst geprüft ──────────");
+{
+  const { s, port } = await starte({ ok: true, app: "ghgflix-server", version: "9.9.9" });
+  const start = Date.now();
+  // Bewusst OHNE bekannte Adressen: gefunden werden darf sie nur, weil sie
+  // von Hand mitgegeben wurde.
+  const t = await sucheServer([], null, null, { zusatz: [`127.0.0.1:${port}`] });
+  const dauer = Date.now() - start;
+  pruefe("die eingetippte Adresse wird gefunden", t?.info?.version === "9.9.9");
+  pruefe(`und zwar sofort, ohne Netzsuche (${dauer} ms < 900)`, dauer < 900);
+  s.close();
+}
+
+console.log("\n── Gleichzeitigkeit ist einstellbar ────────────────────────");
+{
+  // Mit 1 gleichzeitig darf nichts kaputtgehen — nur langsamer werden.
+  const { s, port } = await starte({ ok: true, app: "ghgflix-server", version: "1.2.3" });
+  const t = await sucheImNetz("127.0.0", [port], null, null, 1);
+  pruefe("auch mit nur einer Verbindung wird gefunden", t?.info?.version === "1.2.3");
+  s.close();
 }
 
 console.log("\n────────────────────────────────────────────────────────────");

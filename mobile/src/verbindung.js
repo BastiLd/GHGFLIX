@@ -32,11 +32,22 @@ export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
   ].filter(Boolean);
 
   /* ── Automatische Suche beim Öffnen ───────────────────────────────── */
-  const suchen = useCallback(async () => {
+  /**
+   * @param {string} [zusatz] von Hand eingetippte Adresse ODER nur die ersten
+   *   drei Zahlen eines Netzes ("192.168.78"). Das ist der Fall für alle, die
+   *   NICHT in einem der üblichen Heimnetze sitzen: Man liest die drei Zahlen
+   *   am Router ab, die letzte sucht die App selbst.
+   */
+  const suchen = useCallback(async (zusatz) => {
     abbruchRef.current = false;
     setZustand("suche");
     setMelde("Server wird gesucht …");
-    const t = await sucheServer(bekannte, setMelde, () => abbruchRef.current);
+    const t = await sucheServer(
+      bekannte,
+      setMelde,
+      () => abbruchRef.current,
+      { zusatz: typeof zusatz === "string" && zusatz.trim() ? [zusatz] : [] },
+    );
     if (abbruchRef.current) return;
     if (t) {
       setGefunden(t);
@@ -274,7 +285,10 @@ export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
           <View style={st.karte}>
             <Text style={[st.h2, { marginBottom: 4 }]}>Adresse eingeben</Text>
             <Text style={[st.gedaempft, { marginBottom: 16 }]}>
-              Zum Beispiel 192.168.1.50:8484 — „http://“ wird von selbst ergänzt.
+              Zum Beispiel 192.168.1.50:8484 — „http://“ wird von selbst ergänzt.{"\n"}
+              Du kennst nur die ersten drei Zahlen? Dann gib nur die ein (etwa
+              192.168.78) und drücke „Dieses Netz durchsuchen“ — die letzte Zahl
+              findet die App selbst.
             </Text>
 
             <Text style={[st.gedaempft, { marginBottom: 6 }]}>Server-Adresse</Text>
@@ -318,8 +332,14 @@ export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
                   spalte={0}
                   onPress={() => !beschaeftigt && adresse.trim() && uebernehmen(adresse, passwort)}
                 />
-                <Knopf text="Automatisch suchen" symbol="⟳" spalte={1} onPress={suchen} />
-                {!!aufAbbruch && <Knopf text="Zurück" spalte={2} onPress={aufAbbruch} />}
+                <Knopf
+                  text="Dieses Netz durchsuchen"
+                  symbol="⌕"
+                  spalte={1}
+                  onPress={() => !beschaeftigt && suchen(adresse)}
+                />
+                <Knopf text="Automatisch suchen" symbol="⟳" spalte={2} onPress={() => suchen()} />
+                {!!aufAbbruch && <Knopf text="Zurück" spalte={3} onPress={aufAbbruch} />}
               </View>
             </FokusReihe>
           </View>

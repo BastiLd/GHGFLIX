@@ -20,15 +20,79 @@ import { Text, View } from "react-native";
 import { FKnopf } from "./fokus.js";
 import { C, M, gross, st } from "./stile.js";
 
-/** Symbole als Text — keine Bild-Abhängigkeit, die beim Start fehlen könnte. */
+/**
+ * Symbole als Text — keine Bild-Abhängigkeit, die beim Start fehlen könnte.
+ *
+ * Bewusst schlichte Zeichen statt bunter Emoji: Die früheren 🎬📺🔍⚙ wurden
+ * vom Betriebssystem als farbige Bildchen gezeichnet und sahen neben der
+ * ruhigen, dunklen Oberfläche wie Fremdkörper aus — auf dem Fernseher aus
+ * drei Metern zudem unscharf. Diese Zeichen nehmen die Textfarbe an und
+ * passen sich damit Auswahl und Fokus an, wie am Desktop.
+ */
 export const NAV = [
-  { id: "home",     text: "Start",         symbol: "⌂" },
-  { id: "movies",   text: "Filme",         symbol: "🎬" },
-  { id: "shows",    text: "Serien",        symbol: "📺" },
-  { id: "list",     text: "Meine Liste",   symbol: "♥" },
-  { id: "search",   text: "Suche",         symbol: "🔍" },
-  { id: "settings", text: "Einstellungen", symbol: "⚙" },
+  { id: "home",     text: "Start",         kurz: "Start",  symbol: "⌂" },
+  { id: "movies",   text: "Filme",         kurz: "Filme",  symbol: "▶" },
+  { id: "shows",    text: "Serien",        kurz: "Serien", symbol: "☰" },
+  { id: "list",     text: "Meine Liste",   kurz: "Liste",  symbol: "♥" },
+  { id: "search",   text: "Suche",         kurz: "Suche",  symbol: "⌕" },
+  { id: "settings", text: "Einstellungen", kurz: "Mehr",   symbol: "⚙" },
 ];
+
+/**
+ * Navigation am unteren Rand — der Weg, den Netflix, Disney+ und Prime am
+ * Handy gehen.
+ *
+ * WARUM ES SIE GIBT: Die Seitenleiste war fest 190 Punkte breit. Auf einem
+ * Handy mit rund 390 Punkten ist das die halbe Anzeige; der Inhalt daneben
+ * wurde so schmal, dass Überschriften mitten im Wort umbrachen („Weitersch
+ * auen") und Knopfbeschriftungen zu Buchstabensalat wurden („Serv er wech
+ * seln"). Unten kostet die Navigation nur etwa 60 Punkte Höhe, und der
+ * Inhalt bekommt die volle Breite.
+ *
+ * Der Fokus-Bereich heißt weiterhin "nav", damit die Fernbedienung dieselbe
+ * Logik benutzt — nur die Richtung dreht sich: hier zählt die SPALTE.
+ */
+export function Unterleiste({ seite, aufSeite, zahlen }) {
+  return (
+    <View style={st.unten}>
+      {NAV.map((n, i) => {
+        const aktiv = seite === n.id;
+        return (
+          <FKnopf
+            key={n.id}
+            bereich="nav"
+            zeile={0}
+            spalte={i}
+            id={"nav:" + n.id}
+            onPress={() => aufSeite(n.id)}
+            style={st.untenEintrag}
+          >
+            {({ fokus }) => {
+              const farbe = aktiv ? C.red : fokus ? C.text : C.muted;
+              return (
+                <>
+                  <View>
+                    <Text style={[st.untenSymbol, { color: farbe }]}>{n.symbol}</Text>
+                    {zahlen?.[n.id] != null && (
+                      <View style={st.untenBlase}>
+                        <Text style={st.untenBlaseText} numberOfLines={1}>
+                          {zahlen[n.id] > 99 ? "99+" : zahlen[n.id]}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text numberOfLines={1} style={[st.untenText, { color: farbe }]}>
+                    {n.kurz}
+                  </Text>
+                </>
+              );
+            }}
+          </FKnopf>
+        );
+      })}
+    </View>
+  );
+}
 
 export function Seitenleiste({ seite, aufSeite, zahlen, profilName, version, offen, aufOffen }) {
   const breit = offen;

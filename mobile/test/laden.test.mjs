@@ -176,7 +176,7 @@ console.log("\n── Erwartete Exporte vorhanden ──────────
     "src/untertitel.js": ["vttLesen", "vttZeit", "erzeugeSucher", "untertitelHolen"],
     "src/einstellungen.js": ["STANDARD", "FELDER", "laden", "sichern", "jetzt", "waehleTon", "waehleUntertitel", "passtSprache"],
     "src/update.js": ["vergleicheVersion", "pruefeUpdate", "starteUpdate"],
-    "src/seitenleiste.js": ["Seitenleiste", "NAV"],
+    "src/seitenleiste.js": ["Seitenleiste", "Unterleiste", "NAV"],
     "src/seiten.js": ["StartSeite", "RasterSeite", "SuchSeite", "SerienSeite", "FilmSeite", "ProfilSeite", "EinstellungenSeite"],
     "src/player.js": ["PlayerScreen"],
     "src/verbindung.js": ["VerbindungsScreen"],

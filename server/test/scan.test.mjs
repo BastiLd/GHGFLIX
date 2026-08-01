@@ -112,6 +112,19 @@ check("Stranger Things: Specials als Staffel 0, Extras ignoriert", stEps, [
   { season: 1, episode: 2 },
 ]);
 
+/* Specials zaehlen NICHT als eigene Staffel.
+   Stranger Things hat hier Staffel 0 (Specials) und Staffel 1 — richtig ist
+   also "1 Staffel", nicht "2". Genau dieser Fehler liess Miraculous mit
+   "7 Staffeln" dastehen, obwohl es sechs plus Specials sind. Geprueft wird
+   dieselbe Rechnung, die die Oberflaeche benutzt (siehe invoke.js/showOut
+   und die Bibliotheksabfrage in index.js). */
+const stStaffeln = db
+  .prepare("SELECT COUNT(DISTINCT CASE WHEN season > 0 THEN season END) s FROM episodes WHERE show_id=?")
+  .get(st.id).s;
+check("Specials zaehlen nicht als Staffel (1, nicht 2)", stStaffeln, 1);
+const stFolgen = db.prepare("SELECT COUNT(id) e FROM episodes WHERE show_id=?").get(st.id).e;
+check("Folgenzahl enthaelt die Specials aber schon", stFolgen, 3);
+
 const ff = shows.find((s) => s.title === "Firefly");
 const ffEp = db.prepare("SELECT season, episode, episode_end FROM episodes WHERE show_id=?").get(ff.id);
 check("Firefly: Mehrteiler s01e01-e02", ffEp, { season: 1, episode: 1, episode_end: 2 });

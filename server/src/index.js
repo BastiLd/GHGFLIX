@@ -3,7 +3,7 @@
 // video via ffmpeg. Designed for ZimaOS/Docker (see ../Dockerfile).
 import { createServer } from "node:http";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, readFileSync, writeFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { join, normalize, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb, getSetting, setSetting, settingOr, listLibraries, addLibrary, removeLibrary } from "./db.js";
@@ -182,6 +182,34 @@ function apkVersion() {
   }
 }
 
+/**
+ * Pruefsumme der hinterlegten App-Datei (SHA-256).
+ *
+ * WOZU: Am Fernseher meldet Android bei einer unvollstaendig geladenen Datei
+ * nur "Problem beim Parsen des Pakets" und nennt keinen Grund. Mit einer
+ * veroeffentlichten Pruefsumme laesst sich in zehn Sekunden feststellen, ob
+ * ueberhaupt dieselbe Datei angekommen ist — statt im Dunkeln zu suchen.
+ *
+ * Die Summe wird beim Hochladen einmal berechnet und daneben abgelegt. Fehlt
+ * sie (Datei von Hand kopiert), wird sie beim ersten Abruf nachgeholt: bei
+ * 60 MB dauert das den Bruchteil einer Sekunde, danach steht sie in der Datei.
+ */
+function apkHash() {
+  const datei = apkPath();
+  if (!datei) return null;
+  try {
+    const h = readFileSync(datei + ".sha256", "utf8").trim();
+    if (/^[0-9a-f]{64}$/.test(h)) return h;
+  } catch { /* noch nicht berechnet — unten nachholen */ }
+  try {
+    const h = createHash("sha256").update(readFileSync(datei)).digest("hex");
+    try { writeFileSync(datei + ".sha256", h); } catch { /* nur ein Zwischenspeicher */ }
+    return h;
+  } catch {
+    return null;
+  }
+}
+
 function apkPath() {
   const candidates = [
     join(process.env.DATA_DIR || "/data", "apk", "GHGFlix.apk"),
@@ -354,6 +382,8 @@ async function handle(req, res) {
       available: true,
       version: apkVersion(),
       sizeMb: (st.size / 1024 / 1024).toFixed(1),
+      bytes: st.size,
+      sha256: apkHash(),
       modified: new Date(st.mtimeMs).toLocaleDateString("de-DE"),
       url: "/apk",
       canUpload: !!password(),
@@ -465,6 +495,14 @@ async function handle(req, res) {
           else rmSync(target + ".version", { force: true });
         } catch { /* nicht schlimm - dann eben ohne Versionsvergleich */ }
 
+        /* Pruefsumme neu berechnen und daneben legen. Wichtig: die ALTE Summe
+           muss vorher weg, sonst gehoert sie zur vorigen Datei und wuerde
+           faelschlich einen Uebertragungsfehler melden. */
+        try {
+          rmSync(target + ".sha256", { force: true });
+          writeFileSync(target + ".sha256", createHash("sha256").update(readFileSync(target)).digest("hex"));
+        } catch { /* dann wird sie beim ersten Abruf nachgeholt */ }
+
         console.log(`[apk] neue App-Datei abgelegt (${(bytes / 1024 / 1024).toFixed(1)} MB${version ? ", Version " + version : ""})`);
         json(res, { ok: true, version: version || null, sizeMb: (bytes / 1024 / 1024).toFixed(1), url: "/apk" });
         resolve();
@@ -516,7 +554,9 @@ async function handle(req, res) {
 
   // ── library ──
   if (p === "/api/library") {
-    const shows = db.prepare("SELECT s.*, COUNT(DISTINCT e.season) seasons, COUNT(e.id) episodes FROM shows s LEFT JOIN episodes e ON e.show_id=s.id GROUP BY s.id ORDER BY s.title").all();
+    // CASE WHEN e.season > 0: Specials (Staffel 0) sind keine eigene Staffel.
+    // Siehe Erklaerung in invoke.js/showOut.
+    const shows = db.prepare("SELECT s.*, COUNT(DISTINCT CASE WHEN e.season > 0 THEN e.season END) seasons, COUNT(e.id) episodes FROM shows s LEFT JOIN episodes e ON e.show_id=s.id GROUP BY s.id ORDER BY s.title").all();
     const movies = db.prepare("SELECT * FROM movies ORDER BY title").all();
     return json(res, { shows: shows.map(withArt), movies: movies.map(withArt) });
   }

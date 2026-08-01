@@ -32,11 +32,24 @@
  * antwortet — eine Verwechslung mit einem anderen Gerät ist ausgeschlossen.
  */
 
-/** Übliche Heimnetze, nach Verbreitung sortiert. */
+/**
+ * Übliche Heimnetze, nach Verbreitung sortiert.
+ *
+ * Die Liste ist bewusst länger als „was bei mir läuft": Router vergeben je
+ * nach Hersteller sehr unterschiedliche Bereiche, und wer die App weitergibt,
+ * sitzt in einem anderen Netz. Wessen Netz hier trotzdem fehlt, gibt es unter
+ * „Adresse von Hand" einfach ein — dort genügen schon die ersten drei Zahlen
+ * (z. B. „192.168.78"), dann wird genau dieses Netz durchsucht.
+ */
 const UEBLICHE_NETZE = [
   "192.168.0", "192.168.1", "192.168.178", "192.168.2",
-  "192.168.68", "192.168.8", "10.0.0", "10.0.1", "172.16.0",
+  "192.168.68", "192.168.8", "192.168.10", "192.168.20", "192.168.100",
+  "192.168.50", "192.168.3", "192.168.4", "192.168.88",
+  "10.0.0", "10.0.1", "10.1.1", "172.16.0", "172.20.10",
 ];
+
+/** Voreingestellte Gleichzeitigkeit — siehe sucheImNetz(). */
+export const GLEICHZEITIG_STANDARD = 40;
 
 /** Ports, auf denen der GHGFlix-Server üblicherweise lauscht. */
 export const PORTS = [8484, 8080, 3000];
@@ -110,7 +123,55 @@ async function ersterTreffer(aufgaben, gleichzeitig, abbruch) {
  * @param {Function} [fortschritt] (geprüft, gesamt) => void
  * @param {Function} [abbruch]  gibt true zurück, wenn abgebrochen werden soll
  */
-export async function sucheImNetz(netz, ports = [8484], fortschritt, abbruch) {
+/**
+ * Eine von Hand eingetippte Angabe verstehen.
+ *
+ * Erlaubt ist alles, was jemand vernünftigerweise eingeben würde:
+ *   "192.168.78.10"        → genau dieses Gerät (Port 8484)
+ *   "192.168.78.10:8080"   → genau dieses Gerät auf Port 8080
+ *   "http://ghgflix:8484"  → genau diese Adresse
+ *   "192.168.78"           → dieses ganze Netz durchsuchen
+ *   "192.168.78.x"         → dasselbe, nur anders geschrieben
+ *
+ * Die letzte Form ist die wichtigste: Man muss nur die drei Zahlen ablesen,
+ * die am Router ohnehin überall stehen — die letzte Zahl sucht die App selbst.
+ *
+ * @returns {{art:"adresse", url:string}|{art:"netz", netz:string, port:number}|null}
+ */
+export function normAdresse(text) {
+  const t = String(text || "").trim();
+  if (!t) return null;
+
+  // Ganzes Netz: drei Zahlen, optional mit ".x" oder ".*" am Ende
+  const netz = t.replace(/^https?:\/\//i, "").replace(/[/.]$/, "");
+  const mNetz = netz.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\.(?:x|\*|0))?(?::(\d{2,5}))?$/i);
+  if (mNetz) {
+    const teile = [mNetz[1], mNetz[2], mNetz[3]].map(Number);
+    if (teile.every((n) => n >= 0 && n <= 255)) {
+      return { art: "netz", netz: teile.join("."), port: Number(mNetz[4]) || 8484 };
+    }
+  }
+
+  /* Sonst als einzelne Adresse behandeln.
+     Der Rechnername darf nur aus Buchstaben, Ziffern, Punkt und Bindestrich
+     bestehen. Vorher stand hier [^/\s]+ — damit wurde auch reiner Unsinn wie
+     "!!!" als gültige Adresse durchgewunken, und die App lief in einen
+     Verbindungsversuch, der nie klappen konnte, statt gleich zu sagen, dass
+     die Eingabe nicht stimmt. */
+  const url = normUrl(t);
+  const m = url.match(/^https?:\/\/([A-Za-z0-9][A-Za-z0-9.-]*)(?::(\d{2,5}))?$/);
+  if (!m) return null;
+  return { art: "adresse", url: m[2] ? url : `${url}:8484` };
+}
+
+/**
+ * @param {number} [gleichzeitig] wie viele Adressen zugleich geprüft werden.
+ *   Mehr ist schneller, aber die Netzwerkschicht mancher Fernseher kommt bei
+ *   zu vielen offenen Verbindungen durcheinander und meldet Fehlschläge, wo
+ *   in Wahrheit ein Server steht. Deshalb einstellbar: bei Problemen kleiner
+ *   drehen (5–10), auf einem kräftigen Handy ruhig größer.
+ */
+export async function sucheImNetz(netz, ports = [8484], fortschritt, abbruch, gleichzeitig = GLEICHZEITIG_STANDARD) {
   const adressen = [];
   // Router und Server stehen meist auf niedrigen Nummern — die zuerst.
   const reihenfolge = [
@@ -128,7 +189,7 @@ export async function sucheImNetz(netz, ports = [8484], fortschritt, abbruch) {
     return r ? { url: adr, info: r } : null;
   });
 
-  return ersterTreffer(aufgaben, 40, abbruch);
+  return ersterTreffer(aufgaben, Math.max(1, Math.min(128, gleichzeitig | 0)), abbruch);
 }
 
 /**
@@ -139,8 +200,22 @@ export async function sucheImNetz(netz, ports = [8484], fortschritt, abbruch) {
  * @param {Function} [abbruch]
  * @returns {Promise<{url:string, info:object}|null>}
  */
-export async function sucheServer(bekannteAdressen = [], melde, abbruch) {
-  // 0) Zuerst: Antwortet eine bereits bekannte Adresse? Das ist der Normalfall.
+export async function sucheServer(bekannteAdressen = [], melde, abbruch, opt = {}) {
+  const gleichzeitig = opt.gleichzeitig || GLEICHZEITIG_STANDARD;
+  /* Von Hand angegebene Netze/Adressen kommen ZUERST dran — wer etwas
+     eintippt, weiß in aller Regel besser Bescheid als unsere Ratereihenfolge. */
+  const zuerst = (opt.zusatz || []).map(normAdresse).filter(Boolean);
+
+  for (const z of zuerst) {
+    if (abbruch?.()) return null;
+    if (z.art === "adresse") {
+      melde?.(`Prüfe ${z.url} …`);
+      const r = await ping(z.url, 3000);
+      if (r) return { url: z.url, info: r };
+    }
+  }
+
+  // 0) Antwortet eine bereits bekannte Adresse? Das ist der Normalfall.
   for (const a of bekannteAdressen.filter(Boolean)) {
     if (abbruch?.()) return null;
     melde?.("Prüfe gespeicherte Adresse …");
@@ -148,24 +223,25 @@ export async function sucheServer(bekannteAdressen = [], melde, abbruch) {
     if (r) return { url: normUrl(a), info: r };
   }
 
-  // 1) Das Netz der bekannten Adressen durchsuchen — dort steht er sehr
-  //    wahrscheinlich immer noch, nur unter einer neuen Nummer.
+  // 1) Netze sammeln: von Hand angegebene, dann die der bekannten Adressen,
+  //    dann die üblichen Heimnetze.
   const netze = [];
-  for (const a of bekannteAdressen) {
-    const n = netzTeil(a);
-    if (n && !netze.includes(n)) netze.push(n);
-  }
-  for (const n of UEBLICHE_NETZE) if (!netze.includes(n)) netze.push(n);
+  const dazu = (n) => { if (n && !netze.includes(n)) netze.push(n); };
+  for (const z of zuerst) if (z.art === "netz") dazu(z.netz);
+  for (const a of bekannteAdressen) dazu(netzTeil(a));
+  for (const n of UEBLICHE_NETZE) dazu(n);
 
   for (const netz of netze) {
     if (abbruch?.()) return null;
-    const ports = bekannteAdressen.length
-      ? [...new Set([...bekannteAdressen.map(portTeil), 8484])]
-      : [8484];
+    const ports = [...new Set([
+      ...zuerst.filter((z) => z.art === "netz").map((z) => z.port),
+      ...bekannteAdressen.map(portTeil),
+      8484,
+    ])].filter(Boolean);
     melde?.(`Durchsuche ${netz}.1 – ${netz}.254 …`);
     const t = await sucheImNetz(netz, ports, (fertig, gesamt) => {
       melde?.(`Durchsuche ${netz}.x  (${Math.round((fertig / gesamt) * 100)} %)`);
-    }, abbruch);
+    }, abbruch, gleichzeitig);
     if (t) return { url: normUrl(t.url), info: t.info };
   }
   return null;

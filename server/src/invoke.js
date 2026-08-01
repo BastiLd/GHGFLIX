@@ -70,7 +70,13 @@ function movieOut(r) {
 
 function showOut(r) {
   if (!r) return null;
-  const c = db().prepare("SELECT COUNT(id) e, COUNT(DISTINCT season) s FROM episodes WHERE show_id=?").get(r.id);
+  /* season > 0 bei der Staffelzahl: Staffel 0 sind die Specials und zaehlt
+     nicht als eigene Staffel — sonst stuende bei Miraculous "7 Staffeln",
+     obwohl es sechs gibt. Die Folgenzahl zaehlt dagegen ALLE, Specials
+     eingeschlossen (so machen es Plex und Jellyfin auch). */
+  const c = db()
+    .prepare("SELECT COUNT(id) e, COUNT(DISTINCT CASE WHEN season > 0 THEN season END) s FROM episodes WHERE show_id=?")
+    .get(r.id);
   return {
     id: r.id,
     folder: r.folder ?? null,

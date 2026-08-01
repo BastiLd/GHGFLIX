@@ -124,12 +124,41 @@ if (Test-Path $AppJson) {
 $Ziel = "$Server/api/apk?token=$($login.token)"
 if ($Version) { $Ziel = $Ziel + "&version=" + $Version }
 
-$bytes = [System.IO.File]::ReadAllBytes($Datei)
+# Pruefsumme VORHER bilden, damit sich hinterher belegen laesst, dass genau
+# diese Datei angekommen ist. Am Fernseher meldet Android bei einer
+# unvollstaendigen Datei nur "Problem beim Parsen des Pakets" - ohne
+# Pruefsumme sucht man den Fehler dann an der falschen Stelle.
+$HashLokal = (Get-FileHash -Path $Datei -Algorithm SHA256).Hash.ToLower()
+Write-Host "     SHA-256 lokal: $($HashLokal.Substring(0,32))..."
+
+# -InFile statt -Body: die Datei wird roh durchgereicht, statt sie erst
+# vollstaendig als Byte-Feld in den Arbeitsspeicher zu laden. Das ist bei
+# 60 MB deutlich sparsamer und schliesst Umwandlungsfehler aus.
 try {
   $antwort = Invoke-RestMethod -Uri $Ziel -Method Post `
-               -ContentType "application/octet-stream" -Body $bytes -TimeoutSec 600
+               -ContentType "application/octet-stream" -InFile $Datei -TimeoutSec 900
 } catch {
   throw "Hochladen fehlgeschlagen: $($_.Exception.Message)"
+}
+
+# Gegenprobe: Was liegt jetzt wirklich auf dem Server?
+try {
+  $status = Invoke-RestMethod -Uri "$Server/api/apk/status" -TimeoutSec 30
+} catch {
+  $status = $null
+}
+if ($status -and $status.sha256) {
+  if ($status.sha256 -eq $HashLokal) {
+    Write-Host ""
+    Write-Host "Geprueft: Auf dem Server liegt exakt dieselbe Datei." -ForegroundColor Green
+  } else {
+    Write-Host ""
+    Write-Host "ACHTUNG: Die Datei auf dem Server stimmt NICHT mit deiner ueberein!" -ForegroundColor Red
+    Write-Host "  lokal : $HashLokal"
+    Write-Host "  Server: $($status.sha256)"
+    Write-Host "Bitte das Hochladen wiederholen - so wuerde die Installation scheitern."
+    exit 1
+  }
 }
 
 Write-Host ""

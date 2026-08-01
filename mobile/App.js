@@ -28,13 +28,13 @@ import { BackHandler, Text, View } from "react-native";
 
 import { FokusProvider, useFokusSystem } from "./src/fokus.js";
 import { Laden, se } from "./src/bausteine.js";
-import { Seitenleiste } from "./src/seitenleiste.js";
+import { Seitenleiste, Unterleiste } from "./src/seitenleiste.js";
 import { PlayerScreen } from "./src/player.js";
 import { VerbindungsScreen } from "./src/verbindung.js";
 import { normUrl, ping } from "./src/netzsuche.js";
 import { pruefeUpdate, starteUpdate } from "./src/update.js";
 import { laden as ladeEinstellungen } from "./src/einstellungen.js";
-import { C, M, st } from "./src/stile.js";
+import { C, M, istHandy, st } from "./src/stile.js";
 import {
   EinstellungenSeite, FilmSeite, ProfilSeite, RasterSeite,
   SerienSeite, StartSeite, SuchSeite,
@@ -105,6 +105,12 @@ function AppInner() {
   const [stapel, setStapel] = useState([]);      // Detailseiten über der Hauptseite
   const [navOffen, setNavOffen] = useState(false);
 
+  /* Wo die Navigation sitzt: unten (Handy) oder seitlich (Fernseher).
+     Vorbelegt aus der Geräteart, damit schon der allererste Aufbau richtig
+     ist und nichts sichtbar umspringt; die gespeicherte Einstellung kann das
+     unten überschreiben. */
+  const [navUnten, setNavUnten] = useState(istHandy);
+
   const [lib, setLib] = useState(null);
   const [weiter, setWeiter] = useState([]);
   const [verlauf, setVerlauf] = useState([]);
@@ -146,7 +152,13 @@ function AppInner() {
 
   useEffect(() => {
     // Einstellungen zuerst laden — der Player greift ohne Warten darauf zu
-    ladeEinstellungen().catch(() => {});
+    ladeEinstellungen()
+      .then((E) => {
+        // "auto" richtet sich nach dem Gerät, sonst gilt die Wahl des Nutzers.
+        const w = E?.navigation || "auto";
+        setNavUnten(w === "auto" ? istHandy : w === "unten");
+      })
+      .catch(() => {});
     ladeConn().then((c) => { setConn(c); verbinden(c); });
   }, [verbinden]);
 
@@ -359,18 +371,36 @@ function AppInner() {
     );
   }
 
+  const zahlen = {
+    movies: lib?.movies?.length,
+    shows: lib?.shows?.length,
+    list: favoriten?.length || undefined,
+  };
+  const wechsle = (s) => { setStapel([]); setSeite(s); };
+
+  /* ── Handy: Navigation unten, Inhalt darüber ───────────────────────
+     Die Leiste wird bei offener Detailseite NICHT ausgeblendet — man soll
+     jederzeit umschalten können, ohne vorher zurückzugehen (so machen es
+     Netflix und Disney+ ebenfalls). */
+  if (navUnten) {
+    return (
+      <View style={st.wurzelHandy}>
+        <StatusBar style="light" />
+        <View style={st.inhalt}>{inhalt}</View>
+        <Unterleiste seite={oben ? null : seite} aufSeite={wechsle} zahlen={zahlen} />
+      </View>
+    );
+  }
+
+  /* ── Fernseher: Seitenleiste, fährt bei Fokus aus ──────────────────── */
   return (
     <View style={st.wurzel}>
       <StatusBar style="light" hidden />
       <NavBeobachter aufOffen={setNavOffen} />
       <Seitenleiste
         seite={oben ? null : seite}
-        aufSeite={(s) => { setStapel([]); setSeite(s); }}
-        zahlen={{
-          movies: lib?.movies?.length,
-          shows: lib?.shows?.length,
-          list: favoriten?.length || undefined,
-        }}
+        aufSeite={wechsle}
+        zahlen={zahlen}
         profilName={profilName}
         version={APP_VERSION}
         offen={navOffen}

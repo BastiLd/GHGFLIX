@@ -283,6 +283,53 @@ console.log("\n── Randfälle ───────────────�
   pruefe(f3 ? `Titel ohne Bild/Genre/Jahr → ${f3.message}` : "Titel ohne Bild, Genre und Jahr stürzt nicht ab", !f3);
 }
 
+/* ── Navigationsleiste unten (Handy) ─────────────────────────────────────
+   Am Handy nahm die Seitenleiste die halbe Bildbreite ein; Überschriften
+   brachen dadurch mitten im Wort um. Hier wird geprüft, dass die Leiste
+   unten dieselben Einträge anbietet, sich beim Fokus anmeldet und WAAGERECHT
+   bedient wird — sie liegt ja nebeneinander, nicht untereinander. */
+console.log("\n── Navigationsleiste unten (Handy) ─────────────────────────");
+{
+  let uKern = null;
+  const gedrueckt = [];
+  function Fang2() {
+    const sys = fokus.useFokusSystem();
+    if (sys) uKern = sys.kern;
+    return null;
+  }
+  let fehlerU = null;
+  try {
+    render(e(fokus.FokusProvider, null, [
+      e(Fang2, { key: "f" }),
+      e(seitenleiste.Unterleiste, {
+        key: "u", seite: "home", zahlen: { movies: 65, shows: 12 },
+        aufSeite: (s) => gedrueckt.push(s),
+      }),
+    ]));
+  } catch (err) { fehlerU = err; }
+  pruefe(fehlerU ? `Leiste unten → ${fehlerU.message}` : "Leiste unten rendert ohne Ausnahme", !fehlerU);
+
+  if (uKern) {
+    const nav = uKern._alle().filter((x) => x.bereich === "nav");
+    pruefe(`alle ${seitenleiste.NAV.length} Einträge sind anwählbar (${nav.length})`,
+      nav.length === seitenleiste.NAV.length);
+    pruefe("sie liegen nebeneinander (eine Zeile, verschiedene Spalten)",
+      nav.every((x) => x.zeile === 0) && new Set(nav.map((x) => x.spalte)).size === nav.length);
+
+    uKern.setzen(nav[0].schluessel);
+    taste("right");
+    pruefe("rechts wandert zum nächsten Eintrag", uKern.aktivesElement?.spalte === 1);
+    taste("left");
+    pruefe("links wieder zurück", uKern.aktivesElement?.spalte === 0);
+
+    gedrueckt.length = 0;
+    uKern.setzen(nav[1].schluessel);
+    taste("select");
+    pruefe(`OK wechselt die Seite (${gedrueckt[0] || "nichts"})`,
+      gedrueckt.length === 1 && gedrueckt[0] === seitenleiste.NAV[1].id);
+  }
+}
+
 console.log("\n────────────────────────────────────────────────────────────");
 U.aufraeumen();
 if (fehler.length) {

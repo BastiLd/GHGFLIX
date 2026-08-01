@@ -1034,7 +1034,10 @@ pub fn list_shows(conn: &Connection) -> Result<Vec<Show>> {
     let sql = format!(
         "SELECT {SHOW_COLS},
             (SELECT COUNT(*) FROM episodes e WHERE e.show_id = shows.id) AS ep_count,
-            (SELECT COUNT(DISTINCT season) FROM episodes e WHERE e.show_id = shows.id) AS se_count,
+            -- season > 0: Staffel 0 sind die Specials. Die zaehlen NICHT als
+            -- eigene Staffel — sonst stand bei Miraculous \"7 Staffeln\", obwohl
+            -- es sechs gibt (Plex und Jellyfin zaehlen das genauso).
+            (SELECT COUNT(DISTINCT season) FROM episodes e WHERE e.show_id = shows.id AND e.season > 0) AS se_count,
             (SELECT MAX(width) FROM episodes e WHERE e.show_id = shows.id) AS max_w,
             (SELECT MAX(height) FROM episodes e WHERE e.show_id = shows.id) AS max_h
          FROM shows ORDER BY title COLLATE NOCASE"
@@ -1060,8 +1063,12 @@ pub fn get_show(conn: &Connection, id: i64) -> Result<Option<Show>> {
         None => return Ok(None),
     };
     s.episode_count = conn.query_row("SELECT COUNT(*) FROM episodes WHERE show_id=?1", [id], |r| r.get(0))?;
-    s.season_count =
-        conn.query_row("SELECT COUNT(DISTINCT season) FROM episodes WHERE show_id=?1", [id], |r| r.get(0))?;
+    // season > 0 — Specials (Staffel 0) sind keine eigene Staffel, siehe list_shows.
+    s.season_count = conn.query_row(
+        "SELECT COUNT(DISTINCT season) FROM episodes WHERE show_id=?1 AND season > 0",
+        [id],
+        |r| r.get(0),
+    )?;
     s.width = conn.query_row("SELECT MAX(width) FROM episodes WHERE show_id=?1", [id], |r| r.get(0))?;
     s.height = conn.query_row("SELECT MAX(height) FROM episodes WHERE show_id=?1", [id], |r| r.get(0))?;
     Ok(Some(s))

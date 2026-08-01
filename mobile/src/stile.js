@@ -11,11 +11,32 @@
  * (ab 900 Punkten, also praktisch jeder Fernseher) werden Kacheln, Schriften
  * und Abstände größer. Ein einziger Satz Stile bedient damit beides.
  */
-import { Dimensions, StyleSheet } from "react-native";
+import { Dimensions, Platform, StyleSheet } from "react-native";
 
 const fenster = Dimensions.get("window");
 /** true auf Fernsehern und Tablets im Querformat. */
 export const gross = Math.max(fenster.width, fenster.height) >= 900;
+
+/**
+ * Läuft die App auf einem Fernseher?
+ *
+ * React Native setzt `Platform.isTV` unter Android anhand des Gerätemodus
+ * (UI_MODE_TYPE_TELEVISION) — auf einem Google-TV also zuverlässig true, auf
+ * einem Handy false. Als zweites Merkmal ein sehr breiter Bildschirm, damit
+ * auch ein an den Fernseher angeschlossener Stick richtig erkannt wird.
+ */
+export const istTV = Platform.isTV === true || fenster.width >= 1200;
+
+/**
+ * Schmales Gerät (Handy im Hochformat).
+ *
+ * WICHTIG FÜR DIE NAVIGATION: Die Seitenleiste war früher auch hier fest
+ * 190 Punkte breit. Auf einem Handy mit rund 390 Punkten Breite ist das die
+ * HALBE Anzeige — der Inhalt daneben wurde so schmal, dass Überschriften
+ * mitten im Wort umbrachen („Weitersch auen", „Serv er wech seln"). Deshalb
+ * bekommt ein schmales Gerät die Navigation unten, wie bei Netflix.
+ */
+export const istHandy = !istTV && Math.min(fenster.width, fenster.height) < 600;
 
 /** Farbpalette – identisch zur Desktop-App. */
 export const C = {
@@ -51,7 +72,31 @@ export const M = {
 export const st = StyleSheet.create({
   /* ── Grundgerüst ───────────────────────────────────────────────────── */
   wurzel: { flex: 1, backgroundColor: C.bg, flexDirection: "row" },
+  /* Am Handy liegt die Navigation unten, der Inhalt also DARÜBER statt
+     daneben — deshalb die Spaltenrichtung. */
+  wurzelHandy: { flex: 1, backgroundColor: C.bg, flexDirection: "column" },
   inhalt: { flex: 1 },
+
+  /* ── Untere Navigationsleiste (Handy, wie bei Netflix) ─────────────── */
+  unten: {
+    flexDirection: "row",
+    backgroundColor: "#101016",
+    borderTopWidth: 1,
+    borderTopColor: C.line,
+    paddingTop: 7,
+    // Platz für die Wisch-Leiste am unteren Rand moderner Telefone
+    paddingBottom: 22,
+  },
+  untenEintrag: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 2 },
+  untenSymbol: { fontSize: 21, lineHeight: 25, marginBottom: 3 },
+  untenText: { fontSize: 10.5, fontWeight: "700", letterSpacing: 0.2 },
+  /* Der Zähler sitzt als kleine Blase am Symbol — für „Filme 65" ist unten
+     kein Platz, und als eigene Zeile würde er die Leiste zu hoch machen. */
+  untenBlase: {
+    position: "absolute", top: -3, right: -12, minWidth: 16, height: 16, borderRadius: 8,
+    backgroundColor: C.red, alignItems: "center", justifyContent: "center", paddingHorizontal: 3,
+  },
+  untenBlaseText: { color: C.weiss, fontSize: 9, fontWeight: "900" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: C.bg },
   reihe: { flexDirection: "row", alignItems: "center" },
   reiheZwischen: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
