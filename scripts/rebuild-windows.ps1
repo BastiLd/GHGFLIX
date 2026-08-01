@@ -81,9 +81,18 @@ if (-not $Schnell) {
   Write-Host "       package.json      $pkg"
   Write-Host "       tauri.conf.json   $tauri"
   Write-Host "       Cargo.toml        $cargo"
+  # ABBRUCH statt nur Warnung: Weichen die drei Nummern voneinander ab,
+  # baut Tauri zwar durch, aber der Installer meldet Windows eine andere
+  # Fassung als die App selbst. Windows haelt die Installation dann teils
+  # fuer unveraendert und laesst Startmenue- und Desktop-Verknuepfung auf
+  # die ALTE Datei zeigen. Das faellt erst auf, wenn man sich wundert, warum
+  # neue Funktionen fehlen - deshalb hier lieber gleich anhalten.
   if (($pkg -ne $tauri) -or ($pkg -ne $cargo)) {
-    Write-Warning "Die Versionsnummern stimmen nicht ueberein! Windows aktualisiert die Installation sonst evtl. nicht sauber."
+    throw ("Die Versionsnummern stimmen nicht ueberein (package.json $pkg, " +
+           "tauri.conf.json $tauri, Cargo.toml $cargo). Bitte in allen drei " +
+           "Dateien dieselbe Nummer eintragen und erneut starten.")
   }
+  Write-Host "       -> alle gleich, gut."
 }
 else {
   Schritt "4/6  Pruefungen uebersprungen (-Schnell)"
