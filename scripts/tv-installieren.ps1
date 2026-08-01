@@ -273,8 +273,30 @@ if ($text -match "Success") {
 # 5) Starten
 # ---------------------------------------------------------------------------
 Schritt "5/5  App auf dem Fernseher starten"
-$null = Invoke-Adb -s "$TvIp`:5555" shell monkey -p com.bastild.ghgflix -c android.intent.category.LAUNCHER 1
-Gut "GHGFlix sollte jetzt auf dem Fernseher laufen."
+
+# ACHTUNG, HIER STAND EINMAL "monkey":
+#   adb shell monkey -p com.bastild.ghgflix -c android.intent.category.LAUNCHER 1
+# Das sieht nach "starte diese App" aus, ist aber das Werkzeug fuer ZUFAELLIGE
+# Eingaben. Findet es zur angegebenen App keine passende Start-Aktivitaet,
+# erzeugt es irgendein Ereignis - und oeffnet dann eine voellig fremde App.
+# Genau das ist passiert: einmal ging Netflix auf, beim naechsten Mal Spotify.
+#
+# Richtig ist, die Start-Aktivitaet zu erfragen und GENAU die zu starten.
+$ziel = Invoke-Adb -s "$TvIp`:5555" shell cmd package resolve-activity --brief com.bastild.ghgflix
+$aktivitaet = ($ziel -split "`n" | Where-Object { $_ -match "^com\.bastild\.ghgflix/" } | Select-Object -Last 1)
+
+if ($aktivitaet) {
+  $start = Invoke-Adb -s "$TvIp`:5555" shell am start -n $aktivitaet.Trim()
+  if ($start -match "Error|Exception") {
+    Warn "Automatischer Start nicht moeglich - bitte am Fernseher selbst oeffnen."
+    Info $start
+  } else {
+    Gut "GHGFlix laeuft jetzt auf dem Fernseher."
+  }
+} else {
+  Warn "Start-Aktivitaet nicht gefunden - bitte GHGFlix am Fernseher selbst oeffnen."
+  Info "(Die Installation selbst hat geklappt.)"
+}
 Write-Host ""
 Write-Host "Ab jetzt brauchst du das nur noch selten:" -ForegroundColor Yellow
 Write-Host "Reine Anzeige-Aenderungen kommen ueber die Luft (OTA) in die App -"
