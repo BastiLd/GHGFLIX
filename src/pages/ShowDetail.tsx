@@ -321,6 +321,39 @@ export default function ShowDetail() {
             >
               Intro festlegen
             </Button>
+            {/* Der Titel-Abgleich lohnt sich fast immer für die GANZE Serie:
+                wenn die Quelle anders nummeriert als TMDb, betrifft das jede
+                Staffel. Einzeln wären das sechs Klicks und sechs Wartezeiten. */}
+            <Button
+              variant="ghost"
+              onClick={() => {
+                const staffeln = seasons.map((s) => s.season);
+                toast(`Titel-Abgleich für ${staffeln.length} Staffeln läuft …`, "info");
+                void (async () => {
+                  let summe = 0;
+                  let gesamt = 0;
+                  const fehler: string[] = [];
+                  for (const st of staffeln) {
+                    try {
+                      const [m, t] = await repairSeasonTitles(show.id, st);
+                      summe += m;
+                      gesamt += t;
+                    } catch (e) {
+                      fehler.push(`Staffel ${st}: ${String(e)}`);
+                    }
+                  }
+                  qc.invalidateQueries({ queryKey: ["show", sid] });
+                  toast(
+                    summe > 0
+                      ? `${summe} von ${gesamt} Folgen anhand der Titel korrigiert${fehler.length ? ` (${fehler.length} Staffeln übersprungen)` : ""}`
+                      : "Keine eindeutigen Titel-Treffer gefunden — die Nummern bleiben, wie sie sind",
+                    summe > 0 ? "success" : "info",
+                  );
+                })();
+              }}
+            >
+              Titel-Abgleich (alle Staffeln)
+            </Button>
             <Button variant="ghost" onClick={playRandom}>
               🎲 Zufällige Folge
             </Button>

@@ -298,13 +298,45 @@ export async function handleInvoke(cmd, a = {}) {
     case "feed_remove":
       return kanaele.abbestellen(String(a.id || ""));
     case "feed_update":
-      return kanaele.feedAendern(String(a.id || ""), { benachrichtigen: a.benachrichtigen, titel: a.titel });
+      return kanaele.feedAendern(String(a.id || ""), {
+        benachrichtigen: a.benachrichtigen,
+        titel: a.titel,
+        // undefined = nicht anfassen, null = aus der Gruppe nehmen
+        gruppeId: a.gruppeId === undefined ? undefined : a.gruppeId,
+      });
     case "feed_items":
       return kanaele.beitraege({
         art: a.art ? String(a.art) : null,
+        gruppeId: a.gruppeId === undefined ? undefined : a.gruppeId,
+        feedId: a.feedId ? String(a.feedId) : null,
         limit: Number(a.limit) || 60,
         nurUngelesen: !!a.unreadOnly,
+        nurGemerkt: !!a.savedOnly,
+        ohneGesehene: !!a.hideWatched,
+        format: a.format ? String(a.format) : null,
+        suche: a.search ? String(a.search) : null,
+        sortierung: a.sort ? String(a.sort) : "neu",
       });
+    case "feed_saved":
+      return kanaele.merken(String(a.id || ""), a.on !== false);
+    case "feed_watched":
+      return kanaele.gesehenSetzen(String(a.id || ""), a.on !== false);
+
+    // ── Gruppen ──
+    case "feed_groups":
+      return kanaele.gruppenUebersicht();
+    case "feed_group_add":
+      return kanaele.gruppeAnlegen({ name: a.name, emoji: a.emoji, farbe: a.farbe });
+    case "feed_group_update":
+      return kanaele.gruppeAendern(String(a.id || ""), {
+        name: a.name,
+        emoji: a.emoji,
+        farbe: a.farbe,
+        standardOffen: a.standardOffen,
+        sortierung: a.sortierung,
+      });
+    case "feed_group_remove":
+      return kanaele.gruppeLoeschen(String(a.id || ""));
     case "feed_refresh": {
       const neu = await kanaele.abholen(a.id ? String(a.id) : null);
       return { neu: neu.length, beitraege: neu };
@@ -602,19 +634,67 @@ export async function handleInvoke(cmd, a = {}) {
       const season = Number(a.season);
       const tmdbEps = await tmdb.seasonEpisodeList(s.tmdb_id, season);
       const eps = d.prepare("SELECT id, path, episode FROM episodes WHERE show_id=? AND season=?").all(s.id, season);
-      const norm = (x) => String(x || "").toLowerCase().replace(/[^a-zä-ü0-9]+/g, "");
-      let matched = 0;
+      const norm = (x) =>
+        String(x || "").toLowerCase().replace(/[^a-zä-ü0-9]+/g, " ").trim().replace(/\s+/g, " ");
+
+      /* Titeltext aus dem Dateinamen — zwei Schreibweisen:
+           "Serie - S01E20 - Pixelator"   klassisches SxxEyy
+           "120 - Pixelator"              zusammengezogene Nummer vorne
+         Die zweite fehlte bis 01.08.2026, und genau so ist die
+         Miraculous-Sammlung benannt. Dieselbe Regel wie in commands.rs. */
+      const kandidat = (stem) => {
+        let rest = null;
+        const mSe = /s\d{1,2}\s*[-. _]*e\d{1,3}[-. _]*/i.exec(stem);
+        if (mSe) rest = stem.slice(mSe.index + mSe[0].length);
+        else {
+          const mNr = /^\s*\d{1,4}\s*(?:x\s*\d{1,3})?\s*[-._)\]]+\s*/.exec(stem);
+          if (mNr) rest = stem.slice(mNr[0].length);
+        }
+        if (rest == null) return null;
+        const c = norm(rest);
+        // Mindestqualität — siehe Erklärung in commands.rs: lieber nicht
+        // zuordnen als falsch zuordnen.
+        if (c.length < 5) return null;
+        if (Math.max(0, ...c.split(" ").map((w) => w.length)) < 4) return null;
+        if (!/[aeiouäöü]/.test(c)) return null;
+        return c;
+      };
+
+      const normed = tmdbEps.filter((t) => t.title).map((t) => ({ nr: t.episode, t: norm(t.title) }));
+      const zuweisung = [];
+      const belegt = new Set();
       for (const e of eps) {
-        const base = norm(basename(e.path).replace(/\.[^.]+$/, "").replace(/.*e\d{1,3}/i, ""));
-        if (!base) continue;
-        const hit = tmdbEps.find((t) => t.title && (base.includes(norm(t.title)) || norm(t.title).includes(base)));
-        if (hit && hit.episode !== e.episode) {
-          d.prepare("UPDATE episodes SET episode=? WHERE id=?").run(hit.episode, e.id);
-          matched++;
-        } else if (hit) matched++;
+        const stem = basename(e.path).replace(/\.[^.]+$/, "");
+        const c = kandidat(stem);
+        if (!c) continue;
+        const treffer = normed
+          .filter((x) => x.t === c || (c.length >= 4 && x.t.startsWith(c)) || (x.t.length >= 4 && c.startsWith(x.t)))
+          .map((x) => x.nr);
+        const eindeutig = [...new Set(treffer)];
+        // NUR bei genau einem Treffer zuordnen — sonst entstehen die
+        // Vertauschungen, die vorher niemand mehr rückgängig machen konnte.
+        if (eindeutig.length === 1 && !belegt.has(eindeutig[0])) {
+          belegt.add(eindeutig[0]);
+          zuweisung.push([e.id, eindeutig[0]]);
+        }
+      }
+
+      if (zuweisung.length > 0) {
+        // Zweistufig umnummerieren, sonst kollidiert UNIQUE(show,season,episode).
+        for (const e of eps) d.prepare("UPDATE episodes SET episode = -id WHERE id=?").run(e.id);
+        for (const [id, nr] of zuweisung) d.prepare("UPDATE episodes SET episode=? WHERE id=?").run(nr, id);
+        for (const e of eps) {
+          if (zuweisung.some(([id]) => id === e.id)) continue;
+          let n = Math.max(1, e.episode);
+          while (
+            d.prepare("SELECT COUNT(*) n FROM episodes WHERE show_id=? AND season=? AND episode=? AND id<>?")
+              .get(s.id, season, n, e.id).n > 0
+          ) n++;
+          d.prepare("UPDATE episodes SET episode=? WHERE id=?").run(n, e.id);
+        }
       }
       await enrichShow(s.id, s.tmdb_id).catch(() => {});
-      return [matched, eps.length];
+      return [zuweisung.length, eps.length];
     }
 
     // ===== progress =====

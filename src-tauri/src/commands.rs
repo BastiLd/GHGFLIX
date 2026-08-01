@@ -877,12 +877,30 @@ pub async fn repair_season_titles(
     fn norm(s: &str) -> String {
         crate::parser::letters_only(s).to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
     }
-    /// trailing title text of a filename stem: everything after the SxxEyy tag
+    /// Der Titeltext aus einem Dateinamen: alles NACH der Nummer.
+    ///
+    /// Zwei Schreibweisen, beide kommen in echten Sammlungen vor:
+    ///   "Serie - S01E20 - Pixelator"   klassisches SxxEyy
+    ///   "120 - Pixelator"              zusammengezogene Nummer vorne
+    ///
+    /// Die zweite fehlte bis 01.08.2026 - und genau so ist die
+    /// Miraculous-Sammlung von miraculous.to benannt. Der Titel-Abgleich fand
+    /// dort deshalb NICHTS und die Seite blieb bei der Nummer der Quelle
+    /// stehen. Da miraculous.to anders nummeriert als TMDb, stand ueber
+    /// "120 - Pixelator.mp4" der Titel und das Bild von "Guitar Villain".
     fn candidate_of(stem: &str) -> Option<String> {
-        let re = regex::Regex::new(r"(?i)s\d{1,2}\s*[-. _]*e\d{1,3}[-. _]*").ok()?;
-        let m = re.find(stem)?;
-        let rest = &stem[m.end()..];
-        let c = norm(rest);
+        let rest = {
+            let re_se = regex::Regex::new(r"(?i)s\d{1,2}\s*[-. _]*e\d{1,3}[-. _]*").ok()?;
+            if let Some(m) = re_se.find(stem) {
+                stem[m.end()..].to_string()
+            } else {
+                // Fuehrende Nummer: "120 - Pixelator", "07. Titel", "1x05 Titel"
+                let re_num = regex::Regex::new(r"^\s*\d{1,4}\s*(?:x\s*\d{1,3})?\s*[-._)\]]+\s*").ok()?;
+                let m = re_num.find(stem)?;
+                stem[m.end()..].to_string()
+            }
+        };
+        let c = norm(&rest);
         /* MINDESTQUALITAET - gemessen am 01.08.2026 an Miraculous Staffel 6:
            Dort heissen Dateien "S06E02 - The", "S06E09 - Mr",
            "S06E14 - WEqp4g7h", "S06E17 - M1IqG0Eu". Solche Reste sind KEIN
@@ -1689,25 +1707,74 @@ pub fn feed_update(
     id: String,
     benachrichtigen: Option<bool>,
     titel: Option<String>,
+    gruppe_id: Option<String>,
 ) -> R<crate::kanaele::Feed> {
     let conn = state.conn.lock().unwrap();
-    crate::kanaele::feed_aendern(&conn, &id, benachrichtigen, titel).map_err(err)
+    // Leerer Text = "aus der Gruppe nehmen", fehlend = "nicht anfassen".
+    let gruppe = gruppe_id.map(|g| if g.trim().is_empty() { None } else { Some(g) });
+    crate::kanaele::feed_aendern(&conn, &id, benachrichtigen, titel, gruppe).map_err(err)
 }
 
 #[tauri::command]
-pub fn feed_items(
-    state: State<AppState>,
-    art: Option<String>,
-    limit: Option<usize>,
-    unread_only: Option<bool>,
-) -> R<Vec<crate::kanaele::Beitrag>> {
+pub fn feed_items(state: State<AppState>, filter: crate::kanaele::Filter) -> R<Vec<crate::kanaele::Beitrag>> {
     let conn = state.conn.lock().unwrap();
-    Ok(crate::kanaele::beitraege(
-        &conn,
-        art.as_deref(),
-        limit.unwrap_or(60),
-        unread_only.unwrap_or(false),
-    ))
+    Ok(crate::kanaele::beitraege(&conn, &filter))
+}
+
+/// Merkliste ("Spaeter ansehen") umschalten.
+#[tauri::command]
+pub fn feed_saved(state: State<AppState>, id: String, on: Option<bool>) -> R<bool> {
+    let conn = state.conn.lock().unwrap();
+    crate::kanaele::merken(&conn, &id, on.unwrap_or(true)).map_err(err)
+}
+
+/// Gesehen-Markierung umschalten.
+#[tauri::command]
+pub fn feed_watched(state: State<AppState>, id: String, on: Option<bool>) -> R<bool> {
+    let conn = state.conn.lock().unwrap();
+    crate::kanaele::gesehen_setzen(&conn, &id, on.unwrap_or(true)).map_err(err)
+}
+
+// ===== Gruppen auf der Kanaele-Seite =====
+
+#[tauri::command]
+pub fn feed_groups(state: State<AppState>) -> R<Vec<crate::kanaele::GruppenKachel>> {
+    let conn = state.conn.lock().unwrap();
+    Ok(crate::kanaele::gruppen_uebersicht(&conn))
+}
+
+#[tauri::command]
+pub fn feed_group_add(
+    state: State<AppState>,
+    name: String,
+    emoji: Option<String>,
+    farbe: Option<String>,
+) -> R<crate::kanaele::Gruppe> {
+    let conn = state.conn.lock().unwrap();
+    crate::kanaele::gruppe_anlegen(&conn, &name, emoji.as_deref(), farbe.as_deref()).map_err(err)
+}
+
+#[tauri::command]
+pub fn feed_group_update(
+    state: State<AppState>,
+    id: String,
+    name: Option<String>,
+    emoji: Option<String>,
+    farbe: Option<String>,
+    standard_offen: Option<bool>,
+    sortierung: Option<i64>,
+) -> R<crate::kanaele::Gruppe> {
+    let conn = state.conn.lock().unwrap();
+    // farbe: Some(None) waere "Farbe entfernen" - das kommt aus der Oberflaeche
+    // als leerer Text, damit man es von "nicht anfassen" unterscheiden kann.
+    let farbe_arg = farbe.map(|f| if f.trim().is_empty() { None } else { Some(f) });
+    crate::kanaele::gruppe_aendern(&conn, &id, name, emoji, farbe_arg, standard_offen, sortierung).map_err(err)
+}
+
+#[tauri::command]
+pub fn feed_group_remove(state: State<AppState>, id: String) -> R<i64> {
+    let conn = state.conn.lock().unwrap();
+    crate::kanaele::gruppe_loeschen(&conn, &id).map_err(err)
 }
 
 #[derive(serde::Serialize)]

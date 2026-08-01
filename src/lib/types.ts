@@ -253,6 +253,8 @@ export interface Feed {
   /** Seite zum Anklicken (Kanalseite bzw. Blog). */
   seite: string;
   benachrichtigen: boolean;
+  /** Zu welcher Gruppe (Film/Serie) gehört dieses Abo? null = keine. */
+  gruppeId?: string | null;
   hinzugefuegt: number;
   /** Zeitpunkt des letzten erfolgreichen Abrufs (0 = noch nie). */
   zuletzt: number;
@@ -271,7 +273,46 @@ export interface FeedBeitrag {
   beschreibung?: string | null;
   veroeffentlicht: number;
   gelesen: boolean;
+  /** null = noch nicht geprüft (der Feed verrät es nicht). */
+  istShort?: boolean | null;
+  /** Merkliste „Später ansehen" */
+  gemerkt?: boolean;
+  gesehen?: boolean;
   entdeckt: number;
   /** Name des Abos — nur beim Abrufen gefüllt. */
   feedTitel?: string | null;
+}
+
+/** Eine Gruppe auf der Kanäle-Seite: ein Film, eine Filmreihe oder eine Serie. */
+export interface FeedGruppe {
+  /** null = die Sammelkachel „Ohne Gruppe" */
+  id: string | null;
+  name: string;
+  emoji: string;
+  farbe?: string | null;
+  /** Beim Öffnen der Seite direkt aufklappen — höchstens eine Gruppe. */
+  standardOffen: boolean;
+  sortierung: number;
+  abos: number;
+  kanaele: number;
+  blogs: number;
+  beitraege: number;
+  ungelesen: number;
+  /** Ein paar Vorschaubilder für die Kachel. */
+  bilder: string[];
+}
+
+/** Filter für die Beitragsliste. */
+export interface FeedFilter {
+  art?: "youtube" | "blog" | null;
+  /** undefined = egal, null = nur gruppenlose, sonst genau diese Gruppe. */
+  gruppeId?: string | null;
+  feedId?: string | null;
+  limit?: number;
+  unreadOnly?: boolean;
+  savedOnly?: boolean;
+  hideWatched?: boolean;
+  format?: "shorts" | "videos" | null;
+  search?: string | null;
+  sort?: "neu" | "alt" | "kanal";
 }

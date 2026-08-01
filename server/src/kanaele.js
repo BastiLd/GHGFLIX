@@ -27,7 +27,9 @@ const FEEDS_KEY = "feeds";
 const ITEMS_KEY = "feed_items";
 
 /** So viele Beiträge werden insgesamt aufgehoben. */
-const MAX_ITEMS = 300;
+/* Mehr Abos brauchen mehr Platz — mit Gruppen kommen schnell 10+ Kanäle
+   zusammen. 600 Beiträge sind als JSON immer noch nur wenige hundert KB. */
+const MAX_ITEMS = 600;
 
 /** So viele Beiträge werden pro Feed und Abruf übernommen. */
 const MAX_PRO_FEED = 15;
@@ -240,15 +242,124 @@ export function abbestellen(id) {
   return true;
 }
 
-/** Einstellungen eines Abos ändern (derzeit nur `benachrichtigen`). */
+/** Einstellungen eines Abos ändern. */
 export function feedAendern(id, teil = {}) {
   const feeds = feedsLaden();
   const f = feeds.find((x) => x.id === id);
   if (!f) throw new Error("Dieses Abo gibt es nicht");
   if (teil.benachrichtigen != null) f.benachrichtigen = !!teil.benachrichtigen;
   if (teil.titel) f.titel = String(teil.titel);
+  // gruppeId === null heißt ausdrücklich „aus der Gruppe nehmen".
+  if (teil.gruppeId !== undefined) f.gruppeId = teil.gruppeId ? String(teil.gruppeId) : null;
   feedsSpeichern(feeds);
   return f;
+}
+
+/* ══ Gruppen ══════════════════════════════════════════════════════════════
+   Eine Gruppe ist ein Thema: ein Film, eine Filmreihe oder eine Serie. Darin
+   liegen die Abos und Blogs, die dazu gehören — z. B. „Miraculous" mit dem
+   offiziellen Kanal, zwei Fan-Kanälen und einem Leak-Blog.
+
+   Warum am ABO und nicht am einzelnen Beitrag: ein Kanal bleibt beim Thema.
+   Einmal einsortiert, landet alles Neue von selbst richtig — sonst müsste
+   man jedes Video von Hand zuordnen. */
+
+const GRUPPEN_KEY = "feed_gruppen";
+
+export const gruppenLaden = () => {
+  const g = lesen(GRUPPEN_KEY, []);
+  return Array.isArray(g) ? g : [];
+};
+const gruppenSpeichern = (v) => setSetting(GRUPPEN_KEY, JSON.stringify(v));
+
+const neueGruppenId = () => `g${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
+
+export function gruppeAnlegen({ name, emoji = "📺", farbe = null } = {}) {
+  const n = String(name || "").trim();
+  if (!n) throw new Error("Die Gruppe braucht einen Namen");
+  const alle = gruppenLaden();
+  if (alle.some((g) => g.name.toLowerCase() === n.toLowerCase())) {
+    throw new Error("Eine Gruppe mit diesem Namen gibt es schon");
+  }
+  const g = {
+    id: neueGruppenId(),
+    name: n,
+    emoji: String(emoji || "📺").slice(0, 4),
+    farbe: farbe ? String(farbe) : null,
+    /* Beim Öffnen der Seite direkt aufklappen statt nur als Kachel zu warten.
+       Höchstens EINE Gruppe darf das haben — sonst wäre nicht entschieden,
+       welche gewinnt. */
+    standardOffen: false,
+    sortierung: alle.length,
+    angelegt: jetzt(),
+  };
+  alle.push(g);
+  gruppenSpeichern(alle);
+  return g;
+}
+
+export function gruppeAendern(id, teil = {}) {
+  const alle = gruppenLaden();
+  const g = alle.find((x) => x.id === id);
+  if (!g) throw new Error("Diese Gruppe gibt es nicht");
+  if (teil.name != null && String(teil.name).trim()) g.name = String(teil.name).trim();
+  if (teil.emoji != null) g.emoji = String(teil.emoji).slice(0, 4) || "📺";
+  if (teil.farbe !== undefined) g.farbe = teil.farbe ? String(teil.farbe) : null;
+  if (teil.sortierung != null) g.sortierung = Number(teil.sortierung) || 0;
+  if (teil.standardOffen != null) {
+    const an = !!teil.standardOffen;
+    // Nur eine Gruppe darf beim Öffnen aufgehen.
+    if (an) for (const x of alle) x.standardOffen = false;
+    g.standardOffen = an;
+  }
+  gruppenSpeichern(alle);
+  return g;
+}
+
+/** Gruppe löschen. Die Abos darin bleiben — sie werden nur gruppenlos. */
+export function gruppeLoeschen(id) {
+  gruppenSpeichern(gruppenLaden().filter((g) => g.id !== id));
+  const feeds = feedsLaden();
+  let n = 0;
+  for (const f of feeds) {
+    if (f.gruppeId === id) {
+      f.gruppeId = null;
+      n++;
+    }
+  }
+  if (n) feedsSpeichern(feeds);
+  return { geloescht: true, abosFreigegeben: n };
+}
+
+/** Gruppen mit Zählern, so wie die Kachelansicht sie braucht. */
+export function gruppenUebersicht() {
+  const feeds = feedsLaden();
+  const items = beitraegeLaden();
+  const bau = (g) => {
+    const abos = feeds.filter((f) => (g ? f.gruppeId === g.id : !f.gruppeId));
+    const ids = new Set(abos.map((f) => f.id));
+    const meine = items.filter((b) => ids.has(b.feedId));
+    return {
+      id: g?.id ?? null,
+      name: g?.name ?? "Ohne Gruppe",
+      emoji: g?.emoji ?? "📁",
+      farbe: g?.farbe ?? null,
+      standardOffen: g?.standardOffen ?? false,
+      sortierung: g?.sortierung ?? 9999,
+      abos: abos.length,
+      kanaele: abos.filter((f) => f.art === "youtube").length,
+      blogs: abos.filter((f) => f.art === "blog").length,
+      beitraege: meine.length,
+      ungelesen: meine.filter((b) => !b.gelesen).length,
+      // Ein paar Vorschaubilder für die Kachel.
+      bilder: meine.filter((b) => b.bild).slice(0, 4).map((b) => b.bild),
+    };
+  };
+  const liste = gruppenLaden().sort((a, b) => a.sortierung - b.sortierung).map(bau);
+  const ohne = bau(null);
+  // „Ohne Gruppe" nur zeigen, wenn dort wirklich etwas liegt.
+  if (ohne.abos > 0) liste.push(ohne);
+  return liste;
 }
 
 /* ── Abholen ────────────────────────────────────────────────────────────── */
@@ -285,8 +396,48 @@ function beitragAus(block, feed) {
     beschreibung: beschreibung ? beschreibung.slice(0, 400) : null,
     veroeffentlicht: Number.isNaN(zeit) ? jetzt() : zeit,
     gelesen: false,
+    /* null = noch nicht geprüft. Der Feed verrät es nicht, das klärt
+       istShortPruefen() beim Abholen. */
+    istShort: null,
+    gemerkt: false,
+    gesehen: false,
     entdeckt: jetzt(),
   };
+}
+
+/**
+ * Ist dieses YouTube-Video ein Short?
+ *
+ * Der Atom-Feed sagt es NICHT — dort steht kein Wort über Länge oder Format.
+ * Es gibt aber einen verlässlichen Weg ohne API-Schlüssel: die Adresse
+ * `youtube.com/shorts/<id>` beantwortet YouTube unterschiedlich.
+ *   - echtes Short  → 200, die Seite existiert
+ *   - normales Video → Umleitung auf /watch?v=…
+ * Deshalb wird die Umleitung bewusst NICHT gefolgt und nur der Statuscode
+ * angesehen. Das kostet einen kleinen Abruf pro NEUEM Video, und das Ergebnis
+ * wird dauerhaft gemerkt — bestehende Beiträge werden nie erneut geprüft.
+ *
+ * Bei Zeitüberschreitung oder Fehler: null zurückgeben (unbekannt) statt zu
+ * raten. Ein falsch einsortiertes Video wäre ärgerlicher als eins ohne Marke.
+ */
+async function istShortPruefen(videoId) {
+  if (!videoId) return null;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const r = await fetch(`https://www.youtube.com/shorts/${videoId}`, {
+      method: "HEAD",
+      redirect: "manual",
+      signal: ctrl.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; GHGFlix/1.0)" },
+    });
+    clearTimeout(t);
+    if (r.status >= 300 && r.status < 400) return false; // leitet auf /watch um
+    if (r.status === 200) return true;
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -330,6 +481,14 @@ export async function abholen(nurId = null) {
     }
   }
 
+  /* Shorts-Marke nachtragen — nur für Beiträge, die sie noch nicht haben.
+     Bewusst NACH dem Einsammeln und mit Obergrenze: bei einem frisch
+     abonnierten Kanal wären es sonst 15 zusätzliche Abrufe auf einmal, und
+     der Nutzer wartet vor einer leeren Seite. Was übrig bleibt, holt der
+     nächste Durchlauf in 30 Minuten. */
+  const offen = vorhanden.filter((b) => b.art === "youtube" && b.videoId && b.istShort == null).slice(0, 25);
+  for (const b of offen) b.istShort = await istShortPruefen(b.videoId);
+
   vorhanden.sort((a, b) => b.veroeffentlicht - a.veroeffentlicht);
   beitraegeSpeichern(vorhanden);
   feedsSpeichern(feeds);
@@ -338,13 +497,87 @@ export async function abholen(nurId = null) {
 
 /* ── Lesen ──────────────────────────────────────────────────────────────── */
 
-export function beitraege({ art = null, limit = 60, nurUngelesen = false } = {}) {
-  const feeds = new Map(feedsLaden().map((f) => [f.id, f]));
-  return beitraegeLaden()
+/**
+ * Beiträge lesen — mit allen Filtern der Oberfläche.
+ *
+ * `format`: "shorts" nur Kurzvideos, "videos" alles außer Kurzvideos.
+ *   Beiträge ohne geprüfte Marke (istShort === null) gelten als normales
+ *   Video: lieber einmal zu viel zeigen als etwas verschwinden lassen.
+ */
+export function beitraege({
+  art = null,
+  gruppeId = undefined,
+  feedId = null,
+  limit = 60,
+  nurUngelesen = false,
+  nurGemerkt = false,
+  ohneGesehene = false,
+  format = null,
+  suche = null,
+  sortierung = "neu",
+} = {}) {
+  const feedListe = feedsLaden();
+  const feeds = new Map(feedListe.map((f) => [f.id, f]));
+
+  // gruppeId: undefined = egal, null = nur gruppenlose, sonst genau diese
+  let erlaubt = null;
+  if (gruppeId !== undefined) {
+    erlaubt = new Set(feedListe.filter((f) => (gruppeId === null ? !f.gruppeId : f.gruppeId === gruppeId)).map((f) => f.id));
+  }
+
+  const q = suche ? String(suche).toLowerCase().trim() : null;
+  let liste = beitraegeLaden()
     .filter((b) => (art ? b.art === art : true))
+    .filter((b) => (feedId ? b.feedId === feedId : true))
+    .filter((b) => (erlaubt ? erlaubt.has(b.feedId) : true))
     .filter((b) => (nurUngelesen ? !b.gelesen : true))
-    .slice(0, Math.max(1, Math.min(300, limit)))
-    .map((b) => ({ ...b, feedTitel: feeds.get(b.feedId)?.titel ?? "Unbekannt" }));
+    .filter((b) => (nurGemerkt ? !!b.gemerkt : true))
+    .filter((b) => (ohneGesehene ? !b.gesehen : true))
+    .filter((b) => {
+      if (!format) return true;
+      if (format === "shorts") return b.istShort === true;
+      return b.istShort !== true; // "videos": auch ungeprüfte zeigen
+    })
+    .filter((b) => {
+      if (!q) return true;
+      const wo = `${b.titel} ${b.beschreibung ?? ""} ${feeds.get(b.feedId)?.titel ?? ""}`.toLowerCase();
+      return wo.includes(q);
+    });
+
+  if (sortierung === "alt") liste.sort((a, b) => a.veroeffentlicht - b.veroeffentlicht);
+  else if (sortierung === "kanal") {
+    liste.sort(
+      (a, b) =>
+        (feeds.get(a.feedId)?.titel ?? "").localeCompare(feeds.get(b.feedId)?.titel ?? "", "de") ||
+        b.veroeffentlicht - a.veroeffentlicht,
+    );
+  } else liste.sort((a, b) => b.veroeffentlicht - a.veroeffentlicht);
+
+  return liste.slice(0, Math.max(1, Math.min(400, limit))).map((b) => {
+    const f = feeds.get(b.feedId);
+    return { ...b, feedTitel: f?.titel ?? "Unbekannt", feedArt: f?.art ?? b.art, gruppeId: f?.gruppeId ?? null };
+  });
+}
+
+/** Merkliste („Später ansehen") umschalten. */
+export function merken(id, an = true) {
+  const alle = beitraegeLaden();
+  const b = alle.find((x) => x.id === id);
+  if (!b) throw new Error("Diesen Beitrag gibt es nicht");
+  b.gemerkt = !!an;
+  beitraegeSpeichern(alle);
+  return b.gemerkt;
+}
+
+/** Gesehen-Markierung umschalten. Gesehenes gilt zugleich als gelesen. */
+export function gesehenSetzen(id, an = true) {
+  const alle = beitraegeLaden();
+  const b = alle.find((x) => x.id === id);
+  if (!b) throw new Error("Diesen Beitrag gibt es nicht");
+  b.gesehen = !!an;
+  if (an) b.gelesen = true;
+  beitraegeSpeichern(alle);
+  return b.gesehen;
 }
 
 export function ungelesenZahl(art = null) {

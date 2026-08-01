@@ -228,6 +228,12 @@ pub fn run() {
             commands::feed_unread,
             commands::feed_mark_read,
             commands::reset_episode_numbers_from_files,
+            commands::feed_saved,
+            commands::feed_watched,
+            commands::feed_groups,
+            commands::feed_group_add,
+            commands::feed_group_update,
+            commands::feed_group_remove,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

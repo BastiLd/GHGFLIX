@@ -28,8 +28,9 @@ use std::sync::LazyLock;
 pub const FEEDS_KEY: &str = "feeds";
 pub const ITEMS_KEY: &str = "feed_items";
 
-/// So viele Beiträge werden insgesamt aufgehoben.
-const MAX_ITEMS: usize = 300;
+/* So viele Beiträge werden insgesamt aufgehoben. Mit Gruppen kommen schnell
+   10+ Abos zusammen — 600 sind als JSON immer noch nur wenige hundert KB. */
+const MAX_ITEMS: usize = 600;
 /// So viele Beiträge werden pro Feed und Abruf angesehen.
 const MAX_PRO_FEED: usize = 15;
 
@@ -48,6 +49,52 @@ pub struct Feed {
     /// Zeitpunkt des letzten erfolgreichen Abrufs (0 = noch nie).
     pub zuletzt: i64,
     pub fehler: Option<String>,
+    /// Zu welcher Gruppe (Film/Serie) gehoert dieses Abo? None = keine.
+    #[serde(default)]
+    pub gruppe_id: Option<String>,
+}
+
+/* ══ Gruppen ══════════════════════════════════════════════════════════════
+   Eine Gruppe ist ein Thema: ein Film, eine Filmreihe oder eine Serie. Darin
+   liegen die Abos und Blogs, die dazu gehoeren.
+
+   Warum am ABO und nicht am einzelnen Beitrag: ein Kanal bleibt beim Thema.
+   Einmal einsortiert, landet alles Neue von selbst richtig. */
+
+pub const GRUPPEN_KEY: &str = "feed_gruppen";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Gruppe {
+    pub id: String,
+    pub name: String,
+    pub emoji: String,
+    pub farbe: Option<String>,
+    /// Beim Oeffnen der Seite direkt aufklappen. Hoechstens EINE Gruppe.
+    #[serde(default)]
+    pub standard_offen: bool,
+    #[serde(default)]
+    pub sortierung: i64,
+    #[serde(default)]
+    pub angelegt: i64,
+}
+
+/// Eine Gruppe samt Zaehlern, so wie die Kachelansicht sie braucht.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GruppenKachel {
+    pub id: Option<String>,
+    pub name: String,
+    pub emoji: String,
+    pub farbe: Option<String>,
+    pub standard_offen: bool,
+    pub sortierung: i64,
+    pub abos: i64,
+    pub kanaele: i64,
+    pub blogs: i64,
+    pub beitraege: i64,
+    pub ungelesen: i64,
+    pub bilder: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +110,14 @@ pub struct Beitrag {
     pub beschreibung: Option<String>,
     pub veroeffentlicht: i64,
     pub gelesen: bool,
+    /// None = noch nicht geprueft. Der Feed verraet es nicht.
+    #[serde(default)]
+    pub ist_short: Option<bool>,
+    /// Merkliste („Spaeter ansehen")
+    #[serde(default)]
+    pub gemerkt: bool,
+    #[serde(default)]
+    pub gesehen: bool,
     pub entdeckt: i64,
     /// Nur beim Ausliefern gefüllt (Name des Abos).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -312,6 +367,7 @@ pub async fn abonnieren(
             hinzugefuegt: jetzt(),
             zuletzt: 0,
             fehler: None,
+            gruppe_id: None,
         }
     } else {
         let kanal_id = kanal_id_ermitteln(http, eingabe).await?;
@@ -335,6 +391,7 @@ pub async fn abonnieren(
             hinzugefuegt: jetzt(),
             zuletzt: 0,
             fehler: None,
+            gruppe_id: None,
         }
     };
 
@@ -358,7 +415,15 @@ pub fn abbestellen(conn: &Connection, id: &str) -> Result<bool> {
     Ok(true)
 }
 
-pub fn feed_aendern(conn: &Connection, id: &str, benachrichtigen: Option<bool>, titel: Option<String>) -> Result<Feed> {
+/// `gruppe_id`: None = nicht anfassen, Some(None) = aus der Gruppe nehmen,
+/// Some(Some(id)) = in diese Gruppe stecken.
+pub fn feed_aendern(
+    conn: &Connection,
+    id: &str,
+    benachrichtigen: Option<bool>,
+    titel: Option<String>,
+    gruppe_id: Option<Option<String>>,
+) -> Result<Feed> {
     let mut feeds = feeds_laden(conn);
     let f = feeds
         .iter_mut()
@@ -371,6 +436,9 @@ pub fn feed_aendern(conn: &Connection, id: &str, benachrichtigen: Option<bool>, 
         if !t.trim().is_empty() {
             f.titel = t;
         }
+    }
+    if let Some(g) = gruppe_id {
+        f.gruppe_id = g;
     }
     let kopie = f.clone();
     feeds_speichern(conn, &feeds)?;
@@ -419,6 +487,9 @@ fn beitrag_aus(block: &str, feed: &Feed) -> Option<Beitrag> {
         beschreibung,
         veroeffentlicht: datum.and_then(|d| zeit_aus(&d)).unwrap_or_else(jetzt),
         gelesen: false,
+        ist_short: None,
+        gemerkt: false,
+        gesehen: false,
         entdeckt: jetzt(),
         feed_titel: None,
     })
@@ -531,6 +602,21 @@ pub async fn abholen(
         }
     }
 
+    /* Shorts-Marke nachtragen — nur fuer Beitraege, die sie noch nicht haben.
+       Bewusst NACH dem Einsammeln und mit Obergrenze: bei einem frisch
+       abonnierten Kanal waeren es sonst 15 zusaetzliche Abrufe auf einmal.
+       Was uebrig bleibt, holt der naechste Durchlauf. */
+    let offen: Vec<(usize, String)> = vorhanden
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.art == "youtube" && b.ist_short.is_none())
+        .filter_map(|(i, b)| b.video_id.clone().map(|v| (i, v)))
+        .take(25)
+        .collect();
+    for (i, vid) in offen {
+        vorhanden[i].ist_short = ist_short_pruefen(&vid).await;
+    }
+
     vorhanden.sort_by(|a, b| b.veroeffentlicht.cmp(&a.veroeffentlicht));
     {
         let conn = sperre.lock().unwrap();
@@ -542,24 +628,293 @@ pub async fn abholen(
 
 /* ── Lesen ─────────────────────────────────────────────────────────────── */
 
-pub fn beitraege(conn: &Connection, art: Option<&str>, limit: usize, nur_ungelesen: bool) -> Vec<Beitrag> {
+/// Alle Filter der Oberflaeche in einem Aufruf.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Filter {
+    pub art: Option<String>,
+    /// Some(Some(id)) = genau diese Gruppe, Some(None) = nur gruppenlose,
+    /// None = egal.
+    #[serde(default)]
+    pub gruppe_id: Option<Option<String>>,
+    pub feed_id: Option<String>,
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub nur_ungelesen: bool,
+    #[serde(default)]
+    pub nur_gemerkt: bool,
+    #[serde(default)]
+    pub ohne_gesehene: bool,
+    /// "shorts" | "videos" | None
+    pub format: Option<String>,
+    pub suche: Option<String>,
+    /// "neu" | "alt" | "kanal"
+    pub sortierung: Option<String>,
+}
+
+pub fn beitraege(conn: &Connection, f: &Filter) -> Vec<Beitrag> {
     let feeds = feeds_laden(conn);
-    beitraege_laden(conn)
+    let titel_von = |id: &str| {
+        feeds.iter().find(|x| x.id == id).map(|x| x.titel.clone()).unwrap_or_else(|| "Unbekannt".into())
+    };
+
+    // Welche Abo-IDs sind erlaubt? None = alle.
+    let erlaubt: Option<HashSet<String>> = f.gruppe_id.as_ref().map(|g| {
+        feeds
+            .iter()
+            .filter(|x| match g {
+                Some(id) => x.gruppe_id.as_deref() == Some(id.as_str()),
+                None => x.gruppe_id.is_none(),
+            })
+            .map(|x| x.id.clone())
+            .collect()
+    });
+
+    let q = f.suche.as_ref().map(|s| s.to_lowercase()).filter(|s| !s.trim().is_empty());
+
+    let mut liste: Vec<Beitrag> = beitraege_laden(conn)
         .into_iter()
-        .filter(|b| art.is_none_or(|a| b.art == a))
-        .filter(|b| !nur_ungelesen || !b.gelesen)
-        .take(limit.clamp(1, 300))
+        .filter(|b| f.art.as_deref().is_none_or(|a| b.art == a))
+        .filter(|b| f.feed_id.as_deref().is_none_or(|id| b.feed_id == id))
+        .filter(|b| erlaubt.as_ref().is_none_or(|s| s.contains(&b.feed_id)))
+        .filter(|b| !f.nur_ungelesen || !b.gelesen)
+        .filter(|b| !f.nur_gemerkt || b.gemerkt)
+        .filter(|b| !f.ohne_gesehene || !b.gesehen)
+        .filter(|b| match f.format.as_deref() {
+            Some("shorts") => b.ist_short == Some(true),
+            // "videos": auch ungeprueft zeigen — lieber einmal zu viel als
+            // etwas verschwinden lassen.
+            Some("videos") => b.ist_short != Some(true),
+            _ => true,
+        })
+        .filter(|b| match &q {
+            None => true,
+            Some(q) => {
+                let wo = format!(
+                    "{} {} {}",
+                    b.titel,
+                    b.beschreibung.clone().unwrap_or_default(),
+                    titel_von(&b.feed_id)
+                )
+                .to_lowercase();
+                wo.contains(q.trim())
+            }
+        })
+        .collect();
+
+    match f.sortierung.as_deref() {
+        Some("alt") => liste.sort_by(|a, b| a.veroeffentlicht.cmp(&b.veroeffentlicht)),
+        Some("kanal") => liste.sort_by(|a, b| {
+            titel_von(&a.feed_id)
+                .to_lowercase()
+                .cmp(&titel_von(&b.feed_id).to_lowercase())
+                .then(b.veroeffentlicht.cmp(&a.veroeffentlicht))
+        }),
+        _ => liste.sort_by(|a, b| b.veroeffentlicht.cmp(&a.veroeffentlicht)),
+    }
+
+    liste
+        .into_iter()
+        .take(f.limit.unwrap_or(60).clamp(1, 400))
         .map(|mut b| {
-            b.feed_titel = Some(
-                feeds
-                    .iter()
-                    .find(|f| f.id == b.feed_id)
-                    .map(|f| f.titel.clone())
-                    .unwrap_or_else(|| "Unbekannt".into()),
-            );
+            b.feed_titel = Some(titel_von(&b.feed_id));
             b
         })
         .collect()
+}
+
+/// Merkliste („Spaeter ansehen") umschalten.
+pub fn merken(conn: &Connection, id: &str, an: bool) -> Result<bool> {
+    let mut alle = beitraege_laden(conn);
+    let b = alle.iter_mut().find(|x| x.id == id).ok_or_else(|| anyhow!("Diesen Beitrag gibt es nicht"))?;
+    b.gemerkt = an;
+    beitraege_speichern(conn, &alle)?;
+    Ok(an)
+}
+
+/// Gesehen-Markierung umschalten. Gesehenes gilt zugleich als gelesen.
+pub fn gesehen_setzen(conn: &Connection, id: &str, an: bool) -> Result<bool> {
+    let mut alle = beitraege_laden(conn);
+    let b = alle.iter_mut().find(|x| x.id == id).ok_or_else(|| anyhow!("Diesen Beitrag gibt es nicht"))?;
+    b.gesehen = an;
+    if an {
+        b.gelesen = true;
+    }
+    beitraege_speichern(conn, &alle)?;
+    Ok(an)
+}
+
+/* ── Gruppen verwalten ─────────────────────────────────────────────────── */
+
+pub fn gruppen_laden(conn: &Connection) -> Vec<Gruppe> {
+    lesen(conn, GRUPPEN_KEY)
+}
+fn gruppen_speichern(conn: &Connection, v: &[Gruppe]) -> Result<()> {
+    db::set_setting(conn, GRUPPEN_KEY, &serde_json::to_string(v)?)?;
+    Ok(())
+}
+
+pub fn gruppe_anlegen(conn: &Connection, name: &str, emoji: Option<&str>, farbe: Option<&str>) -> Result<Gruppe> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Err(anyhow!("Die Gruppe braucht einen Namen"));
+    }
+    let mut alle = gruppen_laden(conn);
+    if alle.iter().any(|g| g.name.eq_ignore_ascii_case(n)) {
+        return Err(anyhow!("Eine Gruppe mit diesem Namen gibt es schon"));
+    }
+    let g = Gruppe {
+        id: neue_id().replacen('f', "g", 1),
+        name: n.to_string(),
+        emoji: emoji.unwrap_or("📺").chars().take(4).collect(),
+        farbe: farbe.map(String::from),
+        standard_offen: false,
+        sortierung: alle.len() as i64,
+        angelegt: jetzt(),
+    };
+    alle.push(g.clone());
+    gruppen_speichern(conn, &alle)?;
+    Ok(g)
+}
+
+pub fn gruppe_aendern(
+    conn: &Connection,
+    id: &str,
+    name: Option<String>,
+    emoji: Option<String>,
+    farbe: Option<Option<String>>,
+    standard_offen: Option<bool>,
+    sortierung: Option<i64>,
+) -> Result<Gruppe> {
+    let mut alle = gruppen_laden(conn);
+    if !alle.iter().any(|g| g.id == id) {
+        return Err(anyhow!("Diese Gruppe gibt es nicht"));
+    }
+    // Nur EINE Gruppe darf beim Oeffnen aufgehen.
+    if standard_offen == Some(true) {
+        for g in alle.iter_mut() {
+            g.standard_offen = false;
+        }
+    }
+    let g = alle.iter_mut().find(|g| g.id == id).unwrap();
+    if let Some(n) = name {
+        if !n.trim().is_empty() {
+            g.name = n.trim().to_string();
+        }
+    }
+    if let Some(e) = emoji {
+        let e: String = e.chars().take(4).collect();
+        g.emoji = if e.is_empty() { "📺".into() } else { e };
+    }
+    if let Some(f) = farbe {
+        g.farbe = f;
+    }
+    if let Some(s) = standard_offen {
+        g.standard_offen = s;
+    }
+    if let Some(s) = sortierung {
+        g.sortierung = s;
+    }
+    let kopie = g.clone();
+    gruppen_speichern(conn, &alle)?;
+    Ok(kopie)
+}
+
+/// Gruppe loeschen. Die Abos darin bleiben — sie werden nur gruppenlos.
+pub fn gruppe_loeschen(conn: &Connection, id: &str) -> Result<i64> {
+    let rest: Vec<Gruppe> = gruppen_laden(conn).into_iter().filter(|g| g.id != id).collect();
+    gruppen_speichern(conn, &rest)?;
+    let mut feeds = feeds_laden(conn);
+    let mut n = 0;
+    for f in feeds.iter_mut() {
+        if f.gruppe_id.as_deref() == Some(id) {
+            f.gruppe_id = None;
+            n += 1;
+        }
+    }
+    if n > 0 {
+        feeds_speichern(conn, &feeds)?;
+    }
+    Ok(n)
+}
+
+/// Gruppen mit Zaehlern, so wie die Kachelansicht sie braucht.
+pub fn gruppen_uebersicht(conn: &Connection) -> Vec<GruppenKachel> {
+    let feeds = feeds_laden(conn);
+    let items = beitraege_laden(conn);
+    let bau = |g: Option<&Gruppe>| -> GruppenKachel {
+        let abos: Vec<&Feed> = feeds
+            .iter()
+            .filter(|f| match g {
+                Some(g) => f.gruppe_id.as_deref() == Some(g.id.as_str()),
+                None => f.gruppe_id.is_none(),
+            })
+            .collect();
+        let ids: HashSet<&str> = abos.iter().map(|f| f.id.as_str()).collect();
+        let meine: Vec<&Beitrag> = items.iter().filter(|b| ids.contains(b.feed_id.as_str())).collect();
+        GruppenKachel {
+            id: g.map(|g| g.id.clone()),
+            name: g.map(|g| g.name.clone()).unwrap_or_else(|| "Ohne Gruppe".into()),
+            emoji: g.map(|g| g.emoji.clone()).unwrap_or_else(|| "📁".into()),
+            farbe: g.and_then(|g| g.farbe.clone()),
+            standard_offen: g.map(|g| g.standard_offen).unwrap_or(false),
+            sortierung: g.map(|g| g.sortierung).unwrap_or(9999),
+            abos: abos.len() as i64,
+            kanaele: abos.iter().filter(|f| f.art == "youtube").count() as i64,
+            blogs: abos.iter().filter(|f| f.art == "blog").count() as i64,
+            beitraege: meine.len() as i64,
+            ungelesen: meine.iter().filter(|b| !b.gelesen).count() as i64,
+            bilder: meine.iter().filter_map(|b| b.bild.clone()).take(4).collect(),
+        }
+    };
+    let mut gruppen = gruppen_laden(conn);
+    gruppen.sort_by_key(|g| g.sortierung);
+    let mut liste: Vec<GruppenKachel> = gruppen.iter().map(|g| bau(Some(g))).collect();
+    let ohne = bau(None);
+    // „Ohne Gruppe" nur zeigen, wenn dort wirklich etwas liegt.
+    if ohne.abos > 0 {
+        liste.push(ohne);
+    }
+    liste
+}
+
+/**
+Ist dieses YouTube-Video ein Short?
+
+Der Atom-Feed sagt es NICHT. Es gibt aber einen verlaesslichen Weg ohne
+API-Schluessel: `youtube.com/shorts/<id>` antwortet unterschiedlich —
+echtes Short mit 200, normales Video mit einer Umleitung auf /watch.
+Deshalb wird die Umleitung bewusst NICHT gefolgt.
+
+Bei Fehler oder Zeitueberschreitung: None (unbekannt) statt zu raten.
+*/
+/* Eigener HTTP-Client NUR fuer die Shorts-Pruefung.
+   WARUM: reqwest folgt Umleitungen standardmaessig. Genau die Umleitung ist
+   hier aber die Antwort — wuerde ihr gefolgt, kaeme immer 200 zurueck und
+   JEDES Video gaelte als Short. */
+static OHNE_UMLEITUNG: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_default()
+});
+
+async fn ist_short_pruefen(video_id: &str) -> Option<bool> {
+    let res = OHNE_UMLEITUNG
+        .head(format!("https://www.youtube.com/shorts/{video_id}"))
+        .header("User-Agent", "Mozilla/5.0 (compatible; GHGFlix/1.0)")
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+        .ok()?;
+    let s = res.status().as_u16();
+    if (300..400).contains(&s) {
+        Some(false)
+    } else if s == 200 {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 pub fn ungelesen_zahl(conn: &Connection, art: Option<&str>) -> i64 {
@@ -638,6 +993,7 @@ mod tests {
             hinzugefuegt: 0,
             zuletzt: 1,
             fehler: None,
+            gruppe_id: None,
         }
     }
 

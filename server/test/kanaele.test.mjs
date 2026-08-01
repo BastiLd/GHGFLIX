@@ -225,6 +225,95 @@ console.log("\n── YouTube-Feed lesen ─────────────
   pruefe("und der Blog bleibt davon unberührt", k.beitraege({ art: "blog" }).length === 2);
 }
 
+// ── Gruppen ─────────────────────────────────────────────────────────────────
+console.log("\n── Gruppen (eine Kachel = ein Film oder eine Serie) ────────");
+let gruppeId = null;
+{
+  const g = k.gruppeAnlegen({ name: "Miraculous", emoji: "🐞" });
+  gruppeId = g.id;
+  pruefe("eine Gruppe laesst sich anlegen", !!g.id && g.name === "Miraculous" && g.emoji === "🐞");
+
+  let doppelt = false;
+  try { k.gruppeAnlegen({ name: "miraculous" }); } catch { doppelt = true; }
+  pruefe("derselbe Name wird nicht zweimal angelegt", doppelt);
+
+  let leer = false;
+  try { k.gruppeAnlegen({ name: "   " }); } catch { leer = true; }
+  pruefe("eine Gruppe ohne Namen wird abgelehnt", leer);
+
+  // Der Blog aus den Tests oben in die Gruppe stecken.
+  k.feedAendern(blogId, { gruppeId: g.id });
+  const kacheln = k.gruppenUebersicht();
+  const meine = kacheln.find((x) => x.id === g.id);
+  pruefe("die Kachel zaehlt das Abo", meine?.abos === 1 && meine?.blogs === 1);
+  pruefe("und die Beitraege darin", meine?.beitraege === 2);
+
+  /* Der ZWECK der Gruppe: nur ihre Beitraege zeigen. Ohne Filterung waere
+     die Gruppe nur Zierde. */
+  pruefe("Beitraege der Gruppe sind gefiltert", k.beitraege({ gruppeId: g.id }).length === 2);
+  pruefe("eine fremde Gruppe liefert nichts", k.beitraege({ gruppeId: "gibtsnicht" }).length === 0);
+  pruefe("gruppeId null liefert nur die gruppenlosen", k.beitraege({ gruppeId: null }).every((b) => b.gruppeId == null));
+  pruefe("ohne gruppeId kommt alles", k.beitraege({}).length >= 2);
+
+  // Nur EINE Gruppe darf beim Oeffnen aufgehen.
+  const zweite = k.gruppeAnlegen({ name: "Marvel", emoji: "🦸" });
+  k.gruppeAendern(g.id, { standardOffen: true });
+  k.gruppeAendern(zweite.id, { standardOffen: true });
+  const offen = k.gruppenUebersicht().filter((x) => x.standardOffen);
+  pruefe("hoechstens eine Gruppe oeffnet automatisch", offen.length === 1 && offen[0].id === zweite.id);
+
+  k.gruppeAendern(g.id, { farbe: "#ff4d5a", emoji: "🎬" });
+  const nachher = k.gruppenUebersicht().find((x) => x.id === g.id);
+  pruefe("Farbe und Symbol lassen sich aendern", nachher.farbe === "#ff4d5a" && nachher.emoji === "🎬");
+
+  // Loeschen darf die Abos NICHT mitnehmen.
+  const vorherAbos = k.feedsLaden().length;
+  const r = k.gruppeLoeschen(zweite.id);
+  pruefe("Loeschen entfernt nur die Gruppe", k.feedsLaden().length === vorherAbos && r.geloescht);
+}
+
+// ── Suche, Sortierung, Merkliste, Gesehen ───────────────────────────────────
+console.log("\n── Suche, Merkliste und Gesehen ────────────────────────────");
+{
+  pruefe("Suche findet den Beitrag", k.beitraege({ suche: "Nummer 2" }).length === 1);
+  pruefe("Suche ohne Treffer liefert nichts", k.beitraege({ suche: "voellig-egal-xyz" }).length === 0);
+
+  const alle = k.beitraege({ sortierung: "neu" });
+  const alt = k.beitraege({ sortierung: "alt" });
+  pruefe("Sortierung dreht die Reihenfolge um", alle[0].id === alt[alt.length - 1].id);
+
+  const eins = alle[0];
+  k.merken(eins.id, true);
+  pruefe("ein Beitrag laesst sich merken", k.beitraege({ nurGemerkt: true }).length === 1);
+  k.merken(eins.id, false);
+  pruefe("und wieder aus der Merkliste nehmen", k.beitraege({ nurGemerkt: true }).length === 0);
+
+  k.gesehenSetzen(eins.id, true);
+  pruefe("Gesehenes gilt zugleich als gelesen", k.beitraege({}).find((b) => b.id === eins.id).gelesen === true);
+  pruefe("und laesst sich ausblenden", !k.beitraege({ ohneGesehene: true }).some((b) => b.id === eins.id));
+  k.gesehenSetzen(eins.id, false);
+}
+
+// ── Shorts-Filter ───────────────────────────────────────────────────────────
+console.log("\n── Shorts trennen ──────────────────────────────────────────");
+{
+  const alle = k.beitraege({});
+  // Marken von Hand setzen — der echte Abruf gegen YouTube gehoert nicht in
+  // einen Test, der ohne Netz laufen soll.
+  const roh = JSON.parse((await import("../src/db.js")).getSetting("feed_items"));
+  roh[0].istShort = true;
+  roh[1].istShort = false;
+  if (roh[2]) roh[2].istShort = null;
+  (await import("../src/db.js")).setSetting("feed_items", JSON.stringify(roh));
+
+  const shorts = k.beitraege({ format: "shorts" });
+  const videos = k.beitraege({ format: "videos" });
+  pruefe("Shorts-Filter liefert nur echte Shorts", shorts.length === 1 && shorts[0].istShort === true);
+  /* Ungeprueftes (istShort === null) MUSS bei "Videos" mitkommen - sonst
+     verschwinden neue Beitraege, solange die Pruefung noch aussteht. */
+  pruefe("Video-Filter zeigt auch ungeprueftes", videos.every((b) => b.istShort !== true) && videos.length === alle.length - 1);
+}
+
 // ── Abbestellen ─────────────────────────────────────────────────────────────
 console.log("\n── Abbestellen ─────────────────────────────────────────────");
 {
