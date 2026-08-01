@@ -213,9 +213,20 @@ export async function blogFeedErmitteln(eingabe) {
   const roh = String(eingabe || "").trim();
   if (!roh) throw new Error("Bitte eine Adresse angeben");
 
-  // Welche Adressen probieren wir? Mit Schema wie angegeben, sonst https und
-  // danach http (manche kleinen Seiten können kein TLS).
-  const versuche = /^https?:\/\//i.test(roh) ? [roh] : [`https://${roh}`, `http://${roh}`];
+  /* Welche Adressen probieren wir?
+     Gemessen am 01.08.2026: Der Nutzer gab "https://serienblitz.de/feed"
+     (mit Schema) direkt ein. Vorher wurde bei vorhandenem Schema NUR diese
+     eine Adresse versucht — https scheiterte mit ECONNREFUSED, und es gab
+     KEINEN http-Rückfall, obwohl genau der bei schemalosen Eingaben schon
+     lief. Jetzt: bei "https://" zusätzlich dieselbe Adresse über http. */
+  const versuche = [];
+  if (/^https:\/\//i.test(roh)) {
+    versuche.push(roh, roh.replace(/^https:\/\//i, "http://"));
+  } else if (/^http:\/\//i.test(roh)) {
+    versuche.push(roh);
+  } else {
+    versuche.push(`https://${roh}`, `http://${roh}`);
+  }
 
   let text = null;
   let basis = null;

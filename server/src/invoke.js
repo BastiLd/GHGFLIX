@@ -277,6 +277,48 @@ export async function handleInvoke(cmd, a = {}) {
       if (lib) removeLibraryContent(lib.path, lib.kind);
       return null;
     }
+    /* Eine Folge (typischerweise ein Special) ist eigentlich ein Film und
+       soll in den "Filme"-Reiter der Serie wandern.
+       Gemeldet: bei Miraculous sind unter "Filme & Specials" sechs Dateien,
+       aber NUR "Awakening" ist wirklich ein Kinofilm — die anderen fünf
+       (New York, Shanghai, Paris, London, Tokyo) sind echte Specials und
+       sollen dort bleiben. Der Nutzer wählt das pro Datei selbst aus. */
+    case "episode_to_movie": {
+      const epId = Number(a.episodeId);
+      const ep = d.prepare("SELECT * FROM episodes WHERE id=?").get(epId);
+      if (!ep) throw new Error("Folge nicht gefunden");
+      const show = d.prepare("SELECT * FROM shows WHERE id=?").get(ep.show_id);
+      const titel = (ep.title && ep.title.trim()) || show?.title || "Film";
+
+      d.prepare("INSERT INTO movies (title, path, overview, added_at) VALUES (?,?,?,?) ON CONFLICT(path) DO NOTHING")
+        .run(titel, ep.path, ep.overview || null, Date.now());
+      const movieId = d.prepare("SELECT id FROM movies WHERE path=?").get(ep.path).id;
+
+      // Weitere Qualitätsvarianten derselben Datei: nicht als eigener Film
+      // dupliziert, aber auch nicht mehr als Folge — nur von der erneuten
+      // Aufnahme ausschließen.
+      const altPfade = d.prepare("SELECT path FROM episode_files WHERE episode_id=?").all(epId).map((r) => r.path);
+      d.prepare("DELETE FROM episode_files WHERE episode_id=?").run(epId);
+      d.prepare("DELETE FROM episodes WHERE id=?").run(epId);
+
+      const liste = JSON.parse(getSetting("movie_override_files") || "[]");
+      const bekannt = new Set(liste.map((p) => String(p).toLowerCase()));
+      for (const p of [ep.path, ...altPfade]) {
+        if (!bekannt.has(p.toLowerCase())) {
+          liste.push(p);
+          bekannt.add(p.toLowerCase());
+        }
+      }
+      setSetting("movie_override_files", JSON.stringify(liste));
+
+      /* Sicherheitsnetz: fuerSerie() erkennt Filme im Serienordner schon von
+         selbst (dieselbe "Filme & Specials"-Wurzel wie die Staffeln) — die
+         ausdrückliche Verknüpfung greift nur, falls diese Heuristik einmal
+         nicht zutrifft (andere Ordnerstruktur). */
+      if (show) serienfilme.verknuepfen(show, { title: titel, year: null }, true);
+      return movieId;
+    }
+
     // ===== Auswahl-Fenster für Ordner (Punkt 1) =====
     case "preview_folder":
       return ordnerwahl.preview(String(a.path || ""));

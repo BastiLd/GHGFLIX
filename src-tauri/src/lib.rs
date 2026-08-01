@@ -234,6 +234,7 @@ pub fn run() {
             commands::feed_group_add,
             commands::feed_group_update,
             commands::feed_group_remove,
+            commands::episode_to_movie,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

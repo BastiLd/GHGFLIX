@@ -6,7 +6,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { linkMovieToShow, listShows } from "../lib/api";
 import { MovieCardItem, ShowCardItem } from "../components/cards";
 import { MediaRow } from "../components/MediaRow";
-import { detectIntros, getSeasonArt, getShowDetail, listFavorites, listProgress, mediaThumbnail, repairSeasonTitles, resetEpisodeNumbersFromFiles, revealInExplorer, setSeasonWatched, setShowIntro, setShowWatched, setWatched, toggleFavorite } from "../lib/api";
+import { detectIntros, episodeToMovie, getSeasonArt, getShowDetail, listFavorites, listProgress, mediaThumbnail, repairSeasonTitles, resetEpisodeNumbersFromFiles, revealInExplorer, setSeasonWatched, setShowIntro, setShowWatched, setWatched, toggleFavorite } from "../lib/api";
 import { openCtx } from "../lib/contextmenu";
 import { enqueueSeasonRest, playback } from "../lib/playback";
 import { useUiPrefs } from "../lib/uiPrefs";
@@ -730,6 +730,7 @@ function EpisodeRow({
   const [menu, setMenu] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const toast = useStore((s) => s.toast);
+  const qcRow = useQueryClient();
   const epLocalStills = useUiPrefs((s) => s.epLocalStills);
   const [localStill, setLocalStill] = useState<string | null>(null);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -799,6 +800,24 @@ function EpisodeRow({
       label: "In Ordner anzeigen",
       onClick: () => void revealInExplorer(ep.path).catch((e) => toast(String(e), "error")),
     },
+    /* Nur bei Specials sinnvoll: eine echte Serienfolge in einen Film
+       umzuwandeln, ergäbe keinen Sinn (Staffel/Folge gingen verloren). */
+    ...(ep.season === 0
+      ? [
+          {
+            label: "Ist ein Film → in „Filme“ verschieben",
+            onClick: () => {
+              void episodeToMovie(ep.id)
+                .then(() => {
+                  qcRow.invalidateQueries({ queryKey: ["show"] });
+                  qcRow.invalidateQueries({ queryKey: ["movies"] });
+                  toast(`„${ep.title || "Diese Datei"}" ist jetzt im Filme-Reiter`, "success");
+                })
+                .catch((e) => toast(String(e), "error"));
+            },
+          },
+        ]
+      : []),
   ];
 
   return (

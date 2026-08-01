@@ -170,8 +170,23 @@ function ignorierteDateien() {
   }
 }
 
+/* Dateien, die der Nutzer per "Ist ein Film" aus einer Serie herausgelöst hat
+   (Punkt 3, Nachbesserung). Sie stehen bereits in der movies-Tabelle — ohne
+   diese Liste würde der nächste Scan sie als Serienfolge wieder aufnehmen. */
+function filmUeberschreibungen() {
+  try {
+    const arr = JSON.parse(getSetting("movie_override_files") || "[]");
+    return new Set(
+      (Array.isArray(arr) ? arr : []).map((p) => String(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 function* walkVideos(root, maxDepth = 8) {
   const ignoriert = ignorierteDateien();
+  const filmUeb = filmUeberschreibungen();
   const stack = [{ dir: root, depth: 0 }];
   while (stack.length) {
     const { dir, depth } = stack.pop();
@@ -183,7 +198,9 @@ function* walkVideos(root, maxDepth = 8) {
       } else if (e.isFile() && isVideo(e.name)) {
         const stem = fileStem(e.name);
         if (isJunkClip(stem)) continue;
-        if (ignoriert.size && ignoriert.has(p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase())) continue;
+        const norm = p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+        if (ignoriert.size && ignoriert.has(norm)) continue;
+        if (filmUeb.size && filmUeb.has(norm)) continue;
         // Winzige Dateien sind fast immer Reste/Werbeschnipsel. Bewusst NIEDRIG
         // (1 MB), damit kurze Zeichentrickfolgen oder 240p-Rips nicht verschwinden.
         try {

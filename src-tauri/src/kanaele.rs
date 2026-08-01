@@ -341,7 +341,12 @@ pub async fn blog_feed_ermitteln(http: &reqwest::Client, eingabe: &str) -> Resul
         return Err(anyhow!("Bitte eine Adresse angeben"));
     }
 
-    let versuche: Vec<String> = if roh.starts_with("http://") || roh.starts_with("https://") {
+    /* Gemessen am 01.08.2026: bei vorhandenem "https://"-Schema fehlte der
+       http-Rückfall — https scheiterte mit ECONNREFUSED und es blieb dabei,
+       obwohl der Rückfall bei schemalosen Eingaben schon lief. */
+    let versuche: Vec<String> = if let Some(rest) = roh.strip_prefix("https://") {
+        vec![roh.to_string(), format!("http://{rest}")]
+    } else if roh.starts_with("http://") {
         vec![roh.to_string()]
     } else {
         vec![format!("https://{roh}"), format!("http://{roh}")]

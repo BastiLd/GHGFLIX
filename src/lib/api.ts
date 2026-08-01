@@ -47,6 +47,9 @@ export const linkMovieToShow = (showId: number, movieId: number, linked: boolean
  *  [geändert, gesamt] zurück. */
 export const resetEpisodeNumbersFromFiles = (showId: number, season: number) =>
   invoke<[number, number]>("reset_episode_numbers_from_files", { showId, season });
+/** Eine Folge (typischerweise ein Special) ist eigentlich ein Film — in den
+ *  Filme-Reiter der Serie verschieben. Gibt die neue Film-ID zurück. */
+export const episodeToMovie = (episodeId: number) => invoke<number>("episode_to_movie", { episodeId });
 export const listIgnoredFiles = () => invoke<string[]>("list_ignored_files");
 export const unignoreFiles = (paths: string[]) => invoke<number>("unignore_files", { paths });
 

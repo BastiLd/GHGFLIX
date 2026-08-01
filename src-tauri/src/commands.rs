@@ -1960,3 +1960,68 @@ pub fn reset_episode_numbers_from_files(
     let _ = app.emit("library://updated", ());
     Ok((geaendert, total))
 }
+
+/// Eine Folge (typischerweise ein Special) ist eigentlich ein Film und soll
+/// in den "Filme"-Reiter der Serie wandern.
+///
+/// Gemeldet: bei Miraculous sind unter "Filme & Specials" sechs Dateien, aber
+/// NUR "Awakening" ist wirklich ein Kinofilm - die anderen fuenf (New York,
+/// Shanghai, Paris, London, Tokyo) sind echte Specials und sollen dort
+/// bleiben. Der Nutzer waehlt das pro Datei selbst aus.
+#[tauri::command]
+pub fn episode_to_movie(app: AppHandle, state: State<AppState>, episode_id: i64) -> R<i64> {
+    let conn = state.conn.lock().unwrap();
+    let (path, ep_title, overview, show_title): (String, Option<String>, Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT e.path, e.title, e.overview, s.title FROM episodes e JOIN shows s ON s.id = e.show_id WHERE e.id=?1",
+            [episode_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .map_err(|_| "Folge nicht gefunden".to_string())?;
+    let titel = ep_title
+        .filter(|t| !t.trim().is_empty())
+        .or(show_title)
+        .unwrap_or_else(|| "Film".into());
+    let jetzt_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    conn.execute(
+        "INSERT INTO movies(title, path, overview, added_at) VALUES(?1,?2,?3,?4)
+         ON CONFLICT(path) DO NOTHING",
+        params![titel, path, overview, jetzt_ms],
+    )
+    .map_err(err)?;
+    let movie_id: i64 = conn
+        .query_row("SELECT id FROM movies WHERE path=?1", [&path], |r| r.get(0))
+        .map_err(err)?;
+
+    // Weitere Qualitaetsvarianten derselben Datei: nicht als eigener Film
+    // dupliziert, aber auch nicht mehr als Folge - nur von der erneuten
+    // Aufnahme ausschliessen.
+    let mut alle_pfade = vec![path.clone()];
+    if let Ok(mut stmt) = conn.prepare("SELECT path FROM episode_files WHERE episode_id=?1") {
+        if let Ok(rows) = stmt.query_map([episode_id], |r| r.get::<_, String>(0)) {
+            alle_pfade.extend(rows.flatten());
+        }
+    }
+    conn.execute("DELETE FROM episode_files WHERE episode_id=?1", [episode_id]).map_err(err)?;
+    conn.execute("DELETE FROM episodes WHERE id=?1", [episode_id]).map_err(err)?;
+
+    let mut liste: Vec<String> = db::get_setting(&conn, "movie_override_files")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    for p in &alle_pfade {
+        if !liste.iter().any(|x| x == p) {
+            liste.push(p.clone());
+        }
+    }
+    let _ = db::set_setting(&conn, "movie_override_files", &serde_json::to_string(&liste).unwrap_or_default());
+
+    drop(conn);
+    let _ = app.emit("library://updated", ());
+    Ok(movie_id)
+}

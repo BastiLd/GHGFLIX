@@ -545,6 +545,10 @@ function GruppenAnsicht({
   const [busy, setBusy] = useState(false);
   const [abosOffen, setAbosOffen] = useState(false);
   const [einstellen, setEinstellen] = useState(false);
+  /* Eigene Einstellungen pro Abo (Name ändern) — bisher gab es dafür nur die
+     Gruppen-Zuordnung und den Glocken-Schalter, kein Umbenennen. */
+  const [umbenennenId, setUmbenennenId] = useState<string | null>(null);
+  const [umbenennenText, setUmbenennenText] = useState("");
 
   /* „Alles gemischt" ist die Sammelansicht: dort wird NICHT nach Gruppe
      gefiltert, sonst sähe man nur die gruppenlosen Abos. */
@@ -795,12 +799,51 @@ function GruppenAnsicht({
             <div key={f.id} className="flex items-center gap-3 bg-ghg-bg2 border border-ghg-line rounded-lg px-3 py-2">
               {f.art === "youtube" ? <Video className="w-4 h-4 text-ghg-red shrink-0" /> : <Newspaper className="w-4 h-4 text-ghg-red shrink-0" />}
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold truncate">{f.titel}</p>
+                {umbenennenId === f.id ? (
+                  <div className="flex gap-1.5">
+                    <TextInput
+                      value={umbenennenText}
+                      onChange={setUmbenennenText}
+                      autoFocus
+                      onEnter={() =>
+                        void feedUpdate(f.id, { titel: umbenennenText }).then(() => {
+                          setUmbenennenId(null);
+                          auffrischen();
+                        })
+                      }
+                    />
+                    <button
+                      onClick={() =>
+                        void feedUpdate(f.id, { titel: umbenennenText }).then(() => {
+                          setUmbenennenId(null);
+                          auffrischen();
+                        })
+                      }
+                      className="px-2 rounded-md bg-ghg-red text-white text-xs"
+                    >
+                      OK
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-sm font-semibold truncate">{f.titel}</p>
+                )}
                 <p className="text-xs text-ghg-muted truncate">
                   {f.zuletzt > 0 ? `zuletzt geprüft ${vorZeit(f.zuletzt)}` : "noch nicht geprüft"}
                 </p>
                 {f.fehler && <p className="text-xs text-ghg-red truncate">Fehler: {f.fehler}</p>}
               </div>
+              {/* Eigene Einstellungen pro Abo — umbenennen. Gruppe und
+                  Benachrichtigung stehen direkt daneben (siehe unten). */}
+              <button
+                onClick={() => {
+                  setUmbenennenId(f.id);
+                  setUmbenennenText(f.titel);
+                }}
+                title="Umbenennen"
+                className="p-1.5 rounded-md hover:bg-ghg-surface2 text-ghg-muted hover:text-ghg-text"
+              >
+                <Settings2 className="w-4 h-4" />
+              </button>
               <select
                 value={f.gruppeId ?? ""}
                 onChange={(e) => void feedUpdate(f.id, { gruppeId: e.target.value || null }).then(auffrischen)}

@@ -215,6 +215,17 @@ fn backfill_show_keys(conn: &Connection, libs: &[crate::models::Library]) -> Res
 fn scan_tv(conn: &Connection, root: &Path) -> Result<()> {
     // siehe scan_movies: Ablehnungen aus dem Auswahl-Fenster müssen halten.
     let ignored = crate::ordnerwahl::ignored(conn);
+    // Dateien, die per "Ist ein Film" aus einer Serie herausgelöst wurden —
+    // sie stehen schon in movies, sonst würde der nächste Scan sie erneut
+    // als Folge aufnehmen.
+    let film_ueberschreibungen: std::collections::HashSet<String> = db::get_setting(conn, "movie_override_files")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| crate::ordnerwahl::norm(&p))
+        .collect();
     for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
         if !entry.file_type().is_file() {
             continue;
@@ -226,6 +237,9 @@ fn scan_tv(conn: &Connection, root: &Path) -> Result<()> {
         let path_buf = entry.path();
         let path = path_buf.to_string_lossy().to_string();
         if ignored.contains(&crate::ordnerwahl::norm(&path)) {
+            continue;
+        }
+        if film_ueberschreibungen.contains(&crate::ordnerwahl::norm(&path)) {
             continue;
         }
 
