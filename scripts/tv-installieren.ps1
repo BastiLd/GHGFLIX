@@ -136,6 +136,27 @@ if (-not $Datei -or -not (Test-Path $Datei)) {
 $info = Get-Item $Datei
 Info ("{0}  ({1:N1} MB)" -f $info.FullName, ($info.Length / 1MB))
 
+# WARNUNG BEI ALTER DATEI - genau hier ist am 01.08. eine Stunde verlorengegangen:
+# Der EAS-Bau war fertig, aber NICHT heruntergeladen. Im Downloads-Ordner lag
+# noch eine alte APK, die hier brav gefunden und installiert wurde. Danach lief
+# auf dem Fernseher wieder 2.0.0, obwohl gerade 3.3.0 gebaut worden war.
+# Ein Blick auf das Datum haette das sofort gezeigt.
+$alterStunden = [math]::Round(((Get-Date) - $info.LastWriteTime).TotalHours, 1)
+if ($alterStunden -gt 2) {
+  Warn ("Diese Datei ist $alterStunden Stunden alt (vom " + $info.LastWriteTime.ToString("dd.MM.yyyy HH:mm") + ").")
+  Write-Host "     Hast du den NEUEN Bau von expo.dev schon heruntergeladen?" -ForegroundColor Yellow
+  Write-Host "     Die fertige Datei holst du dir so:" -ForegroundColor Yellow
+  Write-Host ""
+  Write-Host "       cd $PSScriptRoot\..\mobile" -ForegroundColor Green
+  Write-Host "       npx eas-cli build:list --platform android --limit 1" -ForegroundColor Green
+  Write-Host ""
+  Write-Host "     Die dort genannte Adresse im Browser oeffnen - oder das Skript mit"
+  Write-Host "     -Datei `"C:\pfad\zur\neuen.apk`" starten."
+  Write-Host ""
+} else {
+  Info ("Datei ist frisch (vom " + $info.LastWriteTime.ToString("dd.MM.yyyy HH:mm") + ")")
+}
+
 # Ist die Datei ueberhaupt ein vollstaendiges ZIP? Genau daran scheitert der
 # Downloader-Weg still: eine halb geladene Datei faengt zwar mit "PK" an, hat
 # am Ende aber kein Inhaltsverzeichnis - Android sagt dann nur "Problem beim
@@ -253,6 +274,35 @@ if ($text -match "Success") {
   Write-Host "Danach dieses Skript noch einmal starten."
   Write-Host "Deine Bibliothek und Fortschritte liegen auf dem Server - es geht nichts verloren."
   exit 1
+} elseif ($text -match "INSTALL_FAILED_INSUFFICIENT_STORAGE") {
+  # Am 01.08. gemessen: 4 GB /data, davon 168 MB frei - Android blockiert dann
+  # jede Installation. 390 MB steckten allein in App-Caches. Die gibt Android
+  # bei Platzmangel ohnehin selbst frei; das hier stoesst es nur bewusst an.
+  # Nichts davon geht verloren, Caches bauen sich von allein wieder auf.
+  Write-Host ""
+  Warn "Auf dem Fernseher ist zu wenig Platz."
+  $frei = Invoke-Adb -s "$TvIp`:5555" shell "df -h /data"
+  Write-Host $frei
+  Write-Host "     Ich lasse Android die App-Zwischenspeicher freigeben (nichts wird geloescht) ..."
+  Invoke-Adb -s "$TvIp`:5555" shell "pm trim-caches 1500M" | Out-Null
+  Start-Sleep -Seconds 8
+  Write-Host (Invoke-Adb -s "$TvIp`:5555" shell "df -h /data")
+  Write-Host "     Zweiter Versuch ..."
+  $text = Invoke-Adb -s "$TvIp`:5555" install -r "$Datei"
+  Write-Host $text
+  if ($text -match "Success") {
+    Gut "Installation erfolgreich (nach Freigabe der Zwischenspeicher)"
+  } else {
+    Write-Host ""
+    Write-Host "Reicht immer noch nicht. Am Fernseher unter" -ForegroundColor Yellow
+    Write-Host "  Einstellungen -> Apps -> Speicher" -ForegroundColor Yellow
+    Write-Host "eine grosse App deinstallieren, die du nicht brauchst."
+    Write-Host "Was installiert ist, zeigt dir:"
+    Write-Host ""
+    Write-Host "  `"$AdbExe`" -s $TvIp`:5555 shell pm list packages -3" -ForegroundColor Green
+    Write-Host ""
+    exit 1
+  }
 } elseif ($text -match "INSTALL_FAILED_VERSION_DOWNGRADE") {
   Write-Host ""
   Write-Host "Die Datei hat eine KLEINERE Versionsnummer als die installierte." -ForegroundColor Yellow
