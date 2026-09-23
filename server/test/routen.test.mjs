@@ -184,4 +184,8 @@ if (fehler.length) {
   fehler.forEach((f) => console.log("  - " + f));
 }
 try { rmSync(DATEN, { recursive: true, force: true }); } catch { /* egal */ }
+/* Kurz warten, bis fetch seine Keep-alive-Verbindungen losgelassen hat: ein
+   sofortiges process.exit ließ Node 25 unter Windows mit „Assertion failed …
+   async.c" abstürzen (Exit 127) — obwohl alle Prüfungen bestanden waren. */
+await new Promise((r) => setTimeout(r, 200));
 process.exit(fehler.length ? 1 : 0);

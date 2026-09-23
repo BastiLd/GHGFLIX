@@ -28,27 +28,46 @@ export const SUBTITLE_EXT = new Set(["srt", "ass", "ssa", "vtt", "sub", "idx", "
 
 // ── Reguläre Ausdrücke (Spiegel der LazyLock-Regexe in parser.rs) ────────────
 
-const RE_SXXEXX = /s(\d{1,2})\s*[._\- ]?\s*e(\d{1,3})/i;
-// Mehrteiler: "S01E01-E02", "S01E01E02", "S01E01-02"  (Plex/Jellyfin)
-const RE_SXXEXX_RANGE = /s(\d{1,2})\s*[._\- ]?\s*e(\d{1,3})(?:\s*[-_ ]\s*e?(\d{1,3})|\s*e(\d{1,3}))?/i;
+/* "S01E02", aber auch "S6 E1", "S6-Ep-1", "S06.Ep.19" (Streaming-Mitschnitte;
+   ohne diese Schreibweisen landeten am Desktop 24 Miraculous-Folgen als
+   "Filme"). Das führende \b verhindert Treffer mitten im Wort ("Atmos 5 1").
+   HINTEN bewusst keine Wortgrenze: Doppelfolgen wie "S07E12x13" haben dort
+   einen Buchstaben — mit \b griff das Muster nicht und RE_NXNN machte aus
+   "12x13" Staffel 12, Folge 13 (gemessen 23.09.2026, The Mentalist). */
+const RE_SXXEXX = /\bs\s*[._\- ]?\s*(\d{1,2})\s*[._\- ]?\s*e(?:p(?:isode)?)?\s*[._\- ]?\s*(\d{1,3})/i;
+// Mehrteiler: "S01E01-E02", "S01E01E02", "S01E01-02", "S07E12x13"  (Plex/Jellyfin)
+const RE_SXXEXX_RANGE =
+  /\bs\s*[._\- ]?\s*(\d{1,2})\s*[._\- ]?\s*e(?:p(?:isode)?)?\s*[._\- ]?\s*(\d{1,3})(?:\s*[-_ ]\s*e?(\d{1,3})\b|\s*e(\d{1,3})|x(\d{1,3})\b)?/i;
 const RE_NXNN = /(?:^|[^\d])(\d{1,2})\s*x\s*(\d{1,3})(?:[^\d]|$)/i;
-const RE_SEASON_EP_WORDS = /(?:season|staffel|saison)\s*(\d{1,2}).*?(?:episode|folge|ep)\s*(\d{1,3})/i;
+// "Season 6 Episode 22", "season-6-episode-22", "Staffel 2 Folge 3"
+const RE_SEASON_EP_WORDS =
+  /\b(?:season|staffel|saison)\s*[._\- ]?\s*(\d{1,2}).*?\b(?:episode|folge|ep)\s*[._\- ]?\s*(\d{1,3})\b/i;
 const RE_YEAR = /(?:^|[^\d])((?:19|20)\d{2})(?:[^\d]|$)/;
 const RE_SEASON_DIR = /(?:season|staffel|saison|series|s)\s*0*(\d{1,3})/i;
 const RE_EP_ONLY = /\b(?:episode|folge|ep|e)\s*\.?\s*0*(\d{1,3})\b/i;
 const RE_STANDALONE_NUM = /(?:^|[ ._\-])0*(\d{1,3})(?:[ ._\-]|$)/;
 const RE_JUNK_CUT =
-  /\b(1080p|720p|2160p|1440p|480p|576p|4k|8k|uhd|hdr10?\+?|dolby ?vision|dovi|x264|x265|h\.?264|h\.?265|hevc|avc|av1|xvid|divx|bluray|blu-ray|brrip|bdrip|bdremux|web-?rip|web-?dl|webhd|hdrip|dvdrip|dvdscr|hdtv|pdtv|telesync|aac|ac3|eac3|ddp?5|dts(?:-?hd)?(?:-?ma)?|truehd|atmos|flac|opus|mp3|remux|proper|repack|extended|unrated|uncut|directors?.?cut|theatrical|imax|10bit|8bit|hi10p|multi|dual|complete|internal|limited|retail|subbed|dubbed|german|deutsch|english)\b/i;
+  /\b(1080p|720p|2160p|1440p|480p|576p|4k|8k|uhd|hdr10?\+?|dolby ?vision|dovi|x264|x265|h\.?264|h\.?265|hevc|avc|av1|xvid|divx|bluray|blu-ray|brrip|bdrip|bdremux|web-?rip|web-?dl|webhd|hdrip|dvdrip|dvdscr|hdtv|pdtv|telesync|aac|ac3|eac3|ddp?5|dts(?:-?hd)?(?:-?ma)?|truehd|atmos|flac|opus|mp3|remux|proper|repack|extended|unrated|uncut|directors?.?cut|theatrical|imax|10bit|8bit|hi10p|multi|dual|complete|internal|limited|retail|subbed|dubbed|hd|sd|fhd)\b/i;
+/* KEINE Sprachwörter (german/deutsch/english) mehr in dieser Liste: sie
+   schnitten echte Titel ab — „Johnny English" wurde zu „Johnny" und bekam
+   einen fremden Film (gemessen 23.09.2026). Die Desktop-App hatte sie nie. */
+// Dieselbe Liste zum ENTFERNEN (global). parseEpisode schneidet damit vor der
+// Mustersuche alle Technik-Wörter heraus — "HDR10 x265" sah sonst wie die
+// Folge "10x265" aus (Desktop, gemessen 18.08.2026: "Shazam" wurde S10E265).
+const RE_JUNK_ALL = new RegExp(RE_JUNK_CUT.source, "gi");
 // "Season 2", "Staffel 02", "S03" — schneidet ein Staffel-Suffix vom Serienordner.
 // Die Wortform BRAUCHT Ziffern: mit \d{0,3} matchte auch ein blankes "Series"
 // und verstümmelte "A Series of Unfortunate Events" zu "A".
 const RE_SEASON_CUT = /\b(?:season|staffel|saison|series)\b\s*\d{1,3}|\bs\d{1,2}(?:e\d{1,3})?\b/i;
 // Führende Szene-/URL-Präfixe wie "www.UIndex.org - " (Punkte sind durch
 // normalize() schon Leerzeichen, deshalb space-tolerant).
-const RE_URL_PREFIX = /^\s*www\b.*?\b(?:org|com|net|info|me|cc|tv|io|to|se|nu|xyz)\b[\s\-_.:|]*/i;
+const RE_URL_PREFIX =
+  /^\s*www\b.*?\b(?:org|com|net|info|me|cc|tv|io|to|se|nu|xyz|tube|site|ws|in|one|sbs|lol|click|art|buzz)\b[\s\-_.:|]*/i;
 // Streunende Szene-/Seiten-Tokens irgendwo im Namen.
 const RE_SITE_TOKEN =
-  /\b(?:www|uindex|rarbg|yts|yify|eztv|ettv|phdteam|psa|galaxytv|ethel|mkvcage|sparks|ntb|torrentgalaxy|anoxmous)\b/gi;
+  /\b(?:www|uindex|rarbg|yts|yify|eztv|ettv|phdteam|psa|galaxytv|ethel|mkvcage|sparks|ntb|torrentgalaxy|anoxmous|ggflix|gflix|mhub|hdhub|tamilmv|torrenting)\b/gi;
+/** Führendes "Watch" von Streaming-Seiten ("Watch <Titel> - GGFlix"). */
+const RE_WATCH_PREFIX = /^\s*watch\b[\s\-_.:|]+/i;
 // Jellyfin/Plex-Provider-Tags: "[tmdbid-1399]", "{tmdb-1399}", "[imdbid-tt0903747]"
 const RE_PROVIDER_TAG = /[[{](tmdbid|tmdb|imdbid|imdb|tvdbid|tvdb)[-=]?\s*((?:tt)?\d+)[\]}]/i;
 
@@ -197,8 +216,22 @@ export function isSiteDir(name) {
 
 /** Plex/Jellyfin-Extras-Ordner, die NICHT als Folgen zählen. */
 export function isExtrasDir(name) {
-  return /^(?:extras?|featurettes?|behind the scenes|deleted scenes|interviews?|scenes|shorts?|trailers?|other|bonus)$/i.test(
-    String(name).trim(),
+  const t = String(name).trim().toLowerCase();
+  if (
+    /^(?:extras?|featurettes?|behind the scenes|deleted scenes?|inside the episode|making of|interviews?|scenes|shorts?|trailers?|other|bonus|bonusmaterial|webisodes?|geloeschte szenen|gelöschte szenen)$/i.test(t)
+  ) {
+    return true;
+  }
+  /* Zusammengesetzte Namen wie „Special Extras Season 1", „Bonus Disc 2",
+     „Season 3 Extras" (gemessen 23.09.2026, The Newsroom auf dem NAS). Ein
+     Bonuswort PLUS ein Staffel-/Disk-Hinweis oder ein zweites Bonuswort — ein
+     Ordner, der NUR „Extras (2005)" heißt, ist die gleichnamige Serie. */
+  const woerter = t.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const bonus = woerter.filter((w) => /^(?:extras?|featurettes?|bonus|bloopers|outtakes)$/.test(w)).length;
+  const hinweis = woerter.some((w) => /^(?:season|staffel|saison|disc|disk|specials?)$/.test(w));
+  return (
+    bonus >= 2 || (bonus === 1 && hinweis) ||
+    t.includes("deleted scene") || t.includes("behind the scenes") || t.includes("inside the episode")
   );
 }
 
@@ -206,7 +239,15 @@ export function isExtrasDir(name) {
 
 /** Titel + optionales Jahr aus einem Film-Dateinamen oder Serienordner. */
 export function parseTitleYear(raw) {
-  const norm = normalize(raw);
+  // Seiten-Präfixe zuerst weg ("www.1TamilMV.tube - Ballerina", "Watch … - GGFlix"),
+  // sonst wird mit dem Seitennamen statt mit dem Filmtitel gesucht.
+  let norm = normalize(raw).replace(RE_URL_PREFIX, "");
+  RE_SITE_TOKEN.lastIndex = 0;
+  if (RE_SITE_TOKEN.test(norm)) {
+    const ohne = norm.replace(RE_WATCH_PREFIX, "");
+    if (ohne.trim()) norm = ohne;
+  }
+  RE_SITE_TOKEN.lastIndex = 0;
   let cut = norm.length;
   let year = null;
 
@@ -230,6 +271,20 @@ export function parseTitleYear(raw) {
  * Titel auf Buchstaben + Leerzeichen (plus Apostroph) reduziert — genau das
  * rettet unsaubere Release-Namen bei der TMDb-Suche am zuverlässigsten.
  */
+/**
+ * Wie lettersOnly, aber ZIFFERN BLEIBEN — für die Frage „ist das wirklich
+ * derselbe Titel?". Satzzeichen fallen weg („Shazam!" = „Shazam"), Ziffern
+ * bleiben („Miraculous 5" ≠ „Miraculous", „Iron Man 2" ≠ „Iron Man").
+ */
+export function lettersAndDigits(s) {
+  return String(s)
+    .replace(RE_SITE_TOKEN, " ")
+    .replace(/[^\p{L}\p{N} ']/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function lettersOnly(s) {
   return String(s)
     .replace(RE_SITE_TOKEN, " ")
@@ -315,13 +370,14 @@ export function isPureSeasonDir(name) {
  * Hinweis. Zusätzlich zu parser.rs: Mehrteiler geben `episodeEnd` zurück.
  */
 export function parseEpisode(stem, parentDir = "") {
-  const norm = normalize(stem);
+  // Technik-Wörter VOR der Mustersuche raus (siehe RE_JUNK_ALL).
+  const norm = collapseWs(normalize(stem).replace(RE_JUNK_ALL, " "));
 
   const mr = RE_SXXEXX_RANGE.exec(norm);
   if (mr) {
     const season = parseInt(mr[1], 10);
     const episode = parseInt(mr[2], 10);
-    const raw = mr[3] ?? mr[4];
+    const raw = mr[3] ?? mr[4] ?? mr[5];
     const end = raw != null ? parseInt(raw, 10) : null;
     return { season, episode, episodeEnd: end != null && end > episode && end - episode < 20 ? end : null };
   }
@@ -470,6 +526,26 @@ if (process.argv[1]?.endsWith("parser.js") && process.argv.includes("--test")) {
     "Daredevil Born Again",
     "Dateiname liefert echten Serientitel",
   );
+
+  // ── Nachgezogen vom Desktop (August + 23.09.2026) ──
+  eq(parseEpisode("Shazam 2019 UHD BluRay 1080p DD Atmos 5 1 DoVi HDR10 x265-SM737", ""), null, "Film: HDR10 x265 ist keine Folge");
+  eq(parseEpisode("The.LEGO.Batman.Movie.2017.1080p.BluRay.DDP5.1.x265.10bit-GalaxyRG265", ""), null, "Film: DDP5.1.x265 ist keine Folge");
+  eq(parseEpisode("M-S6-Ep-1-Climatiqueen-", "")?.episode, 1, "Folge: S6-Ep-1");
+  eq(parseEpisode("Miraculous-S6-EP-19-Riginarazione-English-Dub", "")?.episode, 19, "Folge: S6-EP-19");
+  eq(parseEpisode("m-season-6-episode-22-lady-chaos_Ydu6Hdnj", "")?.episode, 22, "Folge: season-6-episode-22");
+  eq(
+    parseEpisode("The.Mentalist.S07E12x13.Brown.Shag.Carpet-White.Orchids.1080p.WEB-DL.DD5.1.H.264-ECI", ""),
+    { season: 7, episode: 12, episodeEnd: 13 },
+    "Doppelfolge S07E12x13 (nicht Staffel 12)",
+  );
+  eq(parseTitleYear("www.1TamilMV.tube - Ballerina (2025) WEB-DL - 4K SDR - HEVC").title, "Ballerina", "Seitenname: 1TamilMV.tube");
+  eq(parseTitleYear("Watch Five Nights at Freddy's 2 - GGFlix").title, "Five Nights at Freddy's 2 - GGFlix", "Seitenname: Watch … GGFlix");
+  eq(parseTitleYear("Watch.Dogs.2020.1080p").title, "Watch Dogs", "echtes Watch bleibt");
+  eq(lettersAndDigits("Shazam!") === lettersAndDigits("Shazam"), true, "Satzzeichen zählen nicht");
+  eq(lettersAndDigits("Miraculous 5") === lettersAndDigits("Miraculous"), false, "Ziffern zählen");
+  eq(isExtrasDir("Special Extras Season 1"), true, "Bonusordner: Special Extras Season 1");
+  eq(isExtrasDir("Extras (2005)"), false, "Serie „Extras (2005)“ bleibt Serie");
+  eq(isExtrasDir("Featurettes"), true, "Bonusordner: Featurettes");
 
   eq(isJunkClip("Movie-sample"), true, "Müll: sample");
   eq(isJunkClip("The Sample Room S01E01"), true, "Müll: Wort 'Sample'");

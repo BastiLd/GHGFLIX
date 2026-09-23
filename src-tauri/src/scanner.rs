@@ -850,7 +850,7 @@ async fn best_movie_match(tmdb: &Tmdb, raw_title: &str, year: Option<i64>) -> Op
     let want = title_tokens(&query);
     // Fortsetzungsnummer aus dem ROHEN Namen (search_query wirft Ziffern weg).
     let want_nums = number_tokens(raw_title);
-    let mut best: Option<(f64, i64)> = None;
+    let mut best: Option<(f64, f64, i64)> = None;
 
     // Wie bisher: Titel schrittweise von hinten kürzen (rettet unsaubere Namen).
     // Neu: ALLE Durchgänge werden bewertet, nicht nur der erste mit Treffern.
@@ -867,47 +867,29 @@ async fn best_movie_match(tmdb: &Tmdb, raw_title: &str, year: Option<i64>) -> Op
                 Err(_) => continue,
             };
             for (i, r) in results.iter().take(8).enumerate() {
-                let cand = title_tokens(&r.title);
-                if cand.is_empty() {
-                    continue;
+                /* Gegen den Titel in der eingestellten Sprache UND den
+                   Originaltitel prüfen — der bessere zählt. Gemessen
+                   23.09.2026: „Die gefährlichsten Hacker der Welt.mp4" fand bei
+                   en-US nur „Putin's Bears - The Most Dangerous Hackers…"; der
+                   deutsche Name steht allein im Originaltitel. */
+                let mut varianten: Vec<&str> = vec![r.title.as_str()];
+                if let Some(o) = r.original_title.as_deref() {
+                    if o != r.title {
+                        varianten.push(o);
+                    }
                 }
-                // vorwaerts: wieviel vom Dateinamen steckt im Treffer?
-                // rueckwaerts: wieviel vom Treffer steckt im Dateinamen?
-                let vorwaerts = token_overlap(&want, &cand);
-                let rueckwaerts = token_overlap(&cand, &want);
-                // Ein Treffer, der in KEINE Richtung halbwegs passt, ist geraten.
-                if vorwaerts < 0.5 && rueckwaerts < 0.5 {
-                    continue;
-                }
-                let mut s = 0.0f64;
-                if cand == want && same_title(raw_title, &r.title) {
-                    s += 100.0;
-                }
-                s += vorwaerts * 45.0 + rueckwaerts * 35.0;
-                // Teil 1 vs Teil 2: milder Abzug, damit die richtige Fortsetzung
-                // gewinnt — aber nicht so hart, dass "The Fantastic Four" gegen
-                // "The Fantastic 4: First Steps" durchfaellt.
-                if number_tokens(&r.title) != want_nums {
-                    s -= 12.0;
-                }
-                if let (Some(y), Some(cy)) = (year, r.year) {
-                    let d = (y - cy).abs();
-                    s += if d == 0 {
-                        30.0
-                    } else if d <= 1 {
-                        12.0
-                    } else {
-                        -((d.min(25) * 2) as f64)
-                    };
-                }
-                s -= i as f64 * 0.5; // leichter Vorzug für TMDbs eigene Reihung
-                if best.map_or(true, |(bs, _)| s > bs) {
-                    best = Some((s, r.tmdb_id));
+                let jahr_passt = matches!((year, r.year), (Some(y), Some(cy)) if (y - cy).abs() <= 1);
+                for titel in varianten {
+                    if let Some((s, rang)) = film_punkte(&want, &want_nums, raw_title, titel, year, r, jahr_passt, i) {
+                        if best.map_or(true, |(_, br, _)| rang > br) {
+                            best = Some((s, rang, r.tmdb_id));
+                        }
+                    }
                 }
             }
         }
         // Klar guter Treffer? Dann nicht weiter kürzen.
-        if let Some((s, id)) = best {
+        if let Some((s, _, id)) = best {
             if s >= 80.0 {
                 return Some(id);
             }
@@ -917,7 +899,77 @@ async fn best_movie_match(tmdb: &Tmdb, raw_title: &str, year: Option<i64>) -> Op
         }
         n -= 1;
     }
-    best.filter(|(s, _)| *s >= 55.0).map(|(_, id)| id)
+    best.filter(|(s, _, _)| *s >= 55.0).map(|(_, _, id)| id)
+}
+
+/// Punkte eines TMDb-Film-Treffers für einen Dateinamen — `None` = passt in
+/// keine Richtung (geraten). Muss mit bestMovieMatch in server/src/tmdb.js
+/// übereinstimmen, sonst ordnen Desktop und Server verschieden zu.
+/// Füllwörter zählen nicht als Beweis (siehe server/src/tmdb.js: „From the
+/// World of John Wick Ballerina" passte sonst zu „From the End of the World").
+/// Besteht ein Titel NUR aus Füllwörtern, bleiben sie drin.
+const FUELLWOERTER: &[&str] = &["the", "a", "an", "of", "from", "and", "in", "on", "at", "to", "for", "with", "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer", "und", "von", "im", "am", "zu", "mit", "le", "la", "les", "el", "los", "il"];
+
+fn inhalt(toks: &[String]) -> Vec<String> {
+    let r: Vec<String> = toks.iter().filter(|t| !FUELLWOERTER.contains(&t.as_str())).cloned().collect();
+    if r.is_empty() {
+        toks.to_vec()
+    } else {
+        r
+    }
+}
+
+/// (Punkte für die Schwelle, Punkte für die Rangfolge inkl. Beliebtheit).
+#[allow(clippy::too_many_arguments)]
+fn film_punkte(
+    want: &[String],
+    want_nums: &[String],
+    raw_title: &str,
+    titel: &str,
+    year: Option<i64>,
+    r: &crate::models::TmdbResult,
+    jahr_passt: bool,
+    index: usize,
+) -> Option<(f64, f64)> {
+    let cand = title_tokens(titel);
+    if cand.is_empty() {
+        return None;
+    }
+    // vorwaerts: wieviel vom Dateinamen steckt im Treffer?
+    // rueckwaerts: wieviel vom Treffer steckt im Dateinamen?
+    let (want_i, cand_i) = (inhalt(want), inhalt(&cand));
+    let vorwaerts = token_overlap(&want_i, &cand_i);
+    let rueckwaerts = token_overlap(&cand_i, &want_i);
+    if vorwaerts < 0.5 && rueckwaerts < 0.5 {
+        return None;
+    }
+    let mut s = 0.0f64;
+    if cand == want && same_title(raw_title, titel) {
+        s += 100.0;
+    }
+    /* Ein EINWORTIGER Treffer („Gag") steckt trivial ganz im Dateinamen — kaum
+       ein Beweis, deshalb halb gewichtet (23.09.: „Gag Reel" → Kinofilm „Gag").
+       AUSSER das Jahr bestätigt ihn: „F1" (2025) zu „F1 The Movie 2025" ist ein
+       echter Treffer und fiel mit der pauschalen Halbierung durch. */
+    let gewicht = if cand_i.len() >= 2 || jahr_passt { 1.0 } else { 0.5 };
+    s += vorwaerts * 45.0 + rueckwaerts * 35.0 * gewicht;
+    // Teil 1 vs Teil 2: milder Abzug, damit die richtige Fortsetzung gewinnt —
+    // aber nicht so hart, dass "Fantastic Four" gegen "Fantastic 4" durchfällt.
+    if number_tokens(titel) != want_nums {
+        s -= 12.0;
+    }
+    /* ±1 Jahr zählt als Treffer: Release-Gruppen schreiben oft das
+       Premierenjahr, TMDb führt den Kinostart. „Split" läuft dort mit 2017,
+       die Datei sagt 2016 — mit dem alten Abzug gewann ein unbekannter „Split"
+       von 2016 (gemessen 23.09.2026). */
+    if let (Some(y), Some(cy)) = (year, r.year) {
+        let d = (y - cy).abs();
+        s += if d <= 1 { 30.0 } else { -((d.min(25) * 2) as f64) };
+    }
+    s -= index as f64 * 0.5; // leichter Vorzug für TMDbs eigene Reihung
+    // Beliebtheit NUR für die Rangfolge, nicht für die Schwelle.
+    let rang = s + (3.0 * (1.0 + r.popularity.unwrap_or(0.0)).log10()).min(9.0);
+    Some((s, rang))
 }
 
 /// The user's remembered identification for a movie file, if any.

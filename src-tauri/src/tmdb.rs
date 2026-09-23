@@ -93,6 +93,12 @@ struct Hit {
     vote_average: Option<f64>,
     #[serde(default)]
     media_type: Option<String>,
+    #[serde(default)]
+    original_title: Option<String>,
+    #[serde(default)]
+    original_name: Option<String>,
+    #[serde(default)]
+    popularity: Option<f64>,
 }
 
 impl Hit {
@@ -116,6 +122,8 @@ impl Hit {
             poster_path: self.poster_path,
             backdrop_path: self.backdrop_path,
             rating: self.vote_average,
+            original_title: self.original_title.or(self.original_name),
+            popularity: self.popularity,
         })
     }
 }

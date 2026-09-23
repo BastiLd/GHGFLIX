@@ -146,6 +146,13 @@ pub struct TmdbResult {
     pub poster_path: Option<String>,
     pub backdrop_path: Option<String>,
     pub rating: Option<f64>,
+    /// Titel in Originalsprache — Dateien heißen oft so (deutsche Doku,
+    /// ausländischer Film), während `title` in der eingestellten Sprache kommt.
+    #[serde(default)]
+    pub original_title: Option<String>,
+    /// TMDb-Beliebtheit — Stichentscheid zwischen gleichnamigen Filmen.
+    #[serde(default)]
+    pub popularity: Option<f64>,
 }
 
 /// One physical file of an episode (a quality/version of it).

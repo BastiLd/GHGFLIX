@@ -1065,6 +1065,11 @@ pub fn merge_shows_by_tmdb(conn: &Connection) -> Result<()> {
             // keep the folded folder's grouping keys pointing at the survivor so a
             // future rescan re-finds the merged show instead of re-creating it
             conn.execute("UPDATE show_keys SET show_id=?2 WHERE show_id=?1", params![other, canonical])?;
+            /* Bonusmaterial zieht mit um. Vorher fehlte diese Zeile — beim
+               Löschen der aufgelösten Serie nahm ON DELETE CASCADE die Extras
+               mit, und erst der NÄCHSTE Scan holte sie zurück (gefunden
+               23.09.2026: Suits liegt in zwei Ordnern auf C: und G:). */
+            conn.execute("UPDATE extras SET show_id=?2 WHERE show_id=?1", params![other, canonical])?;
             // favorites + custom season posters of the folded row move too
             conn.execute(
                 "UPDATE OR IGNORE favorites SET ref_id=?2 WHERE media_type='show' AND ref_id=?1",

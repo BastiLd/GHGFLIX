@@ -14,7 +14,7 @@ import { createReadStream, existsSync, mkdirSync, statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DATA_DIR, settingOr } from "./db.js";
-import { lettersOnly, cleanSearchQuery } from "./parser.js";
+import { lettersOnly, lettersAndDigits, cleanSearchQuery } from "./parser.js";
 
 const BASE = "https://api.themoviedb.org/3";
 const IMG_BASE = "https://image.tmdb.org/t/p";
@@ -41,7 +41,14 @@ async function get(path, params = {}) {
   const k = key();
   if (!k) return null;
   const url = new URL(BASE + path);
-  url.searchParams.set("api_key", k);
+  /* TMDb-v4-„Read Access Token" (lang, beginnt mit „eyJ", drei Teile mit
+     Punkt) MUSS als Bearer-Header gehen — als api_key-Parameter lehnt TMDb
+     ihn mit 401 ab. Genau daran scheiterte die Desktop-App bis August: alle
+     337 Filme ohne Zuordnung. Der klassische 32-Zeichen-Schlüssel bleibt
+     Parameter. */
+  const v4 = k.split(".").length === 3;
+  const headers = v4 ? { Authorization: `Bearer ${k}` } : {};
+  if (!v4) url.searchParams.set("api_key", k);
   if (params.language !== null) url.searchParams.set("language", lang());
   for (const [a, b] of Object.entries(params)) {
     if (b == null) continue;
@@ -50,7 +57,7 @@ async function get(path, params = {}) {
   for (let attempt = 0; attempt < 3; attempt++) {
     await throttle();
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
       if (res.status === 429) {
         // Rate-Limit: kurz warten und erneut versuchen statt still aufzugeben
         const retry = parseInt(res.headers.get("retry-after") || "2", 10) || 2;
@@ -106,6 +113,9 @@ const mapHit = (x, defaultKind) => {
     backdropPath: x.backdrop_path ?? null,
     rating: x.vote_average ?? null,
     popularity: x.popularity ?? 0,
+    // Titel in Originalsprache — Dateien heißen oft so (deutsche Doku,
+    // ausländischer Film), während `title` in der eingestellten Sprache kommt.
+    originalTitle: x.original_title ?? x.original_name ?? null,
   };
 };
 
@@ -141,6 +151,30 @@ export async function searchWithFallback(query, kind, year = null) {
 
 const titleTokens = (s) => lettersOnly(s).toLowerCase().split(/\s+/).filter(Boolean);
 
+/* Ausgeschriebene Zahlen als Ziffer — „Fantastic Four" = „Fantastic 4".
+   Ohne das gewann am Desktop die Premierenfeier „…First Steps - World
+   Premiere" gegen den Film (gemessen 23.09.2026). */
+const ZAHLWORT = {
+  one: "1", eins: "1", two: "2", zwei: "2", three: "3", drei: "3", four: "4", vier: "4",
+  five: "5", fuenf: "5", "fünf": "5", six: "6", sechs: "6", seven: "7", sieben: "7",
+  eight: "8", acht: "8", nine: "9", neun: "9", ten: "10", zehn: "10", eleven: "11",
+  elf: "11", twelve: "12", zwoelf: "12", "zwölf": "12",
+};
+/** Tokens MIT Ziffern, ohne Satzzeichen — nur für „ist das derselbe Titel?". */
+const exactTokens = (s) =>
+  lettersAndDigits(s).toLowerCase().split(/\s+/).filter(Boolean).map((t) => ZAHLWORT[t] ?? t);
+/* Gleicher Titel, Ziffern zählen mit, Satzzeichen nicht. Ohne Ziffern galt die
+   thailändische Serie „Miraculous 5" als exakter Treffer für „Miraculous"; mit
+   Satzzeichen galt „Shazam!" NICHT als „Shazam" und der unbekannte
+   Namensvetter „Shazam" (2026) gewann (beides gemessen am Desktop). */
+function sameTitle(a, b) {
+  const ta = exactTokens(a);
+  const tb = exactTokens(b);
+  return ta.length > 0 && ta.join(" ") === tb.join(" ");
+}
+/** Nur die Zahl-Bestandteile („Iron Man 2" → ["2"]) — Fortsetzungs-Prüfung. */
+const numberTokens = (s) => exactTokens(s).filter((t) => /^\d+$/.test(t));
+
 /** Anteil der gesuchten Wörter, die im Kandidaten vorkommen (0…1). */
 function tokenOverlap(want, cand) {
   if (want.length === 0) return 0;
@@ -149,7 +183,7 @@ function tokenOverlap(want, cand) {
 }
 
 /** Titel-/Jahres-Bewertung eines Kandidaten (Port von best_tv_match, Schritt 1). */
-function scoreCandidates(results, query, year) {
+function scoreCandidates(results, query, year, rawTitle = query) {
   const want = titleTokens(query);
   const joinedWant = want.join(" ");
   return results
@@ -158,7 +192,8 @@ function scoreCandidates(results, query, year) {
       const cand = titleTokens(r.title);
       const joinedCand = cand.join(" ");
       let s = 0;
-      if (joinedCand === joinedWant && want.length) s += 100;
+      // Exakt-Bonus nur, wenn die Titel auch MIT Ziffern gleich sind.
+      if (joinedCand === joinedWant && want.length && sameTitle(rawTitle, r.title)) s += 100;
       if (joinedCand.startsWith(joinedWant) || joinedWant.startsWith(joinedCand)) s += 55;
       else if (joinedCand.includes(joinedWant) || joinedWant.includes(joinedCand)) s += 30;
       s += tokenOverlap(want, cand) * 25;
@@ -176,10 +211,11 @@ function scoreCandidates(results, query, year) {
  * Besten Serien-Treffer wählen. TITEL + JAHR zuerst; die TMDb-Gesamtfolgenzahl
  * ist nur Stichentscheid zwischen sonst gleichwertigen Kandidaten.
  */
-export async function bestTvMatch(query, year, localEps = 0) {
+export async function bestTvMatch(rawTitle, year, localEps = 0) {
+  const query = searchQuery(rawTitle);
   const results = await searchWithFallback(query, "tv", year);
   if (!results.length) return null;
-  const scored = scoreCandidates(results, query, year);
+  const scored = scoreCandidates(results, query, year, rawTitle);
   const top = scored[0].score;
   const contenders = scored.filter((c) => top - c.score < 12).sort((a, b) => a.order - b.order);
   if (contenders.length === 1 || localEps < 3) return contenders[0].id;
@@ -194,23 +230,97 @@ export async function bestTvMatch(query, year, localEps = 0) {
   return contenders[0].id;
 }
 
-/** Besten Film-Treffer wählen (gleiche Bewertung, ohne Folgen-Stichentscheid). */
-export async function bestMovieMatch(query, year) {
-  const results = await searchWithFallback(query, "movie", year);
-  if (!results.length) return null;
-  const scored = scoreCandidates(results, query, year);
-  const top = scored[0].score;
-  const contenders = scored.filter((c) => top - c.score < 12).sort((a, b) => a.order - b.order);
-  return contenders[0].id;
+/**
+ * Punkte eines Film-Treffers für einen Dateinamen — null = passt in keine
+ * Richtung (geraten). MUSS mit film_punkte() in src-tauri/src/scanner.rs
+ * übereinstimmen, sonst ordnen Desktop und Server verschieden zu.
+ */
+/* Füllwörter zählen nicht als Beweis. Gemessen 23.09.2026: „From the World of
+   John Wick Ballerina" passte zu „From the End of the World" (japanischer
+   Film) fast nur über „from/the/of" und lag damit knapp über der Schwelle.
+   Besteht ein Titel NUR aus Füllwörtern, bleiben sie drin. */
+const FUELLWORT = new Set(["the", "a", "an", "of", "from", "and", "in", "on", "at", "to", "for", "with", "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer", "und", "von", "im", "am", "zu", "mit", "le", "la", "les", "el", "los", "il"]);
+const inhalt = (toks) => {
+  const r = toks.filter((t) => !FUELLWORT.has(t));
+  return r.length ? r : toks;
+};
+
+function filmPunkte(want, wantNums, rawTitle, titel, year, r, jahrPasst, index) {
+  const cand = titleTokens(titel);
+  if (!cand.length) return null;
+  const vor = tokenOverlap(inhalt(want), inhalt(cand)); // wieviel vom Dateinamen steckt im Treffer
+  const rueck = tokenOverlap(inhalt(cand), inhalt(want)); // wieviel vom Treffer steckt im Dateinamen
+  if (vor < 0.5 && rueck < 0.5) return null; // in keine Richtung passend = geraten
+  let s = 0;
+  if (cand.join(" ") === want.join(" ") && sameTitle(rawTitle, titel)) s += 100;
+  /* Ein EINWORTIGER Treffer („Gag") steckt trivial ganz im Dateinamen — kaum
+     ein Beweis, deshalb halb gewichtet (23.09.: „Gag Reel" → Kinofilm „Gag").
+     AUSSER das Jahr bestätigt ihn: „F1" (2025) zu „F1 The Movie 2025". */
+  const gewicht = inhalt(cand).length >= 2 || jahrPasst ? 1 : 0.5;
+  s += vor * 45 + rueck * 35 * gewicht;
+  if (numberTokens(titel).join(" ") !== wantNums) s -= 12; // Teil 1 vs Teil 2
+  /* ±1 Jahr zählt als Treffer: Release-Gruppen schreiben oft das
+     Premierenjahr, TMDb führt den Kinostart („Split": Datei 2016, TMDb 2017 —
+     sonst gewinnt ein unbekannter „Split" von 2016). */
+  if (year != null && r.year != null) {
+    const d = Math.abs(year - r.year);
+    s += d <= 1 ? 30 : -Math.min(d, 25) * 2;
+  }
+  s -= index * 0.5; // leichter Vorzug für TMDbs eigene Reihung
+  /* Beliebtheit NUR für die Rangfolge, nicht für die Schwelle: sie schob
+     „From the End of the World" von 54,9 auf 56,2 Punkte — über die Grenze. */
+  const rang = s + Math.min(9, 3 * Math.log10(1 + (r.popularity || 0)));
+  return { s, rang };
+}
+
+/**
+ * Den Film wählen, der WIRKLICH passt — oder gar keinen (Port von
+ * best_movie_match aus scanner.rs).
+ *
+ * Vorher wurde immer ein Kandidat genommen, auch wenn er nichts mit dem
+ * Dateinamen zu tun hatte. Am Desktop ergab das z. B. „Gag Reel" → Kinofilm
+ * „Gag" (2006) und „Watch Five Nights at Freddy's 2" → „Yo-kai Watch".
+ * Jetzt: Titel-Überschneidung in BEIDE Richtungen + Jahresnähe +
+ * Fortsetzungsnummer, und eine Mindestpunktzahl. Lieber kein Treffer als ein
+ * falscher — der fällt auf und lässt sich über „Identifizieren" setzen.
+ */
+export async function bestMovieMatch(rawTitle, year) {
+  const query = searchQuery(rawTitle);
+  const words = query.split(/\s+/).filter(Boolean);
+  if (!words.length) return null;
+  const want = titleTokens(query);
+  const wantNums = numberTokens(rawTitle).join(" ");
+  let best = null;
+  for (let n = words.length; n >= 1; n--) {
+    const q = words.slice(0, n).join(" ");
+    const jahre = year != null ? [year, null] : [null];
+    for (const j of jahre) {
+      const results = await searchRaw(q, "movie", j);
+      results.slice(0, 8).forEach((r, i) => {
+        /* Gegen den Titel in der eingestellten Sprache UND den Originaltitel
+           prüfen — der bessere zählt („Die gefährlichsten Hacker der Welt"
+           steht bei en-US nur im Originaltitel, gemessen 23.09.2026). */
+        const varianten = [r.title];
+        if (r.originalTitle && r.originalTitle !== r.title) varianten.push(r.originalTitle);
+        const jahrPasst = year != null && r.year != null && Math.abs(year - r.year) <= 1;
+        for (const titel of varianten) {
+          const p = filmPunkte(want, wantNums, rawTitle, titel, year, r, jahrPasst, i);
+          if (p && (!best || p.rang > best.rang)) best = { ...p, id: r.tmdbId };
+        }
+      });
+    }
+    if (best && best.s >= 80) return best.id; // klar gut — nicht weiter kürzen
+  }
+  return best && best.s >= 55 ? best.id : null;
 }
 
 // Rückwärtskompatible Kurzformen (alter Server-Code)
 export async function searchShow(title, year) {
-  const id = await bestTvMatch(searchQuery(title), year ?? null, 0);
+  const id = await bestTvMatch(title, year ?? null, 0);
   return id ? { id } : null;
 }
 export async function searchMovie(title, year) {
-  const id = await bestMovieMatch(searchQuery(title), year ?? null);
+  const id = await bestMovieMatch(title, year ?? null);
   return id ? { id } : null;
 }
 

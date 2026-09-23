@@ -281,7 +281,13 @@ function indexMovies(db, root, now) {
   );
   const known = db.prepare("SELECT id FROM movies WHERE path = ?");
   let n = 0;
-  for (const f of walkVideos(root)) {
+  /* Wie viele Videos liegen je Ordner? Nur ein EINZELNER Film darf seinen
+     Titel vom Ordnernamen nehmen. Gemessen 23.09.2026: „The Matrix 1-4 Pack
+     (1999)" enthält vier Filme — alle vier hießen danach „The Matrix". */
+  const dateien = [...walkVideos(root)];
+  const jeOrdner = new Map();
+  for (const f of dateien) jeOrdner.set(f.dir, (jeOrdner.get(f.dir) ?? 0) + 1);
+  for (const f of dateien) {
     if (known.get(f.path)) {
       n++;
       continue;
@@ -290,7 +296,7 @@ function indexMovies(db, root, now) {
     // Dateiname — genau wie bei Plex/Jellyfin bevorzugen wir ihn, sobald er
     // eine Jahreszahl trägt.
     const folderName = basename(f.dir);
-    const fromFolder = f.dir !== root ? parseTitleYear(folderName) : null;
+    const fromFolder = f.dir !== root && jeOrdner.get(f.dir) === 1 ? parseTitleYear(folderName) : null;
     const fromFile = parseTitleYear(f.stem);
     const pick = fromFolder?.year ? fromFolder : fromFile.title.length >= 2 ? fromFile : (fromFolder ?? fromFile);
     insert.run(pick.title || f.stem, pick.year ?? null, f.path, now);
@@ -724,7 +730,8 @@ async function matchAll(db) {
       continue;
     }
     if (!autoMatch) continue;
-    const id = await tmdb.bestMovieMatch(tmdb.searchQuery(m.title), m.year ?? null);
+    // Rohtitel übergeben: die Fortsetzungsnummer steckt nur dort (searchQuery wirft Ziffern weg)
+    const id = await tmdb.bestMovieMatch(m.title, m.year ?? null);
     if (id) await applyMovieMatch(db, m.id, id, false).catch(() => {});
   }
 
@@ -742,7 +749,7 @@ async function matchAll(db) {
     }
     if (!autoMatch) continue;
     const localEps = db.prepare("SELECT COUNT(*) c FROM episodes WHERE show_id=?").get(s.id).c;
-    const id = await tmdb.bestTvMatch(tmdb.searchQuery(s.title), s.year ?? null, localEps);
+    const id = await tmdb.bestTvMatch(s.title, s.year ?? null, localEps);
     if (id) await applyShowMatch(db, s.id, id, false).catch(() => {});
   }
 
