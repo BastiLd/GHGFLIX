@@ -6,9 +6,11 @@ import {
   Cloud,
   Database,
   Film,
+  FileQuestion,
   FolderInput,
   FolderPlus,
   Keyboard,
+  Layers,
   Library,
   Palette,
   Play,
@@ -57,6 +59,7 @@ import { loadServerConfig, loginServer, saveServerConfig, startServerSync, syncO
 import { Button, InfoButton, Modal, Spinner, TextInput } from "../components/ui";
 import { ThemeStore } from "../components/ThemeStore";
 import { FolderScanDialog, IgnoredFilesList } from "../components/FolderScanDialog";
+import ZuordnungDialog from "../components/ZuordnungDialog";
 
 type TabId =
   | "allgemein"
@@ -324,10 +327,11 @@ export default function Settings() {
   /* `zweck` unterscheidet die zwei Wege, die denselben Ordner-Browser benutzen:
      "bibliothek" fügt den Ordner direkt hinzu, "auswahl" öffnet danach das
      Auswahl-Fenster mit allen gefundenen Videos (Punkt 1 der Übergabe). */
-  const [webPick, setWebPick] = useState<{ kind: "movie" | "tv"; zweck: "bibliothek" | "auswahl" } | null>(null);
+  const [webPick, setWebPick] = useState<{ kind: "movie" | "tv" | "mixed"; zweck: "bibliothek" | "auswahl" } | null>(null);
   const [scanRoot, setScanRoot] = useState<{ path: string; kind: "movie" | "tv" } | null>(null);
   const [showTheme, setShowTheme] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showZuordnung, setShowZuordnung] = useState(false);
   const [autoScan, setAutoScan] = useState(true);
   const [watchFs, setWatchFs] = useState(true);
   const [subDefault, setSubDefault] = useState("off");
@@ -508,7 +512,7 @@ export default function Settings() {
     if (typeof dir === "string") setScanRoot({ path: dir, kind: "tv" });
   };
 
-  const pickFolder = async (kind: "movie" | "tv") => {
+  const pickFolder = async (kind: "movie" | "tv" | "mixed") => {
     if (IS_WEB) {
       // server paths → server folder browser instead of a native dialog
       setWebPick({ kind, zweck: "bibliothek" });
@@ -1202,11 +1206,19 @@ export default function Settings() {
               {libs.data?.length === 0 && <p className="text-sm text-ghg-muted">Noch keine Ordner hinzugefügt.</p>}
               {libs.data?.map((l) => (
                 <div key={l.id} className="flex items-center gap-3 bg-ghg-bg2 border border-ghg-line rounded-lg px-3 py-2">
-                  {l.kind === "movie" ? <Film className="w-4 h-4 text-ghg-red" /> : <Tv className="w-4 h-4 text-ghg-red" />}
+                  {l.kind === "movie" ? (
+                    <Film className="w-4 h-4 text-ghg-red" />
+                  ) : l.kind === "mixed" ? (
+                    <Layers className="w-4 h-4 text-ghg-red" />
+                  ) : (
+                    <Tv className="w-4 h-4 text-ghg-red" />
+                  )}
                   <span className="flex-1 text-sm truncate" title={l.path}>
                     {l.path}
                   </span>
-                  <span className="text-xs text-ghg-muted uppercase">{l.kind === "movie" ? "Filme" : "Serien"}</span>
+                  <span className="text-xs text-ghg-muted uppercase">
+                    {l.kind === "movie" ? "Filme" : l.kind === "mixed" ? "Serien & Filme" : "Serien"}
+                  </span>
                   <button onClick={() => delLib(l.id)} className="p-1.5 rounded-md hover:bg-ghg-red-dark/30 text-ghg-red">
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -1223,8 +1235,16 @@ export default function Settings() {
               <Button variant="ghost" onClick={() => pickFolder("tv")}>
                 <FolderPlus className="w-4 h-4" /> Serienordner
               </Button>
+              <Button variant="ghost" onClick={() => pickFolder("mixed")}>
+                <Layers className="w-4 h-4" /> Serien- &amp; Filmordner
+              </Button>
               <Button variant="ghost" onClick={() => void pickFolderForScan()}>
                 <ScanSearch className="w-4 h-4" /> Ordner durchsuchen &amp; auswählen
+              </Button>
+              {/* Zentrale Stelle zum Nachbessern: zeigt jede Datei mit vollem
+                  Pfad und laesst sie zu Folge/Film/Bonus umbiegen. */}
+              <Button variant="ghost" onClick={() => setShowZuordnung(true)}>
+                <FileQuestion className="w-4 h-4" /> Zuordnung prüfen
               </Button>
             </div>
             <p className="text-xs text-ghg-muted mb-3">
@@ -1568,6 +1588,7 @@ export default function Settings() {
       <p className="text-xs text-ghg-muted text-center mt-8">GHGFlix{version ? ` · v${version}` : ""} · Rot/Schwarz ZickZack Edition</p>
 
       <ThemeStore open={showTheme} onClose={() => setShowTheme(false)} />
+      <ZuordnungDialog open={showZuordnung} onClose={() => setShowZuordnung(false)} />
       {webPick && (
         <ServerFolderPicker
           title={
@@ -1575,7 +1596,9 @@ export default function Settings() {
               ? "Ordner auf dem Server durchsuchen"
               : webPick.kind === "tv"
                 ? "Serien-Ordner auf dem Server wählen"
-                : "Film-Ordner auf dem Server wählen"
+                : webPick.kind === "mixed"
+                  ? "Serien- & Film-Ordner auf dem Server wählen"
+                  : "Film-Ordner auf dem Server wählen"
           }
           onClose={() => setWebPick(null)}
           onPick={async (path) => {

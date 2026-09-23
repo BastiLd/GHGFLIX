@@ -13,12 +13,32 @@ pub fn is_video(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-static RE_SXXEXX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)s(\d{1,2})\s*[._\- ]?\s*e(\d{1,3})").unwrap());
+/* "S01E02", aber auch "S6 E1", "S6-Ep-1", "S06.Ep.19", "s6 ep 20".
+   Die Schreibweise mit "Ep" und mit Bindestrichen als Trenner benutzen
+   Streaming-Mitschnitte durchgaengig; ohne sie landeten 24 Miraculous-Folgen
+   (gemessen am 19.08.2026) als eigenstaendige "Filme" in der Bibliothek und
+   bekamen dort zufaellige TMDb-Treffer wie "Penny On M.A.R.S.".
+   Das fuehrende \b verhindert Treffer mitten im Wort ("Atmos 5 1"). */
+/* KEINE Wortgrenze hinter der Folgennummer: Doppelfolgen heißen
+   „S07E12x13" oder „S01E01E02" — dort folgt auf die Nummer direkt ein
+   Buchstabe. Mit `\b` am Ende griff dieses Muster nicht, und RE_NXNN machte
+   aus „12x13" die Staffel 12, Folge 13 (gemessen 23.09.2026 an
+   The.Mentalist.S07E12x13…). Die Grenze VORNE bleibt — sie ist es, die Treffer
+   mitten im Wort („Atmos 5 1") verhindert. */
+static RE_SXXEXX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bs\s*[._\- ]?\s*(\d{1,2})\s*[._\- ]?\s*e(?:p(?:isode)?)?\s*[._\- ]?\s*(\d{1,3})")
+        .unwrap()
+});
 static RE_NXNN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)(?:^|[^\d])(\d{1,2})\s*x\s*(\d{1,3})(?:[^\d]|$)").unwrap());
+/// "Season 6 Episode 22", "season-6-episode-22", "Staffel 2 Folge 3".
+/// Trenner zwischen Wort und Zahl duerfen Bindestriche/Punkte sein — genau so
+/// benennen Download-Seiten ihre Dateien.
 static RE_SEASON_EP_WORDS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:season|staffel)\s*(\d{1,2}).*?(?:episode|folge)\s*(\d{1,3})").unwrap()
+    Regex::new(
+        r"(?i)\b(?:season|staffel|saison)\s*[._\- ]?\s*(\d{1,2}).*?\b(?:episode|folge|ep)\s*[._\- ]?\s*(\d{1,3})\b",
+    )
+    .unwrap()
 });
 static RE_YEAR: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:^|[^\d])((?:19|20)\d{2})(?:[^\d]|$)").unwrap());
@@ -30,7 +50,7 @@ static RE_STANDALONE_NUM: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:^|[ ._\-])0*(\d{1,3})(?:[ ._\-]|$)").unwrap());
 static RE_JUNK_CUT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)\b(1080p|720p|2160p|480p|4k|uhd|x264|x265|h\.?264|h\.?265|hevc|xvid|divx|bluray|blu-ray|brrip|bdrip|web-?rip|web-?dl|hdrip|dvdrip|hdtv|aac|ac3|dts(?:-hd)?|truehd|atmos|ddp?5|remux|proper|repack|extended|unrated|imax|hdr10?|10bit|multi|dual|complete)\b",
+        r"(?i)\b(1080p|720p|2160p|480p|4k|uhd|x264|x265|h\.?264|h\.?265|hevc|xvid|divx|bluray|blu-ray|brrip|bdrip|web-?rip|web-?dl|hdrip|dvdrip|hdtv|aac|ac3|dts(?:-hd)?|truehd|atmos|ddp?5|remux|proper|repack|extended|unrated|imax|hdr10?|10bit|multi|dual|complete|hd|sd|fhd)\b",
     )
     .unwrap()
 });
@@ -41,11 +61,26 @@ static RE_SEASON_CUT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\b(?:season|staffel|saison|series)\b\s*\d{1,3}|\bs\d{1,2}(?:e\d{1,3})?\b").unwrap());
 // Leading scene/URL prefixes like "www.UIndex.org - " (dots already turned to
 // spaces by `normalize`, so this is space-tolerant: "www UIndex org - ").
-static RE_URL_PREFIX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^\s*www\b.*?\b(?:org|com|net|info|me|cc|tv|io|to|se|nu)\b[\s\-_.:|]*").unwrap());
-// Stray site/scene tokens anywhere in the name.
-static RE_SITE_TOKEN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\b(?:www|uindex|rarbg|yts|yify|eztv|ettv|phdteam|psa|galaxytv|ethel|mkvcage|sparks|ntb)\b").unwrap());
+static RE_URL_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)^\s*www\b.*?\b(?:org|com|net|info|me|cc|tv|io|to|se|nu|tube|site|ws|xyz|in|one|sbs|lol|click|art|buzz)\b[\s\-_.:|]*",
+    )
+    .unwrap()
+});
+// Stray site/scene tokens anywhere in the name. "ggflix"/"mhub"/"hdhub"/"tamilmv"
+// kommen von Streaming-Mitschnitten ("Watch … - GGFlix.mp4") und verhinderten
+// jede TMDb-Zuordnung, weil sie als echte Titelwoerter mitgesucht wurden.
+static RE_SITE_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(?:www|uindex|rarbg|yts|yify|eztv|ettv|phdteam|psa|galaxytv|ethel|mkvcage|sparks|ntb|ggflix|gflix|mhub|hdhub|tamilmv|torrenting)\b",
+    )
+    .unwrap()
+});
+/// Ein fuehrendes "Watch" stammt von Streaming-Seiten ("Watch <Titel> - GGFlix")
+/// und ist kein Titelbestandteil. (Rusts Regex kann kein Lookahead — dass
+/// danach noch etwas uebrig bleibt, prueft der Aufrufer.)
+static RE_WATCH_PREFIX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^\s*watch\b[\s\-_.:|]+").unwrap());
 
 fn collapse_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -101,6 +136,15 @@ fn cap_i64(c: &regex::Captures, i: usize) -> i64 {
 /// Extract a clean title + optional year from a movie filename stem or a show folder name.
 pub fn parse_title_year(raw: &str) -> (String, Option<i64>) {
     let norm = normalize(raw);
+    // Seiten-Praefixe zuerst weg ("www.1TamilMV.tube - Ballerina", "Watch … - GGFlix"),
+    // sonst suchen wir spaeter mit dem Seitennamen statt mit dem Filmtitel.
+    let norm = RE_URL_PREFIX.replace(&norm, "").into_owned();
+    let norm = if RE_SITE_TOKEN.is_match(&norm) {
+        let ohne = RE_WATCH_PREFIX.replace(&norm, "").into_owned();
+        if ohne.trim().is_empty() { norm } else { ohne }
+    } else {
+        norm
+    };
     let mut cut = norm.len();
     let mut year = None;
 
@@ -127,6 +171,22 @@ pub fn parse_title_year(raw: &str) -> (String, Option<i64>) {
         title = raw.to_string();
     }
     (title, year)
+}
+
+/// Wie `letters_only`, aber ZIFFERN BLEIBEN ERHALTEN — für die Frage „ist das
+/// wirklich derselbe Titel?". Satzzeichen fallen weg, damit „Shazam!" und
+/// „Shazam" bzw. „What If...?" und „What If" als gleich gelten; die Ziffern
+/// bleiben, damit „Miraculous 5" und „Iron Man 2" NICHT mit dem Grundtitel
+/// verschmelzen.
+pub fn letters_and_digits(s: &str) -> String {
+    let cleaned = RE_SITE_TOKEN.replace_all(s, " ");
+    cleaned
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == ' ' || c == '\'' { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A title cleaned down to letters + spaces (plus apostrophes) for TMDb search —
@@ -230,22 +290,33 @@ pub fn parse_season_from_dir(dir: &str) -> Option<i64> {
 /// Detect (season, episode) from a filename stem, using the parent dir as a hint.
 pub fn parse_episode(stem: &str, parent_dir: &str) -> Option<(i64, i64)> {
     let norm = normalize(stem);
+    /* Technik-Kuerzel wie "x264"/"x265" stehen in fast jedem Release-Namen
+       direkt hinter einer Ziffer (Aufloesung, HDR-Stufe, Tonspur) - "HDR10
+       x265" oder "DDP5.1.x265" sahen fuer RE_NXNN dadurch wie eine Folge
+       "10x265" bzw. "1x265" aus. Deshalb ERST die bekannten Technik-Woerter
+       raus, DANACH nach Serien-Mustern suchen.
 
-    if let Some(c) = RE_SXXEXX.captures(&norm) {
+       Gemessen am 18.08.2026: "Shazam ... HDR10 x265-SM737.mkv" (movie-only
+       Ordner) wurde dadurch faelschlich zur Serie "S10E265", "The LEGO
+       Batman Movie ... DDP5.1.x265..." zur Serie "S01E265". */
+    let clean = RE_JUNK_CUT.replace_all(&norm, " ");
+    let clean = collapse_ws(&clean);
+
+    if let Some(c) = RE_SXXEXX.captures(&clean) {
         return Some((cap_i64(&c, 1), cap_i64(&c, 2)));
     }
-    if let Some(c) = RE_NXNN.captures(&norm) {
+    if let Some(c) = RE_NXNN.captures(&clean) {
         return Some((cap_i64(&c, 1), cap_i64(&c, 2)));
     }
-    if let Some(c) = RE_SEASON_EP_WORDS.captures(&norm) {
+    if let Some(c) = RE_SEASON_EP_WORDS.captures(&clean) {
         return Some((cap_i64(&c, 1), cap_i64(&c, 2)));
     }
 
     if let Some(season) = parse_season_from_dir(parent_dir) {
-        if let Some(c) = RE_EP_ONLY.captures(&norm) {
+        if let Some(c) = RE_EP_ONLY.captures(&clean) {
             return Some((season, cap_i64(&c, 1)));
         }
-        if let Some(c) = RE_STANDALONE_NUM.captures(&norm) {
+        if let Some(c) = RE_STANDALONE_NUM.captures(&clean) {
             let zahl = cap_i64(&c, 1);
             /* Zusammengezogene Nummer wie "101" in "Staffel 1" = 1x01, also
                Folge 1. Diese Schreibweise benutzen Download-Seiten und alte
@@ -280,10 +351,76 @@ mod tests {
     }
 
     #[test]
+    fn streaming_site_names_are_stripped_from_movie_titles() {
+        // echte Dateinamen von der Platte, die vorher gar keinen Treffer bekamen
+        assert_eq!(
+            parse_title_year("www.1TamilMV.tube - Ballerina (2025) WEB-DL - 4K SDR - HEVC").0,
+            "Ballerina"
+        );
+        assert_eq!(
+            parse_title_year("Watch Five Nights at Freddy's 2 - GGFlix").0,
+            "Five Nights at Freddy's 2 - GGFlix"
+        );
+        assert_eq!(parse_title_year("Miraculous-movie-hd").0, "Miraculous-movie");
+        // "Watch" am Anfang eines ECHTEN Titels darf nicht verschwinden
+        assert_eq!(parse_title_year("Watch.Dogs.2020.1080p").0, "Watch Dogs");
+    }
+
+    #[test]
     fn episodes() {
         assert_eq!(parse_episode("Show.S01E02.1080p", ""), Some((1, 2)));
         assert_eq!(parse_episode("Show 1x05", ""), Some((1, 5)));
         assert_eq!(parse_episode("Folge 7", "Staffel 3"), Some((3, 7)));
+    }
+
+    #[test]
+    fn movie_release_tags_dont_look_like_episodes() {
+        // "HDR10 x265" sah wie Folge "10x265" aus, "DDP5.1.x265" wie "1x265" -
+        // beides Technik-Kuerzel aus reinen Film-Dateinamen, keine Serien.
+        assert_eq!(
+            parse_episode("Shazam 2019 UHD BluRay 1080p DD Atmos 5.1 DoVi HDR10 x265-SM737", ""),
+            None
+        );
+        assert_eq!(
+            parse_episode("The.LEGO.Batman.Movie.2017.1080p.BluRay.DDP5.1.x265.10bit-GalaxyRG265", ""),
+            None
+        );
+        // echte S01E02-Angaben muessen trotz Technik-Kuerzeln daneben weiter erkannt werden
+        assert_eq!(
+            parse_episode("Transformers.Prime.S03E11.Beast.Hunters.1080p.WEB-DL.DD5.1.AAC2.0.H.264-YFN", ""),
+            Some((3, 11))
+        );
+    }
+
+    #[test]
+    fn streaming_rip_episode_spellings() {
+        // Schreibweisen von Mitschnitt-Seiten (gemessen an 24 Miraculous-Dateien)
+        assert_eq!(parse_episode("M-S6-Ep-1-Climatiqueen-", ""), Some((6, 1)));
+        assert_eq!(parse_episode("Miraculous-S6-EP-19-Riginarazione-English-Dub", ""), Some((6, 19)));
+        assert_eq!(parse_episode("Miraculous-s6-ep-20-Heartfixer-English-Dub", ""), Some((6, 20)));
+        assert_eq!(parse_episode("Miraculous S6 EP16 Noe-Original", ""), Some((6, 16)));
+        assert_eq!(parse_episode("m-season-6-episode-22-lady-chaos_Ydu6Hdnj", ""), Some((6, 22)));
+        assert_eq!(
+            parse_episode("miraculous-ladybug-vampigami-season-6-episode-8-online-free_fLFmVvsz", ""),
+            Some((6, 8))
+        );
+        assert_eq!(parse_episode("Miraculous-Ladybug-Mr.-Agreste-Season-6-Episode-9", ""), Some((6, 9)));
+        // Doppelfolgen: die ERSTE Nummer zählt, nicht „Staffel 12, Folge 13"
+        assert_eq!(
+            parse_episode("The.Mentalist.S07E12x13.Brown.Shag.Carpet-White.Orchids.1080p.WEB-DL.DD5.1.H.264-ECI", ""),
+            Some((7, 12))
+        );
+        assert_eq!(parse_episode("Show.S01E01E02.1080p", ""), Some((1, 1)));
+        // ... und Filmnamen duerfen davon NICHT betroffen sein
+        for film in [
+            "Avengers.Infinity.War.2018.Bluray.2160p.AV1.HDR10.AC3.5.1-UH",
+            "Spider-Man.No.Way.Home.2022.2160p.UHD.BluRay.TrueHD.7.1.Atmos.HDR.x265-EVO",
+            "Shazam 2019 UHD BluRay 1080p DD Atmos 5 1 DoVi HDR10 x265-SM737",
+            "The.Incredibles.2004.RERIP.2160p.BluRay.x265.10bit.SDR.TrueHD.7.1.Atmos-SWTYBLZ",
+            "Zack.Snyders.Justice.League.2021.2160p.4K.WEB.x265.10bit.AAC5.1-[YTS.MX]",
+        ] {
+            assert_eq!(parse_episode(film, ""), None, "Film faelschlich als Folge erkannt: {film}");
+        }
     }
 
     #[test]

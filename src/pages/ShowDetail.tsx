@@ -10,6 +10,9 @@ import { detectIntros, episodeToMovie, getSeasonArt, getShowDetail, listFavorite
 import { openCtx } from "../lib/contextmenu";
 import { enqueueSeasonRest, playback } from "../lib/playback";
 import { useUiPrefs } from "../lib/uiPrefs";
+import ExtrasTab from "../components/ExtrasTab";
+import { showExtras, setExtraArt, playFile } from "../lib/api";
+import type { Extra, ExtraArt } from "../lib/types";
 import { certAllowed, formatRuntime, formatTime, parseGenres, quality, ratingText, seasonEpisodeLabel } from "../lib/format";
 import { backdropUrl, posterUrl, stillUrl } from "../lib/img";
 import { useStore } from "../lib/store";
@@ -38,11 +41,14 @@ export default function ShowDetail() {
      Staffelwert — sonst müsste selectedSeason plötzlich auch Nicht-Zahlen
      tragen und jede Rechnung darauf (Fortschritt, „Alle gesehen") bräche. */
   const [filmeTab, setFilmeTab] = useState(false);
+  /* Bonusmaterial-Reiter (Bloopers, Hinter den Kulissen …). null = keiner offen. */
+  const [extraTab, setExtraTab] = useState<ExtraArt | null>(null);
 
   const qc = useQueryClient();
   const toast = useStore((s) => s.toast);
   const detail = useQuery({ queryKey: ["show", sid], queryFn: () => getShowDetail(sid) });
   const seasonArtQ = useQuery({ queryKey: ["seasonArt", sid], queryFn: () => getSeasonArt(sid) });
+  const extrasQ = useQuery({ queryKey: ["extras", sid], queryFn: () => showExtras(sid) });
   const seasonArt = useMemo(() => new Map(seasonArtQ.data ?? []), [seasonArtQ.data]);
   const prog = useQuery({ queryKey: ["progress", "list", profileId], queryFn: () => listProgress(profileId) });
   const allShowsQ = useQuery({ queryKey: ["shows"], queryFn: listShows });
@@ -106,6 +112,21 @@ export default function ShowDetail() {
     if (selectedSeason !== null) sessionStorage.setItem(`ghgflix.season.${sid}`, String(selectedSeason));
   }, [selectedSeason, sid]);
 
+  /* Bonusmaterial nach Art buendeln — je Art ein eigener Reiter.
+     ACHTUNG: Dieser Hook MUSS oberhalb der vorzeitigen `return`s stehen.
+     Stand er darunter, lief er im Ladezustand nicht und danach doch — React
+     bricht dann mit „Rendered more hooks than during the previous render" ab
+     und haengt den GANZEN Baum aus: das Fenster wurde schwarz und es gab kein
+     Zurueck mehr (gemeldet 19.08.2026). */
+  const extrasNachArt = useMemo(() => {
+    const m = new Map<ExtraArt, Extra[]>();
+    for (const e of extrasQ.data ?? []) {
+      if (!m.has(e.art)) m.set(e.art, []);
+      m.get(e.art)!.push(e);
+    }
+    return m;
+  }, [extrasQ.data]);
+
   if (detail.isLoading) return <SkeletonDetail />;
 
   if (!detail.data) return <EmptyState title="Serie nicht gefunden" />;
@@ -113,6 +134,16 @@ export default function ShowDetail() {
   const { show } = detail.data;
   const showMovies = detail.data.movies ?? [];
   const hasSpecials = seasons.some((s) => s.season === 0);
+  const EXTRA_LABEL: Record<string, string> = {
+    special: "Specials",
+    blooper: "Bloopers",
+    behind: "Hinter den Kulissen",
+    deleted: "Gelöschte Szenen",
+    featurette: "Featurettes",
+    interview: "Interviews",
+    trailer: "Trailer",
+    sonstiges: "Sonstiges",
+  };
   const genres = parseGenres(show.genres);
   const rating = ratingText(show.rating);
   const currentSeason = seasons.find((s) => s.season === selectedSeason);
@@ -372,10 +403,11 @@ export default function ShowDetail() {
                 onClick={() => {
                   setSelectedSeason(s.season);
                   setFilmeTab(false);
+                  setExtraTab(null);
                 }}
                 className={clsx(
                   "px-4 py-2 rounded-lg text-sm font-semibold transition",
-                  !filmeTab && selectedSeason === s.season
+                  !filmeTab && !extraTab && selectedSeason === s.season
                     ? "bg-ghg-red text-white"
                     : "bg-ghg-surface2 text-ghg-muted hover:text-ghg-text",
                 )}
@@ -394,11 +426,12 @@ export default function ShowDetail() {
               onClick={() => {
                 setSelectedSeason(0);
                 setFilmeTab(false);
+                setExtraTab(null);
               }}
               title="Specials, Kurzfolgen und alles, was keiner Staffel zugeordnet ist"
               className={clsx(
                 "px-4 py-2 rounded-lg text-sm font-semibold transition",
-                !filmeTab && selectedSeason === 0
+                !filmeTab && !extraTab && selectedSeason === 0
                   ? "bg-ghg-red text-white"
                   : "bg-ghg-surface2 text-ghg-muted hover:text-ghg-text",
               )}
@@ -413,7 +446,10 @@ export default function ShowDetail() {
 
           {showMovies.length > 0 && (
             <button
-              onClick={() => setFilmeTab(true)}
+              onClick={() => {
+                setFilmeTab(true);
+                setExtraTab(null);
+              }}
               title="Kinofilme, die zu dieser Serie gehören"
               className={clsx(
                 "px-4 py-2 rounded-lg text-sm font-semibold transition",
@@ -423,9 +459,27 @@ export default function ShowDetail() {
               Filme <span className="ml-1 text-xs opacity-70">{showMovies.length}</span>
             </button>
           )}
+
+          {/* Bonusmaterial: ein Reiter je vorhandener Art */}
+          {[...extrasNachArt.entries()].map(([art, liste]) => (
+            <button
+              key={art}
+              onClick={() => {
+                setExtraTab(art);
+                setFilmeTab(false);
+              }}
+              className={clsx(
+                "px-4 py-2 rounded-lg text-sm font-semibold transition",
+                extraTab === art ? "bg-ghg-red text-white" : "bg-ghg-surface2 text-ghg-muted hover:text-ghg-text",
+              )}
+            >
+              {EXTRA_LABEL[art] ?? art}
+              <span className="ml-1 text-xs opacity-70">{liste.length}</span>
+            </button>
+          ))}
         </div>
 
-        {filmeTab && (
+        {filmeTab && !extraTab && (
           <div className="mb-6">
             <h3 className="text-lg font-bold mb-1">
               Filme zu dieser Serie
@@ -463,7 +517,29 @@ export default function ShowDetail() {
           </div>
         )}
 
-        {!filmeTab && currentSeason && selectedSeason !== null && (
+        {extraTab && (
+          <ExtrasTab
+            items={extrasNachArt.get(extraTab) ?? []}
+            /* Kacheln bei Bonusmaterial ja, bei Specials/Filmen nein —
+               umstellbar, falls es im Einzelfall nicht passt. */
+            kachelnDefault={extraTab !== "special"}
+            speicherSchluessel={`ghgflix.kacheln.${sid}.${extraTab}`}
+            onPlay={(e) => void playFile(e.path).catch((err) => toast(String(err), "error"))}
+            onAendern={async (e) => {
+              const eingabe = window.prompt(
+                "Art festlegen: special, blooper, behind, deleted, featurette, interview, trailer, sonstiges",
+                e.art,
+              );
+              if (!eingabe) return;
+              const st = window.prompt("Staffel (leer = keine)", e.staffel != null ? String(e.staffel) : "");
+              await setExtraArt(e.id, eingabe.trim() as ExtraArt, st && st.trim() ? Number(st) : null);
+              void extrasQ.refetch();
+            }}
+            onNotizGespeichert={() => void extrasQ.refetch()}
+          />
+        )}
+
+        {!extraTab && !filmeTab && currentSeason && selectedSeason !== null && (
           <div className="flex items-center gap-3 mb-4">
             {seasonArt.get(selectedSeason) && (
               <img
@@ -583,7 +659,11 @@ export default function ShowDetail() {
           </div>
         )}
 
-        <div className={clsx("space-y-2", filmeTab && "hidden")}>
+        {/* Folgenliste NUR im Staffel-Reiter. Vorher wurde sie nur beim
+            Filme-Reiter ausgeblendet — in jedem Extras-Reiter (Bloopers,
+            Featurettes …) hingen deshalb die Folgen der zuletzt offenen
+            Staffel unter den Kacheln (gemeldet 23.09.2026). */}
+        <div className={clsx("space-y-2", (filmeTab || extraTab) && "hidden")}>
           {currentSeason?.episodes.map((ep) => (
             <EpisodeRow
               key={ep.id}

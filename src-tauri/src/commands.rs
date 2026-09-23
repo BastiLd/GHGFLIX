@@ -2025,3 +2025,136 @@ pub fn episode_to_movie(app: AppHandle, state: State<AppState>, episode_id: i64)
     let _ = app.emit("library://updated", ());
     Ok(movie_id)
 }
+
+// ===== Zusatzmaterial, Notizen und Handzuordnung =====
+
+/// Bonusmaterial einer Serie (Reiter „Bloopers", „Hinter den Kulissen" …).
+#[tauri::command]
+pub fn show_extras(state: State<AppState>, show_id: i64) -> R<Vec<crate::extras::Extra>> {
+    let conn = state.conn.lock().unwrap();
+    crate::extras::fuer_serie(&conn, show_id).map_err(err)
+}
+
+/// Art/Staffel eines Bonus-Eintrags von Hand festlegen.
+#[tauri::command]
+pub fn set_extra_art(state: State<AppState>, id: i64, art: String, staffel: Option<i64>) -> R<()> {
+    let conn = state.conn.lock().unwrap();
+    crate::extras::von_hand_setzen(&conn, id, &art, staffel).map_err(err)
+}
+
+/// Kurze Notiz an einer Datei (Folge, Film, Bonus) — leerer Text löscht sie.
+#[tauri::command]
+pub fn set_note(state: State<AppState>, path: String, text: String) -> R<()> {
+    let conn = state.conn.lock().unwrap();
+    crate::extras::notiz_setzen(&conn, &path, &text).map_err(err)
+}
+
+#[tauri::command]
+pub fn all_notes(state: State<AppState>) -> R<Vec<(String, String)>> {
+    let conn = state.conn.lock().unwrap();
+    crate::extras::alle_notizen(&conn).map_err(err)
+}
+
+/// Inhalt des Zuordnungs-Fensters.
+#[tauri::command]
+pub fn assignment_list(state: State<AppState>, only_uncertain: bool) -> R<Vec<crate::zuordnung::Eintrag>> {
+    let conn = state.conn.lock().unwrap();
+    crate::zuordnung::liste(&conn, only_uncertain).map_err(err)
+}
+
+/// Eine Datei von Hand einordnen. Wirkt sofort und überlebt jeden Neuaufbau.
+#[tauri::command]
+pub fn assign_file(app: AppHandle, state: State<AppState>, path: String, ziel: crate::zuordnung::Ziel) -> R<()> {
+    {
+        let conn = state.conn.lock().unwrap();
+        crate::zuordnung::setzen(&conn, &path, &ziel).map_err(err)?;
+
+        // Sofort umsetzen, damit die Änderung nicht erst beim nächsten Scan greift.
+        match ziel.ziel.as_str() {
+            "ignorieren" => {
+                let _ = db::delete_episode_file_by_path(&conn, &path);
+                let _ = db::delete_movie_by_path(&conn, &path);
+                let _ = conn.execute("DELETE FROM extras WHERE path = ?1", [&path]);
+            }
+            "film" => {
+                let _ = db::delete_episode_file_by_path(&conn, &path);
+                let _ = conn.execute("DELETE FROM extras WHERE path = ?1", [&path]);
+            }
+            "extra" => {
+                let _ = db::delete_episode_file_by_path(&conn, &path);
+                let _ = db::delete_movie_by_path(&conn, &path);
+                if let (Some(tmdb), Some(art)) = (ziel.show_tmdb, ziel.extra_art.as_deref()) {
+                    if let Ok(Some(sid)) = db::find_show_by_tmdb(&conn, tmdb) {
+                        let titel = std::path::Path::new(&path)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        let _ = crate::extras::merken(&conn, sid, &path, &titel, art, ziel.staffel);
+                        let _ = conn.execute("UPDATE extras SET von_hand=1 WHERE path=?1", [&path]);
+                    }
+                }
+            }
+            "folge" => {
+                let _ = db::delete_movie_by_path(&conn, &path);
+                let _ = conn.execute("DELETE FROM extras WHERE path = ?1", [&path]);
+                if let (Some(tmdb), Some(st), Some(ep)) = (ziel.show_tmdb, ziel.staffel, ziel.episode) {
+                    let titel = std::path::Path::new(&path)
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    if let Ok(sid) = db::find_or_create_show_for_tmdb(&conn, tmdb, &titel) {
+                        match db::episode_id_of_file(&conn, &path) {
+                            Ok(Some(eid)) => {
+                                let _ = db::move_episode(&conn, eid, sid, st, ep);
+                            }
+                            _ => {
+                                if let Ok(ep_id) = db::find_or_create_episode(&conn, sid, st, ep, &path) {
+                                    let _ = db::add_episode_file(&conn, ep_id, &path);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        let _ = db::set_all_episode_primaries(&conn);
+    }
+    let _ = app.emit("library://updated", ());
+    Ok(())
+}
+
+/// Handentscheidung aufheben — die Automatik übernimmt beim nächsten Scan.
+#[tauri::command]
+pub fn clear_assignment(state: State<AppState>, path: String) -> R<()> {
+    let conn = state.conn.lock().unwrap();
+    crate::zuordnung::loeschen(&conn, &path).map_err(err)
+}
+
+/// Bonusmaterial abspielen.
+///
+/// Für Extras gibt es bewusst keinen Bibliothekseintrag (kein TMDb, kein
+/// Gesehen-Stand), an dem der eingebaute Player hängen könnte — deshalb geht
+/// es hier direkt an mpv. Das ist auch das, was man bei einem Gag Reel will:
+/// anschauen, fertig, kein Fortschritt.
+#[tauri::command]
+pub fn play_file(state: State<AppState>, path: String) -> R<()> {
+    if !std::path::Path::new(&path).exists() {
+        return Err("Datei nicht gefunden".into());
+    }
+    let mpv = {
+        let conn = state.conn.lock().unwrap();
+        db::get_setting(&conn, "mpv_path").ok().flatten()
+    };
+    match mpv {
+        Some(p) if !p.trim().is_empty() && std::path::Path::new(&p).exists() => {
+            std::process::Command::new(p)
+                .arg(&path)
+                .spawn()
+                .map_err(|e| format!("mpv ließ sich nicht starten: {e}"))?;
+            Ok(())
+        }
+        _ => Err("mpv ist nicht eingerichtet — Einstellungen → Werkzeuge".into()),
+    }
+}

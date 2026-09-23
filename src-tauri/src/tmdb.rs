@@ -317,10 +317,29 @@ struct EpHit {
     runtime: Option<i64>,
 }
 
+/// TMDb v4 "read access token"s are JWTs (three dot-separated base64url
+/// segments) and must be sent as a Bearer header — the classic v3 32-char
+/// api_key still goes as a query parameter. Sending a v4 token as `api_key`
+/// silently fails every request (401), which is why a v4 key pasted into
+/// Settings looked "accepted" but never matched anything.
+fn is_v4_token(key: &str) -> bool {
+    key.split('.').count() == 3
+}
+
 impl Tmdb {
     pub fn new(client: reqwest::Client, key: String, lang: String) -> Self {
         let lang = if lang.trim().is_empty() { "de-DE".to_string() } else { lang };
         Tmdb { client, key, lang }
+    }
+
+    /// Starts a GET request with whichever auth style the configured key needs.
+    fn get(&self, url: impl reqwest::IntoUrl) -> reqwest::RequestBuilder {
+        let req = self.client.get(url);
+        if is_v4_token(&self.key) {
+            req.bearer_auth(&self.key)
+        } else {
+            req.query(&[("api_key", self.key.as_str())])
+        }
     }
 
     /// kind: "movie" | "tv" | "multi"
@@ -331,7 +350,6 @@ impl Tmdb {
             _ => "/search/multi",
         };
         let mut params: Vec<(&str, String)> = vec![
-            ("api_key", self.key.clone()),
             ("language", self.lang.clone()),
             ("query", query.to_string()),
             ("include_adult", "false".to_string()),
@@ -344,7 +362,7 @@ impl Tmdb {
             }
         }
         let url = format!("{BASE}{endpoint}");
-        let resp: SearchResp = self.client.get(url).query(&params).send().await?.json().await?;
+        let resp: SearchResp = self.get(url).query(&params).send().await?.json().await?;
         let default_kind = if kind == "tv" { "tv" } else { "movie" };
         let out = resp
             .results
@@ -357,10 +375,8 @@ impl Tmdb {
     pub async fn movie_details(&self, id: i64) -> Result<MovieMeta> {
         let url = format!("{BASE}/movie/{id}");
         let r: MovieDetailsResp = self
-            .client
             .get(url)
             .query(&[
-                ("api_key", self.key.as_str()),
                 ("language", self.lang.as_str()),
                 ("append_to_response", "release_dates"),
             ])
@@ -392,10 +408,8 @@ impl Tmdb {
     pub async fn tv_details(&self, id: i64) -> Result<ShowMeta> {
         let url = format!("{BASE}/tv/{id}");
         let r: TvDetailsResp = self
-            .client
             .get(url)
             .query(&[
-                ("api_key", self.key.as_str()),
                 ("language", self.lang.as_str()),
                 ("append_to_response", "content_ratings"),
             ])
@@ -428,9 +442,8 @@ impl Tmdb {
     pub async fn season_numbers(&self, id: i64) -> Result<Vec<i64>> {
         let url = format!("{BASE}/tv/{id}");
         let r: TvDetailsResp = self
-            .client
             .get(url)
-            .query(&[("api_key", self.key.as_str()), ("language", self.lang.as_str())])
+            .query(&[("language", self.lang.as_str())])
             .send()
             .await?
             .json()
@@ -464,9 +477,8 @@ impl Tmdb {
         let mut roh: Vec<Video> = Vec::new();
         for sprache in [self.lang.as_str(), "en-US"] {
             let r: Result<VideosResp, _> = async {
-                self.client
-                    .get(&pfad)
-                    .query(&[("api_key", self.key.as_str()), ("language", sprache)])
+                self.get(&pfad)
+                    .query(&[("language", sprache)])
                     .send()
                     .await?
                     .json::<VideosResp>()
@@ -530,9 +542,8 @@ impl Tmdb {
             .map(|v| v.key.clone());
 
         let credits: CreditsResp = self
-            .client
             .get(format!("{BASE}/{mt}/{id}/credits"))
-            .query(&[("api_key", self.key.as_str()), ("language", self.lang.as_str())])
+            .query(&[("language", self.lang.as_str())])
             .send()
             .await?
             .json()
@@ -574,12 +585,8 @@ impl Tmdb {
         let url = format!("{BASE}{endpoint}");
         // No `language` filter + a broad include list = localized + textless options.
         let resp: ImagesResp = self
-            .client
             .get(url)
-            .query(&[
-                ("api_key", self.key.as_str()),
-                ("include_image_language", "de,en,null"),
-            ])
+            .query(&[("include_image_language", "de,en,null")])
             .send()
             .await?
             .json()
@@ -602,9 +609,8 @@ impl Tmdb {
     pub async fn season_episodes(&self, tv_id: i64, season: i64) -> Result<Vec<EpisodeMeta>> {
         let url = format!("{BASE}/tv/{tv_id}/season/{season}");
         let r: SeasonResp = self
-            .client
             .get(url)
-            .query(&[("api_key", self.key.as_str()), ("language", self.lang.as_str())])
+            .query(&[("language", self.lang.as_str())])
             .send()
             .await?
             .json()

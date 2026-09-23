@@ -1,4 +1,4 @@
-export type LibraryKind = "movie" | "tv";
+export type LibraryKind = "movie" | "tv" | "mixed";
 
 export interface Library {
   id: number;
@@ -317,4 +317,49 @@ export interface FeedFilter {
   format?: "shorts" | "videos" | null;
   search?: string | null;
   sort?: "neu" | "alt" | "kanal";
+}
+
+// ===== Zusatzmaterial, Notizen, Handzuordnung =====
+
+/** Arten von Bonusmaterial. `sonstiges` ist der Auffangwert. */
+export type ExtraArt =
+  | "special"
+  | "blooper"
+  | "behind"
+  | "deleted"
+  | "featurette"
+  | "interview"
+  | "trailer"
+  | "sonstiges";
+
+export interface Extra {
+  id: number;
+  showId: number;
+  path: string;
+  titel: string;
+  art: ExtraArt;
+  staffel?: number | null;
+  vonHand: boolean;
+  notiz?: string | null;
+}
+
+/** Wohin eine Datei von Hand gehört. */
+export interface ZuordnungZiel {
+  ziel: "folge" | "film" | "extra" | "ignorieren";
+  showTmdb?: number | null;
+  staffel?: number | null;
+  episode?: number | null;
+  extraArt?: ExtraArt | null;
+  tmdbId?: number | null;
+}
+
+/** Eine Zeile im Zuordnungs-Fenster. */
+export interface ZuordnungEintrag {
+  path: string;
+  dateiname: string;
+  aktuell: "film" | "folge" | "extra" | "nirgends";
+  beschreibung: string;
+  unsicher?: string | null;
+  vonHand: boolean;
+  notiz?: string | null;
 }

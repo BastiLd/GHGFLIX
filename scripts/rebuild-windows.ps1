@@ -141,17 +141,37 @@ if ($Installieren) {
            Sort-Object LastWriteTime -Descending | Select-Object -First 1
   if (-not $setup) { throw "Kein Installer im Ordner 'nsis' gefunden." }
 
-  Get-Process -Name "ghgflix", "GHGFlix" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-  Write-Host "     $($setup.Name) laeuft (still) ..."
-  $p = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
-  if ($p.ExitCode -ne 0) { throw "Der Installer endete mit Code $($p.ExitCode)." }
+  # Beenden UND abwarten, bis der Prozess wirklich weg ist.
+  # Gemessen am 23.09.2026: zwei Sekunden nach Stop-Process war ghgflix.exe
+  # noch gesperrt. Der Installer lief trotzdem mit Code 0 durch - und liess
+  # die ALTE Datei liegen. Die Versionsnummer taugt nicht als Kontrolle (sie
+  # bleibt bei jedem Bau gleich), deshalb wird das Dateidatum verglichen.
+  $laufend = Get-Process -Name "ghgflix", "GHGFlix" -ErrorAction SilentlyContinue
+  if ($laufend) {
+    $laufend | Stop-Process -Force -ErrorAction SilentlyContinue
+    $laufend | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+  }
 
   $ziel = Join-Path $env:LOCALAPPDATA "GHGFlix\ghgflix.exe"
-  if (Test-Path $ziel) {
-    Write-Host ("     Installiert: Version " + (Get-Item $ziel).VersionInfo.FileVersion) -ForegroundColor Green
-  } else {
-    Write-Host "     WARNUNG: $ziel nicht gefunden." -ForegroundColor Yellow
+  $vorher = if (Test-Path $ziel) { (Get-Item $ziel).LastWriteTime } else { [datetime]::MinValue }
+  $ersetzt = $false
+  for ($versuch = 1; $versuch -le 3 -and -not $ersetzt; $versuch++) {
+    Write-Host "     $($setup.Name) laeuft (still), Versuch $versuch ..."
+    $p = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
+    if ($p.ExitCode -ne 0) { throw "Der Installer endete mit Code $($p.ExitCode)." }
+    Start-Sleep -Seconds 2
+    $ersetzt = (Test-Path $ziel) -and ((Get-Item $ziel).LastWriteTime -ne $vorher)
+    if (-not $ersetzt) {
+      Write-Host "     Datei wurde NICHT ersetzt (noch gesperrt?) - neuer Versuch in 5 s." -ForegroundColor Yellow
+      Start-Sleep -Seconds 5
+    }
   }
+  if (-not $ersetzt) {
+    throw ("Der Installer meldet Erfolg, hat die alte ghgflix.exe aber nicht ersetzt. " +
+           "Bitte GHGFlix komplett schliessen und das Skript erneut starten.")
+  }
+  Write-Host ("     Installiert: Stand " + (Get-Item $ziel).LastWriteTime) -ForegroundColor Green
 
   if ($warAngeheftet -and -not (Test-Path $tbDatei) -and (Test-Path $ziel)) {
     New-Item -ItemType Directory -Force -Path $tbOrdner | Out-Null

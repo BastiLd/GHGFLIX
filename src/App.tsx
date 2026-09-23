@@ -4,6 +4,7 @@ import { IS_WEB, setWebToken, webToken } from "./lib/platform";
 import { useEffect, useState } from "react";
 import { Wordmark } from "./components/Brand";
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Fehlerfang } from "./components/Fehlerfang";
 import { ContextMenu } from "./components/ContextMenu";
 import { Layout } from "./components/Layout";
 import { MiniPlayer } from "./components/MiniPlayer";
@@ -193,8 +194,10 @@ export default function App() {
           <Route path="/movies" element={<Movies />} />
           <Route path="/shows" element={<Shows />} />
           <Route path="/list" element={<MyList />} />
-          <Route path="/movie/:id" element={<MovieDetail />} />
-          <Route path="/show/:id" element={<ShowDetail />} />
+          {/* Fehlerfang: eine klemmende Detailseite darf nicht die ganze
+              Oberflaeche schwarz machen (siehe components/Fehlerfang.tsx). */}
+          <Route path="/movie/:id" element={<Fehlerfang schluessel={location.pathname}><MovieDetail /></Fehlerfang>} />
+          <Route path="/show/:id" element={<Fehlerfang schluessel={location.pathname}><ShowDetail /></Fehlerfang>} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/stats" element={<Stats />} />
           {/* Punkt 5: abonnierte YouTube-Kanäle plus Leaks/Blog */}

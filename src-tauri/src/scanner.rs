@@ -55,6 +55,12 @@ pub fn run_scan(db_path: PathBuf, http: reqwest::Client, app: AppHandle) -> Resu
         emit(&app, "index", format!("Durchsuche {}", lib.path), 0, 0);
         if lib.kind == "movie" {
             scan_movies(&conn, p)?;
+        } else if lib.kind == "mixed" {
+            // Erst Folgen einsammeln (klare SxxEyy-Muster), danach alles, was
+            // dabei nicht als Folge erkannt wurde, als Film — so darf ein
+            // Ordner Serien UND Filme gleichzeitig enthalten.
+            scan_tv(&conn, p)?;
+            scan_movies(&conn, p)?;
         } else {
             scan_tv(&conn, p)?;
         }
@@ -88,10 +94,125 @@ pub fn run_scan(db_path: PathBuf, http: reqwest::Client, app: AppHandle) -> Resu
     Ok(())
 }
 
+/// Ordner, deren Inhalt Zusatzmaterial zu einem Titel ist — Ausschnitte,
+/// Interviews, gelöschte Szenen. So etwas ist NIE ein eigenständiger Film.
+fn is_bonus_dir(name: &str) -> bool {
+    let t = name.trim().to_lowercase();
+    if matches!(
+        t.as_str(),
+        "extras" | "extra" | "featurettes" | "featurette" | "bonus" | "bonusmaterial"
+            | "deleted scenes" | "deleted scene" | "geloeschte szenen" | "gelöschte szenen"
+            | "inside the episode" | "behind the scenes" | "making of" | "interviews"
+            | "interview" | "webisodes" | "webisode" | "trailers" | "featurettes and deleted scenes"
+    ) {
+        return true;
+    }
+    /* Zusammengesetzte Namen wie „Special Extras Season 1", „Bonus Disc 2",
+       „Season 3 Extras" (gemessen 23.09.2026 in Z:\SM-MOONDOOM\Series\The
+       Newsroom). Verlangt wird ein Bonuswort PLUS ein Staffel-/Disk-Hinweis
+       oder ein zweites Bonuswort — ein Ordner, der NUR „Extras (2005)" heißt,
+       ist die gleichnamige Serie und bleibt eine Serie. */
+    let woerter: Vec<&str> = t.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let anzahl_bonus = woerter
+        .iter()
+        .filter(|w| {
+            matches!(**w, "extras" | "extra" | "featurettes" | "featurette" | "bonus" | "bloopers" | "outtakes")
+        })
+        .count();
+    let staffel_hinweis = woerter
+        .iter()
+        .any(|w| matches!(*w, "season" | "staffel" | "saison" | "disc" | "disk" | "special" | "specials"));
+    anzahl_bonus >= 2 || (anzahl_bonus == 1 && staffel_hinweis)
+        || t.contains("deleted scene") || t.contains("behind the scenes") || t.contains("inside the episode")
+}
+
+/// True, wenn die Datei innerhalb einer Serien-Ordnerstruktur liegt —
+/// unterhalb eines Staffel-Ordners („Season 2") oder eines Bonus-Ordners
+/// („Extras", „Featurettes", „Deleted Scenes").
+///
+/// WARUM (gemessen am 19.08.2026): In den Serienordnern lagen 83 Schnipsel wie
+/// `The Newsroom …\Featurettes\Season 1\Inside the Episode\Amen.mkv` und
+/// `Suits …\Extras\Season 02\Gag Reel.mkv`. Ohne Episodennummer wurden sie zu
+/// „Filmen" — und die automatische TMDb-Suche hängte ihnen dann irgendeinen
+/// echten gleichnamigen Kinofilm an („Amen." von 2002, „Gag" von 2006,
+/// „Sucker Punch"). Die Bibliothek war dadurch voller Geisterfilme.
+fn is_series_side_content(root: &Path, path: &Path) -> bool {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    let comps: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect();
+    // letzte Komponente ist die Datei selbst — nur die Ordner darüber zählen
+    comps
+        .iter()
+        .take(comps.len().saturating_sub(1))
+        .any(|c| is_pure_season_dir(c) || is_bonus_dir(c))
+}
+
+/// Zusatzmaterial der Serie zuordnen, zu der der Ordner gehört.
+///
+/// Die Serie wird über denselben Gruppierungsschlüssel gefunden, den auch
+/// `scan_tv` benutzt — dadurch landet `Suits …\Extras\Season 02\Gag Reel.mkv`
+/// zuverlässig bei der Serie „Suits" und nicht bei einer neu erfundenen.
+fn merke_extra(conn: &Connection, root: &Path, path: &Path) -> Result<bool> {
+    let pfad = path.to_string_lossy().to_string();
+    let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let stem = file_stem(&name);
+
+    /* Den Serienordner von der DATEI AUS nach oben suchen und dabei alle
+       Staffel- und Bonusordner überspringen. show_source_name() taugt hier
+       nicht: bei
+         Avengers\The Newsroom …\Featurettes\Season 1\Inside the Episode\Amen.mkv
+       hält es „Featurettes" für den Serienordner (es nimmt den Ordner ÜBER dem
+       ersten Staffelordner) — die Serie wurde dadurch nie gefunden und alle 33
+       Newsroom-Extras fielen still unter den Tisch (gemessen 19.08.2026). */
+    let rel_zum_ordner = path.strip_prefix(root).unwrap_or(path);
+    let alle: Vec<String> = rel_zum_ordner
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect();
+    let ohne_datei = &alle[..alle.len().saturating_sub(1)];
+    let serien_ordner = ohne_datei
+        .iter()
+        .rev()
+        .find(|c| !is_pure_season_dir(c) && !is_bonus_dir(c) && !parser::is_generic_dir(c));
+
+    let quelle = match serien_ordner {
+        Some(o) => parser::strip_domain_suffix(o),
+        // Die Datei liegt direkt in der Bibliothek unter einem Bonusordner —
+        // dann ist der Bibliotheksordner selbst die Serie.
+        None => root
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default(),
+    };
+    let key = parser::show_key(&quelle);
+    let show_id = match db::show_id_for_key(conn, &key)? {
+        Some(id) => id,
+        // Noch keine Serie zu diesem Ordner (z.B. nur Bonusmaterial vorhanden):
+        // dann gibt es nichts, woran es hängen könnte — beim nächsten Scan,
+        // wenn auch Folgen da sind, wird es nachgeholt.
+        None => return Ok(false),
+    };
+
+    // Ordner ZWISCHEN Bibliothek und Datei bestimmen Art und Staffel.
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    let mut ordner: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect();
+    ordner.pop(); // Dateiname weg
+    let (art, staffel) = crate::extras::art_und_staffel(&ordner, &stem);
+    crate::extras::merken(conn, show_id, &pfad, &stem, &art, staffel)?;
+    Ok(true)
+}
+
 fn scan_movies(conn: &Connection, root: &Path) -> Result<()> {
     // Im Auswahl-Fenster abgelehnte Dateien bleiben draußen. Ohne diese Prüfung
     // wäre jede Ablehnung beim nächsten Scan wieder rückgängig gemacht.
-    let ignored = crate::ordnerwahl::ignored(conn);
+    let mut ignored = crate::ordnerwahl::ignored(conn);
+    // von Hand ausgeblendete Dateien gehoeren ebenso dauerhaft draussen
+    ignored.extend(crate::zuordnung::ignorierte(conn));
     for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
         if !entry.file_type().is_file() {
             continue;
@@ -106,6 +227,33 @@ fn scan_movies(conn: &Connection, root: &Path) -> Result<()> {
         }
         let path = entry.path().to_string_lossy().to_string();
         if ignored.contains(&crate::ordnerwahl::norm(&path)) {
+            continue;
+        }
+        // Handentscheidung schlägt alles: Was der Nutzer als Folge, Bonus oder
+        // ausgeblendet festgelegt hat, wird hier NICHT zum Film gemacht.
+        if let Some(z) = crate::zuordnung::fuer(conn, &path)? {
+            if z.ziel != "film" {
+                db::delete_movie_by_path(conn, &path)?;
+                continue;
+            }
+        }
+        // In einer "mixed"-Bibliothek hat scan_tv() diese Datei schon als Folge
+        // beansprucht (SxxEyy erkannt) — dann NICHT zusätzlich als Film eintragen.
+        if db::show_id_of_episode_file(conn, &path)?.is_some() {
+            continue;
+        }
+        // Bonusmaterial/Staffel-Inhalt einer Serie ist kein Film (siehe oben) —
+        // es wird stattdessen als Zusatzmaterial der Serie festgehalten.
+        /* Bonusmaterial wird NIE zum Film — auch dann nicht, wenn (noch) keine
+           Serie dazu existiert. Versucht am 23.09.2026 und verworfen: ohne
+           Serie landete „Gag Reel.mkv" wieder als Film und die TMDb-Bewertung
+           hängte ihm den Kinofilm „Gag" (2006) an — genau die Geisterfilme
+           vom August. Lieber fehlt so eine Datei (sichtbar in BEKANNTE_FEHLER). */
+        if is_series_side_content(root, entry.path()) {
+            // Wurde so etwas früher schon fälschlich als Film aufgenommen,
+            // muss der alte Eintrag jetzt verschwinden.
+            db::delete_movie_by_path(conn, &path)?;
+            merke_extra(conn, root, entry.path())?;
             continue;
         }
         let (title, year) = parser::parse_title_year(&stem);
@@ -136,9 +284,12 @@ fn is_pure_season_dir(name: &str) -> bool {
 /// such a show became a separate "Season N" group and got mis-matched on TMDb.
 fn show_source_name(root: &Path, path: &Path) -> String {
     let rel = path.strip_prefix(root).unwrap_or(path);
-    let comps: Vec<_> = rel.components().collect();
+    let comps: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect();
     if comps.len() >= 2 {
-        let first = comps[0].as_os_str().to_string_lossy().to_string();
+        let first = comps[0].clone();
 
         /* Nichtssagender Ordnername („Downloads", „Videos", „Neuer Ordner")?
            Dann steht der echte Titel eine Ebene HÖHER.
@@ -179,6 +330,44 @@ fn show_source_name(root: &Path, path: &Path) -> String {
                 }
             }
         }
+
+        /* Sitzt ZWISCHEN dem ersten Ordner und der Datei ein echter
+           Staffelordner ("Season 01" o.ä.), gehört die Serie zu DESSEN
+           Elternordner — nicht pauschal zum ersten Ordner unter der
+           Bibliothek. Sonst wirft eine Sammelablage wie "Avengers", die
+           mehrere Serien als Unterordner enthält
+           (Avengers\Suits\Season 1, Avengers\Daredevil\Season 1, …),
+           alles in EINE Serie namens "Avengers".
+
+           Gemessen am 18.08.2026: C:\Movies\Avengers enthielt Suits,
+           Marvel's Daredevil, The Newsroom, The Legend of Korra und
+           Transformers Prime als Unterordner — vorher wurden alle fünf zu
+           einer einzigen Serie zusammengefasst (TMDb fand zum falschen
+           Sammelordner-Namen irgendeinen zufälligen Treffer). VORWÄRTS
+           gesucht (erster Treffer gewinnt): "Extras"/"Specials" zählt
+           selbst als staffelartiger Ordner (siehe is_pure_season_dir) — ein
+           rückwärts gesuchter LETZTER Treffer würde bei
+           "Suits/Season 05/Extras/datei" fälschlich bei "Season 05" statt
+           bei "Suits" landen. */
+        if comps.len() >= 3 {
+            if let Some(idx) = (1..comps.len() - 1).find(|&i| is_pure_season_dir(&comps[i])) {
+                return parser::strip_domain_suffix(&comps[idx - 1]);
+            }
+            /* Kein Staffelordner gefunden, aber die Datei liegt trotzdem
+               mindestens zwei Ebenen unter der Bibliothek. Das ist so gut
+               wie nie "eine Serie mit einem zufälligen Unterordner",
+               sondern fast immer entweder:
+                 - Sammelordner/Serie-mit-Staffel-im-NAMEN/Datei (keine
+                   eigene "Season N"-Ebene, z.B. "Marvels Daredevil 2015
+                   Season 3 Complete ...\datei.mkv"), oder
+                 - Sammelordner/Serie/Buch-oder-Volume-Ordner/Datei (z.B.
+                   Avatar/Korra: "The Legend of Korra ...\Book One - Air\
+                   datei.mkv" — "Book" ist keine erkannte Staffel-Schreibweise).
+               In beiden Fällen ist der ZWEITE Ordner die Serie, nicht der
+               erste (die Sammelablage). */
+            return parser::strip_domain_suffix(&comps[1]);
+        }
+
         parser::strip_domain_suffix(&first)
     } else {
         // a file sitting directly in the root: if the root looks like a show
@@ -213,8 +402,13 @@ fn backfill_show_keys(conn: &Connection, libs: &[crate::models::Library]) -> Res
 }
 
 fn scan_tv(conn: &Connection, root: &Path) -> Result<()> {
+    /* Bonusmaterial ohne Folgennummer — erst NACH der Schleife zuordnen, wenn
+       alle Serien dieses Ordners sicher angelegt sind (die Reihenfolge, in der
+       Ordner durchlaufen werden, ist nicht garantiert). */
+    let mut bonus: Vec<PathBuf> = Vec::new();
     // siehe scan_movies: Ablehnungen aus dem Auswahl-Fenster müssen halten.
-    let ignored = crate::ordnerwahl::ignored(conn);
+    let mut ignored = crate::ordnerwahl::ignored(conn);
+    ignored.extend(crate::zuordnung::ignorierte(conn));
     // Dateien, die per "Ist ein Film" aus einer Serie herausgelöst wurden —
     // sie stehen schon in movies, sonst würde der nächste Scan sie erneut
     // als Folge aufnehmen.
@@ -243,6 +437,53 @@ fn scan_tv(conn: &Connection, root: &Path) -> Result<()> {
             continue;
         }
 
+        /* Handentscheidung zuerst — sie kann eine Datei zur Folge einer ganz
+           anderen Serie machen, zum Bonusmaterial erklären, zum Film erklären
+           oder ganz ausblenden. Ohne diesen Block ließ sich eine falsch
+           zugeordnete Sprach-/Qualitätsfassung nicht wieder loswerden. */
+        if let Some(z) = crate::zuordnung::fuer(conn, &path)? {
+            // In jedem Fall zuerst aus der bisherigen Rolle lösen.
+            if z.ziel != "folge" {
+                db::delete_episode_file_by_path(conn, &path)?;
+            }
+            match z.ziel.as_str() {
+                "ignorieren" | "film" => continue,
+                "extra" => {
+                    if let (Some(tmdb), Some(art)) = (z.show_tmdb, z.extra_art.as_deref()) {
+                        if let Some(sid) = db::find_show_by_tmdb(conn, tmdb)? {
+                            let stem = file_stem(&name);
+                            crate::extras::merken(conn, sid, &path, &stem, art, z.staffel)?;
+                            conn.execute("UPDATE extras SET von_hand=1 WHERE path=?1", [&path])?;
+                        }
+                    }
+                    continue;
+                }
+                "folge" => {
+                    if let (Some(tmdb), Some(st), Some(ep)) = (z.show_tmdb, z.staffel, z.episode) {
+                        let quelle = show_source_name(root, path_buf);
+                        let ziel_show = db::find_or_create_show_for_tmdb(
+                            conn,
+                            tmdb,
+                            &parser::clean_show_title(&quelle),
+                        )?;
+                        match db::episode_id_of_file(conn, &path)? {
+                            Some(eid) => {
+                                let _ = db::move_episode(conn, eid, ziel_show, st, ep);
+                            }
+                            None => {
+                                db::delete_movie_by_path(conn, &path)?;
+                                let ep_id =
+                                    db::find_or_create_episode(conn, ziel_show, st, ep, &path)?;
+                                db::add_episode_file(conn, ep_id, &path)?;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
         // Group ALL seasons of a show under one entry by cleaning the season/junk
         // off the folder (or file) name. "Marvel's Daredevil Season 2" and
         // "Marvel's Daredevil Season 3" both collapse to "Marvel's Daredevil".
@@ -263,6 +504,11 @@ fn scan_tv(conn: &Connection, root: &Path) -> Result<()> {
                     let _ = cur_ep_show;
                 }
                 None => {
+                    // Falls diese Datei vorher (z.B. in einer reinen Film-Bibliothek
+                    // oder vor der Umstellung auf "mixed") schon als Film eingetragen
+                    // wurde, muss dieser alte Eintrag jetzt raus — sonst taucht die
+                    // Datei doppelt auf (als Film UND als Folge).
+                    db::delete_movie_by_path(conn, &path)?;
                     let ep_id = db::find_or_create_episode(conn, target_show, ov_season, ov_episode, &path)?;
                     db::add_episode_file(conn, ep_id, &path)?;
                 }
@@ -292,7 +538,18 @@ fn scan_tv(conn: &Connection, root: &Path) -> Result<()> {
             .unwrap_or_default();
         let (season, episode) = match parser::parse_episode(&stem, &parent_dir) {
             Some(se) => se,
-            None => continue, // undetectable episodes are skipped in v1
+            None => {
+                /* Keine Folgennummer. Liegt die Datei in einem Staffel- oder
+                   Bonusordner, ist es Zusatzmaterial der Serie.
+                   Gemessen am 23.09.2026: bis hierher wurde Bonusmaterial NUR in
+                   „Serien & Filme"-Bibliotheken erfasst — in reinen
+                   Serien-Bibliotheken fiel es stillschweigend weg (33 Dateien
+                   in Z:\SM-MOONDOOM\Series\The Newsroom\Special Extras …). */
+                if is_series_side_content(root, path_buf) {
+                    bonus.push(path_buf.to_path_buf());
+                }
+                continue;
+            }
         };
 
         let show_title = parser::clean_show_title(&source_name);
@@ -302,8 +559,13 @@ fn scan_tv(conn: &Connection, root: &Path) -> Result<()> {
         } else {
             db::find_or_create_show_by_key(conn, &key, &show_title, show_year)?
         };
+        // siehe oben: alten Film-Eintrag für dieselbe Datei entfernen, falls vorhanden.
+        db::delete_movie_by_path(conn, &path)?;
         let ep_id = db::find_or_create_episode(conn, show_id, season, episode, &path)?;
         db::add_episode_file(conn, ep_id, &path)?;
+    }
+    for p in &bonus {
+        merke_extra(conn, root, p)?;
     }
     Ok(())
 }
@@ -334,6 +596,8 @@ fn prune_missing(conn: &Connection) -> Result<()> {
         [],
     )?;
     db::set_all_episode_primaries(conn)?;
+    // Bonusmaterial, dessen Datei weg ist, ebenfalls entfernen.
+    let _ = crate::extras::aufraeumen(conn, &on_offline_root);
     conn.execute(
         "DELETE FROM shows WHERE id NOT IN (SELECT DISTINCT show_id FROM episodes)",
         [],
@@ -402,6 +666,72 @@ fn title_tokens(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// Wie `title_tokens`, aber ZIFFERN BLEIBEN — nur für die Prüfung „ist das
+/// wirklich derselbe Titel?".
+///
+/// WARUM (gemessen am 19.08.2026): `title_tokens` wirft Ziffern weg, damit
+/// Release-Namen sauber vergleichbar sind. Dadurch war die thailändische Serie
+/// „Miraculous 5" (TMDb 196104, 18 Folgen) ein *exakter* Treffer für den Ordner
+/// „Miraculous" — und schlug mit dem Exakt-Bonus die echte Serie „Miraculous:
+/// Tales of Ladybug & Cat Noir" (TMDb 65334, 155 Folgen). Für den Exakt-Bonus
+/// müssen die Ziffern deshalb mitzählen.
+fn title_tokens_exact(s: &str) -> Vec<String> {
+    // Wie letters_only (Satzzeichen weg, Seiten-Tokens weg), aber mit Ziffern.
+    // WICHTIG: Satzzeichen MÜSSEN wegfallen — sonst gilt "Shazam!" nicht als
+    // "Shazam" und der unbekannte Namensvetter "Shazam" (2026) gewinnt den
+    // Exakt-Bonus. Genau so kam es zu den drei Fehlgriffen vom 19.08.2026
+    // (Shazam, Spider-Man: No Way Home, What If...?).
+    parser::letters_and_digits(s)
+        .to_lowercase()
+        .split_whitespace()
+        .map(|t| zahlwort(t).unwrap_or(t).to_string())
+        .collect()
+}
+
+/// Ausgeschriebene Zahlen als Ziffer — „Fantastic Four" und „Fantastic 4"
+/// sind derselbe Titel.
+///
+/// WARUM (gemessen 23.09.2026): Die Fortsetzungsnummer-Prüfung zog „The
+/// Fantastic Four First Steps" (Dateiname) gegen „The Fantastic 4: First Steps"
+/// (TMDb) Punkte ab — „four" ist keine Ziffer, „4" schon. Dadurch gewann der
+/// TMDb-Eintrag „Marvel Studios' The Fantastic Four: First Steps - World
+/// Premiere" (die Premierenfeier), der „Four" ausgeschrieben hat.
+fn zahlwort(t: &str) -> Option<&'static str> {
+    Some(match t {
+        "one" | "eins" => "1",
+        "two" | "zwei" => "2",
+        "three" | "drei" => "3",
+        "four" | "vier" => "4",
+        "five" | "fuenf" | "fünf" => "5",
+        "six" | "sechs" => "6",
+        "seven" | "sieben" => "7",
+        "eight" | "acht" => "8",
+        "nine" | "neun" => "9",
+        "ten" | "zehn" => "10",
+        "eleven" | "elf" => "11",
+        "twelve" | "zwoelf" | "zwölf" => "12",
+        _ => return None,
+    })
+}
+
+/// True, wenn beide Namen denselben Titel meinen (Ziffern zählen mit).
+fn same_title(a: &str, b: &str) -> bool {
+    let ta = title_tokens_exact(a);
+    !ta.is_empty() && ta == title_tokens_exact(b)
+}
+
+/// Nur die reinen Zahl-Bestandteile eines Titels ("Iron Man 2" → ["2"]).
+///
+/// Fortsetzungsnummern gingen bisher komplett verloren, weil der Vergleich
+/// Ziffern wegwirft — „Five Nights at Freddy's 2" und „Five Nights at Freddy's"
+/// sahen identisch aus. Weicht die Nummer ab, gibt es deshalb Punktabzug.
+fn number_tokens(name: &str) -> Vec<String> {
+    title_tokens_exact(name)
+        .into_iter()
+        .filter(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
+        .collect()
+}
+
 /// Fraction of the query's tokens that appear in the candidate (0.0–1.0).
 fn token_overlap(want: &[String], cand: &[String]) -> f64 {
     if want.is_empty() {
@@ -421,13 +751,14 @@ fn token_overlap(want: &[String], cand: &[String]) -> f64 {
 /// "Daredevil" season would match "Daredevil: Born Again" (≈13 total) instead of
 /// the 39-episode original. Episode count is now a weak signal, and a local count
 /// that merely FITS inside a bigger show is not penalised.
-async fn best_tv_match(tmdb: &Tmdb, query: &str, year: Option<i64>, local_eps: i64) -> Option<i64> {
-    let results = search_with_fallback(tmdb, query, "tv", year).await;
+async fn best_tv_match(tmdb: &Tmdb, raw_title: &str, year: Option<i64>, local_eps: i64) -> Option<i64> {
+    let query = search_query(raw_title);
+    let results = search_with_fallback(tmdb, &query, "tv", year).await;
     if results.is_empty() {
         return None;
     }
 
-    let want = title_tokens(query);
+    let want = title_tokens(&query);
     // 1) score each candidate on title + year alone (no extra network calls)
     let mut scored: Vec<(f64, usize, i64)> = results
         .iter()
@@ -436,7 +767,9 @@ async fn best_tv_match(tmdb: &Tmdb, query: &str, year: Option<i64>, local_eps: i
         .map(|(i, r)| {
             let cand = title_tokens(&r.title);
             let mut s = 0.0f64;
-            if cand == want && !want.is_empty() {
+            // Exakt-Bonus nur, wenn die Titel auch MIT Ziffern gleich sind
+            // (sonst gewinnt "Miraculous 5" gegen die echte Miraculous-Serie).
+            if cand == want && !want.is_empty() && same_title(raw_title, &r.title) {
                 s += 100.0;
             }
             let joined_want = want.join(" ");
@@ -495,8 +828,108 @@ async fn best_tv_match(tmdb: &Tmdb, query: &str, year: Option<i64>, local_eps: i
     Some(chosen)
 }
 
+/// Pick the movie result that really matches what we have — or nothing at all.
+///
+/// WARUM ES DAS GIBT (gemessen am 19.08.2026): Vorher wurde stumpf
+/// `results.first()` der ersten nicht-leeren Suche übernommen — ohne jede
+/// Prüfung, ob der Treffer überhaupt zum Dateinamen passt. Ergebnis waren
+/// Zuordnungen wie „Watch Five Nights at Freddy's 2" → *Yo-kai Watch: Friends
+/// Forever* oder „MLP_FiM - Rainbow Roadtrip" → *ROH x MLP Global Wars Canada*.
+///
+/// Jetzt wird jeder Kandidat bewertet (Titel-Überschneidung in BEIDE
+/// Richtungen + Jahresnähe) und ein Mindestwert verlangt. Lieber gar kein
+/// Treffer als ein falscher: ohne Zuordnung sieht man das Problem sofort und
+/// kann „Identifizieren" benutzen — ein falscher Treffer sieht dagegen aus
+/// wie ein echter Film und fällt erst spät auf.
+async fn best_movie_match(tmdb: &Tmdb, raw_title: &str, year: Option<i64>) -> Option<i64> {
+    let query = search_query(raw_title);
+    let words: Vec<&str> = query.split_whitespace().collect();
+    if words.is_empty() {
+        return None;
+    }
+    let want = title_tokens(&query);
+    // Fortsetzungsnummer aus dem ROHEN Namen (search_query wirft Ziffern weg).
+    let want_nums = number_tokens(raw_title);
+    let mut best: Option<(f64, i64)> = None;
+
+    // Wie bisher: Titel schrittweise von hinten kürzen (rettet unsaubere Namen).
+    // Neu: ALLE Durchgänge werden bewertet, nicht nur der erste mit Treffern.
+    let mut n = words.len();
+    loop {
+        let q = words[..n].join(" ");
+        let mut jahre: Vec<Option<i64>> = vec![year];
+        if year.is_some() {
+            jahre.push(None); // Jahr im Dateinamen kann falsch sein
+        }
+        for j in jahre {
+            let results = match tmdb.search(&q, "movie", j).await {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            for (i, r) in results.iter().take(8).enumerate() {
+                let cand = title_tokens(&r.title);
+                if cand.is_empty() {
+                    continue;
+                }
+                // vorwaerts: wieviel vom Dateinamen steckt im Treffer?
+                // rueckwaerts: wieviel vom Treffer steckt im Dateinamen?
+                let vorwaerts = token_overlap(&want, &cand);
+                let rueckwaerts = token_overlap(&cand, &want);
+                // Ein Treffer, der in KEINE Richtung halbwegs passt, ist geraten.
+                if vorwaerts < 0.5 && rueckwaerts < 0.5 {
+                    continue;
+                }
+                let mut s = 0.0f64;
+                if cand == want && same_title(raw_title, &r.title) {
+                    s += 100.0;
+                }
+                s += vorwaerts * 45.0 + rueckwaerts * 35.0;
+                // Teil 1 vs Teil 2: milder Abzug, damit die richtige Fortsetzung
+                // gewinnt — aber nicht so hart, dass "The Fantastic Four" gegen
+                // "The Fantastic 4: First Steps" durchfaellt.
+                if number_tokens(&r.title) != want_nums {
+                    s -= 12.0;
+                }
+                if let (Some(y), Some(cy)) = (year, r.year) {
+                    let d = (y - cy).abs();
+                    s += if d == 0 {
+                        30.0
+                    } else if d <= 1 {
+                        12.0
+                    } else {
+                        -((d.min(25) * 2) as f64)
+                    };
+                }
+                s -= i as f64 * 0.5; // leichter Vorzug für TMDbs eigene Reihung
+                if best.map_or(true, |(bs, _)| s > bs) {
+                    best = Some((s, r.tmdb_id));
+                }
+            }
+        }
+        // Klar guter Treffer? Dann nicht weiter kürzen.
+        if let Some((s, id)) = best {
+            if s >= 80.0 {
+                return Some(id);
+            }
+        }
+        if n == 1 {
+            break;
+        }
+        n -= 1;
+    }
+    best.filter(|(s, _)| *s >= 55.0).map(|(_, id)| id)
+}
+
 /// The user's remembered identification for a movie file, if any.
 fn movie_override(conn: &Connection, path: &str) -> Option<i64> {
+    // Eine Handentscheidung „das ist Film X" gilt vor allem anderen.
+    if let Ok(Some(z)) = crate::zuordnung::fuer(conn, path) {
+        if z.ziel == "film" {
+            if let Some(t) = z.tmdb_id {
+                return Some(t);
+            }
+        }
+    }
     let name = Path::new(path).file_name()?.to_string_lossy().to_string();
     let key = parser::movie_key(&file_stem(&name));
     db::identity_override(conn, "movie", &key).ok().flatten()
@@ -522,9 +955,8 @@ async fn match_all(conn: &Connection, tmdb: &Tmdb, app: &AppHandle, auto_match: 
         if let Some(tmdb_id) = movie_override(conn, &m.path) {
             let _ = apply_movie_match(conn, tmdb, m.id, tmdb_id, true).await;
         } else if auto_match {
-            let results = search_with_fallback(tmdb, &search_query(&m.title), "movie", m.year).await;
-            if let Some(first) = results.first() {
-                let _ = apply_movie_match(conn, tmdb, m.id, first.tmdb_id, false).await;
+            if let Some(tmdb_id) = best_movie_match(tmdb, &m.title, m.year).await {
+                let _ = apply_movie_match(conn, tmdb, m.id, tmdb_id, false).await;
             }
         }
     }
@@ -537,7 +969,7 @@ async fn match_all(conn: &Connection, tmdb: &Tmdb, app: &AppHandle, auto_match: 
             let _ = apply_show_match(conn, tmdb, s.id, tmdb_id, true).await;
         } else if auto_match {
             let local = db::count_episodes(conn, s.id).unwrap_or(0);
-            if let Some(tmdb_id) = best_tv_match(tmdb, &search_query(&s.title), s.year, local).await {
+            if let Some(tmdb_id) = best_tv_match(tmdb, &s.title, s.year, local).await {
                 let _ = apply_show_match(conn, tmdb, s.id, tmdb_id, false).await;
             }
         }
@@ -729,6 +1161,96 @@ mod tests {
     }
 
     #[test]
+    fn show_source_name_looks_past_a_collection_dumping_folder() {
+        // "Avengers" is a junk-drawer folder holding several UNRELATED shows —
+        // each must group under its OWN name, not under "Avengers".
+        let root = Path::new("/lib");
+        let daredevil = Path::new("/lib/Avengers/Marvel's Daredevil/Season 01/ep.mkv");
+        assert_eq!(show_source_name(root, daredevil), "Marvel's Daredevil");
+        // (season-range suffixes like "Season 1-9" are cleaned off later by
+        // clean_show_title() — show_source_name only has to find the right
+        // FOLDER, not produce the final display title.)
+        let suits = Path::new("/lib/Avengers/Suits (2011) Season 1-9/Season 05/ep.mkv");
+        assert_eq!(show_source_name(root, suits), "Suits (2011) Season 1-9");
+        // a season folder nested even deeper (an "Extras" subfolder) must still
+        // resolve to the show, not to "Extras" or to "Avengers"
+        let extra = Path::new("/lib/Avengers/Suits (2011) Season 1-9/Season 05/Extras/webisode.mkv");
+        assert_eq!(show_source_name(root, extra), "Suits (2011) Season 1-9");
+        // a loose file sitting directly in the dumping folder (no season dir
+        // anywhere) has nothing better to group by — falls back to "Avengers"
+        // as before (parse_episode's own junk-tag fix keeps such files from
+        // being misdetected as episodes in the first place).
+        let loose = Path::new("/lib/Avengers/Some.Random.Movie.2024.mkv");
+        assert_eq!(show_source_name(root, loose), "Avengers");
+    }
+
+    #[test]
+    fn show_source_name_handles_season_baked_into_folder_name_or_named_volumes() {
+        let root = Path::new("/lib");
+        // no separate "Season 3" folder at all — the season is baked into the
+        // release folder's own name. Still two levels under the dumping folder.
+        let baked = Path::new(
+            "/lib/Avengers/Marvels Daredevil 2015 Season 3 Complete 720p BluRay x264 [i_c]/Marvel's Daredevil S03E01 Resurrection.mkv",
+        );
+        assert_eq!(
+            show_source_name(root, baked),
+            "Marvels Daredevil 2015 Season 3 Complete 720p BluRay x264 [i_c]"
+        );
+        // Avatar/Korra-style "Book One - Air" instead of "Season 1" — not
+        // recognized by is_pure_season_dir, but still one level too deep to
+        // be mistaken for the dumping folder itself.
+        let book = Path::new("/lib/Avengers/The Legend of Korra (2012 - 2014) [1080p]/Book One - Air/ep.mkv");
+        assert_eq!(show_source_name(root, book), "The Legend of Korra (2012 - 2014) [1080p]");
+    }
+
+    #[test]
+    fn sequel_numbers_and_exact_titles_are_compared_with_digits() {
+        // "Miraculous 5" (thail. Serie) darf NICHT als exakter Treffer fuer
+        // den Ordner "Miraculous" gelten — genau daran scheiterte die Zuordnung.
+        assert!(!same_title("Miraculous", "Miraculous 5"));
+        assert!(same_title("Miraculous", "Miraculous"));
+        /* Fortsetzungsnummern muessen sichtbar bleiben. Geprueft wird der
+           VERGLEICH, nicht die Rohliste: „Five" wird seit den Zahlwoertern zu
+           „5" — das ist harmlos, weil Dateiname und TMDb-Titel gleich
+           behandelt werden. Entscheidend ist nur: Teil 2 ≠ Teil 1. */
+        assert_eq!(
+            number_tokens("Five Nights at Freddy's 2 - GGFlix"),
+            number_tokens("Five Nights at Freddy's 2")
+        );
+        assert_ne!(
+            number_tokens("Five Nights at Freddy's 2 - GGFlix"),
+            number_tokens("Five Nights at Freddy's")
+        );
+        assert_eq!(number_tokens("Iron Man 2"), vec!["2".to_string()]);
+        assert!(!same_title("Iron Man 2", "Iron Man"));
+        // Seitennamen duerfen den Titelvergleich nicht verfaelschen. So sieht der
+        // Titel aus, wie parse_title_year ihn ablegt (das fuehrende "Watch" ist
+        // dort schon weg, siehe parser::tests).
+        assert!(same_title("Five Nights at Freddy's 2 - GGFlix", "Five Nights at Freddy's 2"));
+
+        /* Satzzeichen duerfen KEINEN Unterschied machen — sonst gewinnt der
+           unbekannte Namensvetter den Exakt-Bonus. Alle drei Faelle wurden
+           am 19.08.2026 genau so falsch zugeordnet. */
+        assert!(same_title("Shazam", "Shazam!"), "Shazam! muss als Shazam gelten");
+        assert!(same_title("What If", "What If...?"), "What If...? muss als What If gelten");
+        assert!(
+            same_title("Spider-Man No Way Home", "Spider-Man: No Way Home"),
+            "Doppelpunkt darf den Vergleich nicht sprengen"
+        );
+        // ... aber der laengere Doku-Titel bleibt verschieden
+        assert!(!same_title("Spider-Man No Way Home", "Spider-Man: All Roads Lead to No Way Home"));
+
+        // Ausgeschriebene Zahl = Ziffer (Fehlgriff „World Premiere" vom 23.09.2026)
+        assert!(same_title("The Fantastic Four First Steps", "The Fantastic 4: First Steps"));
+        assert_eq!(number_tokens("The Fantastic Four First Steps"), number_tokens("The Fantastic 4: First Steps"));
+        assert!(!same_title(
+            "The Fantastic Four First Steps",
+            "Marvel Studios' The Fantastic Four: First Steps - World Premiere"
+        ));
+        assert!(same_title("Ocean's Eleven", "Ocean's 11"));
+    }
+
+    #[test]
     fn title_token_overlap_scoring() {
         let want = title_tokens("Marvel's Daredevil");
         let cand = title_tokens("Marvel's Daredevil");
@@ -767,6 +1289,177 @@ mod tests {
         assert_eq!(shows[0].season_count, 2, "should group 2 seasons");
         // 3 episodes but 4 physical files (S01E01 exists in two qualities)
         assert_eq!(db::all_episode_file_paths(&conn).unwrap().len(), 4, "should track 4 files");
+
+        drop(conn);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn bonus_material_finds_its_show_through_nested_bonus_folders() {
+        let base = std::env::temp_dir().join(format!("ghgflix_test_extras_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+
+        // Echte Struktur von der Platte: Sammelordner → Serie → Featurettes →
+        // Season → Inside the Episode → Datei. Genau hier wurde vorher
+        // „Featurettes" für die Serie gehalten.
+        let serie = base.join("Avengers").join("The Newsroom (2012) Season 1-3");
+        touch(&serie.join("Season 01").join("The Newsroom - S01E01 - We Just Decided To.mkv"));
+        touch(&serie.join("Featurettes").join("Season 1").join("Inside the Episode").join("Amen.mkv"));
+        touch(&serie.join("Featurettes").join("Season 1").join("Deleted Scenes").join("The Greater Fool.mkv"));
+
+        let conn = db::open(&base.join("test.db")).unwrap();
+        scan_tv(&conn, &base).unwrap();
+        scan_movies(&conn, &base).unwrap();
+
+        // Der Schnipsel darf KEIN Film sein …
+        assert_eq!(db::list_movies(&conn).unwrap().len(), 0, "Bonusmaterial ist kein Film");
+        // … sondern muss an der Serie hängen.
+        let shows = db::list_shows(&conn).unwrap();
+        assert_eq!(shows.len(), 1, "eine Serie");
+        let ex = crate::extras::fuer_serie(&conn, shows[0].id).unwrap();
+        assert_eq!(ex.len(), 2, "beide Extras gefunden");
+        let arten: Vec<&str> = ex.iter().map(|e| e.art.as_str()).collect();
+        assert!(arten.contains(&"featurette"), "Inside the Episode → Featurette");
+        assert!(arten.contains(&"deleted"), "Deleted Scenes → geloeschte Szene");
+        assert!(ex.iter().all(|e| e.staffel == Some(1)), "Staffel 1 erkannt");
+
+        drop(conn);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn pure_tv_library_keeps_bonus_material() {
+        let base = std::env::temp_dir().join(format!("ghgflix_test_tvbonus_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        // Reine SERIEN-Bibliothek (kind = tv): nur scan_tv läuft.
+        let serie = base.join("The Newsroom");
+        touch(&serie.join("Season 01").join("The Newsroom - S01E01 - We Just Decided To.mkv"));
+        touch(&serie.join("Special Extras Season 1").join("Mission Control.mkv"));
+        touch(&serie.join("Special Extras Season 1").join("Inside the Episode").join("Amen.mkv"));
+
+        let conn = db::open(&base.join("test.db")).unwrap();
+        scan_tv(&conn, &base).unwrap();
+
+        let shows = db::list_shows(&conn).unwrap();
+        assert_eq!(shows.len(), 1);
+        let ex = crate::extras::fuer_serie(&conn, shows[0].id).unwrap();
+        assert_eq!(ex.len(), 2, "Bonusmaterial darf in reinen Serien-Bibliotheken nicht wegfallen");
+        assert!(ex.iter().all(|e| e.staffel == Some(1)));
+        assert_eq!(db::list_movies(&conn).unwrap().len(), 0);
+
+        drop(conn);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn series_bonus_material_is_not_a_movie() {
+        assert!(is_bonus_dir("Featurettes"));
+        assert!(is_bonus_dir("Extras"));
+        assert!(is_bonus_dir("Inside the Episode"));
+        assert!(is_bonus_dir("Deleted Scenes"));
+        // echte Filmordner duerfen NICHT als Bonus gelten
+        assert!(!is_bonus_dir("Marvel's Daredevil"));
+        assert!(!is_bonus_dir("Now You See Me"));
+        // zusammengesetzte Namen (Newsroom auf Z:, gemessen 23.09.2026)
+        assert!(is_bonus_dir("Special Extras Season 1"));
+        assert!(is_bonus_dir("Season 3 Extras"));
+        assert!(is_bonus_dir("Bonus Disc 2"));
+        // … aber die gleichnamige SERIE „Extras" (2005) bleibt eine Serie
+        assert!(!is_bonus_dir("Extras (2005)"));
+        assert!(!is_bonus_dir("Extraction (2020)"));
+
+        let root = Path::new("/lib");
+        // die echten Faelle von der Platte
+        assert!(is_series_side_content(
+            root,
+            Path::new("/lib/The Newsroom (2012) Season 1-3/Featurettes/Season 1/Inside the Episode/Amen.mkv")
+        ));
+        assert!(is_series_side_content(
+            root,
+            Path::new("/lib/Suits (2011) Season 1-9/Extras/Season 02/Gag Reel.mkv")
+        ));
+        assert!(is_series_side_content(
+            root,
+            Path::new("/lib/My little Pony Friendship is Magic/Specials/MLP_FiM - Rainbow Roadtrip.mkv")
+        ));
+        // ein normaler Film bleibt ein Film
+        assert!(!is_series_side_content(
+            root,
+            Path::new("/lib/Now You See Me/Now.You.See.Me.2013.1080p.mkv")
+        ));
+        assert!(!is_series_side_content(root, Path::new("/lib/Interstellar.2014.mkv")));
+    }
+
+    #[test]
+    fn bonus_material_already_indexed_as_movie_gets_removed() {
+        let base = std::env::temp_dir().join(format!("ghgflix_test_bonus_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let bonus = base.join("Suits").join("Extras").join("Season 02").join("Gag Reel.mkv");
+        let film = base.join("Interstellar.2014.1080p.mkv");
+        touch(&bonus);
+        touch(&film);
+
+        let conn = db::open(&base.join("test.db")).unwrap();
+        scan_movies(&conn, &base).unwrap();
+        let titles: Vec<String> = db::list_movies(&conn).unwrap().into_iter().map(|m| m.title).collect();
+        assert_eq!(titles, vec!["Interstellar".to_string()], "nur der echte Film darf uebrig bleiben");
+
+        drop(conn);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn mixed_library_finds_movies_and_shows_without_duplicates() {
+        let base = std::env::temp_dir().join(format!("ghgflix_test_mixed_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+
+        touch(&base.join("Inception.2010.x264.mkv"));
+        touch(&base.join("Breaking Bad (2008)").join("Season 01").join("Breaking Bad S01E01.mkv"));
+        touch(&base.join("Breaking Bad (2008)").join("Season 01").join("Breaking Bad S01E02.mkv"));
+
+        let conn = db::open(&base.join("test.db")).unwrap();
+        // gleiche Reihenfolge wie run_scan() im "mixed"-Zweig: erst Folgen, dann Filme.
+        scan_tv(&conn, &base).unwrap();
+        scan_movies(&conn, &base).unwrap();
+
+        let movies_list = db::list_movies(&conn).unwrap();
+        assert_eq!(movies_list.len(), 1, "sollte genau 1 Film finden");
+        assert_eq!(movies_list[0].title, "Inception");
+
+        let shows = db::list_shows(&conn).unwrap();
+        assert_eq!(shows.len(), 1, "sollte 1 Serie finden");
+        assert_eq!(shows[0].episode_count, 2);
+
+        drop(conn);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn mixed_library_removes_stale_movie_row_when_reclassified_as_episode() {
+        let base = std::env::temp_dir().join(format!("ghgflix_test_reclass_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        /* Echter Fall von der Platte: die Folge liegt OHNE Staffelordner direkt
+           im Serienordner, und ihre Nummer steht in der Schreibweise der
+           Mitschnitt-Seiten ("S6-Ep-1"). Vor der Regel-Erweiterung landete so
+           etwas als "Film" in der Bibliothek. */
+        let ep = base
+            .join("Miraculous Tales of Ladybug & Cat Noir")
+            .join("M-S6-Ep-1-Climatiqueen-.mp4");
+        touch(&ep);
+
+        let conn = db::open(&base.join("test.db")).unwrap();
+        // Alten Zustand nachstellen: Datei steht (noch) als Film in der Bibliothek.
+        db::insert_movie_if_absent(&conn, &ep.to_string_lossy(), "M S6 Ep 1 Climatiqueen", None).unwrap();
+        assert_eq!(db::list_movies(&conn).unwrap().len(), 1, "Ausgangslage: steht als Film drin");
+
+        // Nach Umstellung auf "mixed": erst scan_tv, dann scan_movies.
+        scan_tv(&conn, &base).unwrap();
+        scan_movies(&conn, &base).unwrap();
+
+        assert_eq!(db::list_movies(&conn).unwrap().len(), 0, "alter Film-Eintrag muss verschwinden");
+        let shows = db::list_shows(&conn).unwrap();
+        assert_eq!(shows.len(), 1);
+        assert_eq!(shows[0].episode_count, 1);
 
         drop(conn);
         let _ = fs::remove_dir_all(&base);

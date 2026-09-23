@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod extras;
 mod intro;
 mod kanaele;
 mod models;
@@ -11,6 +12,7 @@ mod scanner;
 mod serienfilme;
 mod tmdb;
 mod watcher;
+mod zuordnung;
 
 use notify::RecommendedWatcher;
 use rusqlite::Connection;
@@ -218,6 +220,14 @@ pub fn run() {
             commands::list_ignored_files,
             commands::unignore_files,
             commands::link_movie_to_show,
+            commands::show_extras,
+            commands::set_extra_art,
+            commands::set_note,
+            commands::all_notes,
+            commands::assignment_list,
+            commands::assign_file,
+            commands::clear_assignment,
+            commands::play_file,
             commands::tmdb_videos,
             commands::feeds_list,
             commands::feed_add,

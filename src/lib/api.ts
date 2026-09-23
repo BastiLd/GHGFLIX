@@ -21,6 +21,10 @@ import type {
   TmdbImage,
   TmdbResult,
   TrailerVideo,
+  Extra,
+  ExtraArt,
+  ZuordnungEintrag,
+  ZuordnungZiel,
 } from "./types";
 
 // ===== settings =====
@@ -281,3 +285,17 @@ export const setShowIntro = (showId: number, start: number | null, end: number |
 
 // ===== search =====
 export const searchEpisodes = (query: string) => invoke<Episode[]>("search_episodes", { query });
+
+// ===== Zusatzmaterial, Notizen, Handzuordnung =====
+export const showExtras = (showId: number) => invoke<Extra[]>("show_extras", { showId });
+export const setExtraArt = (id: number, art: ExtraArt, staffel: number | null) =>
+  invoke<void>("set_extra_art", { id, art, staffel });
+export const setNote = (path: string, text: string) => invoke<void>("set_note", { path, text });
+export const allNotes = () => invoke<[string, string][]>("all_notes");
+export const assignmentList = (onlyUncertain: boolean) =>
+  invoke<ZuordnungEintrag[]>("assignment_list", { onlyUncertain });
+export const assignFile = (path: string, ziel: ZuordnungZiel) =>
+  invoke<void>("assign_file", { path, ziel });
+export const clearAssignment = (path: string) => invoke<void>("clear_assignment", { path });
+/** Bonusmaterial direkt mit mpv abspielen (kein Bibliothekseintrag nötig). */
+export const playFile = (path: string) => invoke<void>("play_file", { path });

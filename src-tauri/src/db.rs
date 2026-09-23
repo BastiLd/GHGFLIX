@@ -181,10 +181,62 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             episode    INTEGER NOT NULL
         );
 
+        /* Bonusmaterial einer Serie: Gag Reels, gelöschte Szenen, Featurettes,
+           „Inside the Episode“ … Das sind KEINE Filme (früher landeten sie in
+           `movies` und bekamen dort zufällige TMDb-Treffer) und keine Folgen
+           (sie haben keine Folgennummer). Deshalb eine eigene Tabelle.
+
+           `art`    = 'special' | 'blooper' | 'behind' | 'deleted' | 'featurette'
+                      | 'interview' | 'trailer' | 'sonstiges'
+           `staffel`= zugehörige Staffel (aus dem Ordner), NULL = serienweit
+           `von_hand` = 1, wenn der Nutzer Art/Staffel selbst gesetzt hat —
+                      dann fasst die automatische Erkennung es nicht mehr an. */
+        CREATE TABLE IF NOT EXISTS extras (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            show_id   INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+            path      TEXT NOT NULL UNIQUE,
+            titel     TEXT NOT NULL,
+            art       TEXT NOT NULL,
+            staffel   INTEGER,
+            von_hand  INTEGER NOT NULL DEFAULT 0,
+            added_at  INTEGER NOT NULL
+        );
+
+        /* Kurze Notizen an beliebigen Einträgen ("ca. S6 zwischen Ep 4 und 5").
+           Hängt am DATEIPFAD, nicht an der Datenbank-ID: die ändert sich bei
+           „Bibliothek neu aufbauen“, die Notiz soll das überleben. */
+        CREATE TABLE IF NOT EXISTS notizen (
+            path  TEXT PRIMARY KEY,
+            text  TEXT NOT NULL
+        );
+
+        /* EINE Handentscheidung pro Datei — sie schlägt jede Automatik und
+           überlebt „Bibliothek neu aufbauen“, weil sie am Dateipfad hängt.
+           Vorher gab es dafür vier getrennte Wege (placements,
+           movie_override_files, ignorierte Pfade, extras.von_hand), und keiner
+           davon konnte eine Datei von „Folge“ zu „Film“ oder zu „Blooper“
+           umbiegen — genau das fehlte beim Aufräumen einer echten Sammlung.
+
+           ziel = 'folge' | 'film' | 'extra' | 'ignorieren'
+             folge      → show_tmdb + staffel + episode
+             film       → optional tmdb_id (erzwungene Zuordnung)
+             extra      → show_tmdb + extra_art (+ staffel)
+             ignorieren → Datei taucht nirgends auf */
+        CREATE TABLE IF NOT EXISTS zuordnung (
+            path      TEXT PRIMARY KEY,
+            ziel      TEXT NOT NULL,
+            show_tmdb INTEGER,
+            staffel   INTEGER,
+            episode   INTEGER,
+            extra_art TEXT,
+            tmdb_id   INTEGER
+        );
+
         CREATE INDEX IF NOT EXISTS idx_episodes_show    ON episodes(show_id);
         CREATE INDEX IF NOT EXISTS idx_epfiles_episode  ON episode_files(episode_id);
         CREATE INDEX IF NOT EXISTS idx_movies_tmdb      ON movies(tmdb_id);
         CREATE INDEX IF NOT EXISTS idx_shows_tmdb       ON shows(tmdb_id);
+        CREATE INDEX IF NOT EXISTS idx_extras_show      ON extras(show_id);
         "#,
     )?;
     // progress carries the FILE PATH too, so the watched state survives a full
