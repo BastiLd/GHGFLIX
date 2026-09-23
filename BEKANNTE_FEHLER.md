@@ -100,6 +100,7 @@ bewusst nicht neu geraten.
 | | Punkt |
 |---|---|
 | ✅ | Alle Änderungen seit August (Erkennung, Bonusmaterial, Zuordnungs-Fenster, Notizen, Fehlerfang, heutige Fixes) sind am 23.09. auf `main` committet und nach GitHub gepusht. **Auf dem Laptop** muss einmal `git pull` laufen. |
+| ⚪ | **`git push` klappt auf diesem PC nicht von selbst:** `C:\Users\basti\.gitconfig` verweist für GitHub auf ein `gh.exe` in einem OneDrive-Ordner (`…\Mindmap GPT+Claude\..\DevTools\gh\bin\gh.exe`), den es nicht mehr gibt. Das echte `gh` liegt unter `C:\Program Files\GitHub CLI` und ist als BastiLd angemeldet. Reparatur: `gh auth setup-git` einmal ausführen. |
 | ⚪ | `npm audit`: **2 hohe Warnungen in Laufzeit-Paketen** (react-router-dom), weitere in Build-Werkzeugen (esbuild, postcss, nanoid, browserslist). |
 | ⚪ | `mobile/test/oberflaeche.test.mjs` hängt (>200 s) — bekannt seit 01.08., liegt am Testaufbau. |
 | ⚪ | Compiler-Warnung: `db::season_file_paths` wird nicht benutzt. |
