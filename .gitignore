@@ -43,3 +43,8 @@ werkzeuge/
 test-results/
 playwright-report/
 tests/.generated/
+
+# Expo-generated native projects and local tooling state
+mobile/android/
+mobile/ios/
+mobile/.expo/

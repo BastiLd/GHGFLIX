@@ -149,7 +149,7 @@ const dateien = [
   "src/fokus-kern.js", "src/stile.js", "src/qr.js", "src/untertitel.js",
   "src/einstellungen.js", "src/update.js", "src/fokus.js", "src/bausteine.js",
   "src/netzsuche.js", "src/seitenleiste.js", "src/seiten.js",
-  "src/player.js", "src/verbindung.js", "App.js",
+  "src/player.js", "src/verbindung.js", "src/kanaele.js", "src/kanaele-api.js", "App.js",
 ];
 
 for (const d of dateien) {
@@ -179,6 +179,7 @@ console.log("\n── Erwartete Exporte vorhanden ──────────
     "src/seitenleiste.js": ["Seitenleiste", "Unterleiste", "NAV"],
     "src/seiten.js": ["StartSeite", "RasterSeite", "SuchSeite", "SerienSeite", "FilmSeite", "ProfilSeite", "EinstellungenSeite"],
     "src/player.js": ["PlayerScreen"],
+    "src/kanaele.js": ["KanaeleSeite"],
     "src/verbindung.js": ["VerbindungsScreen"],
   };
   for (const [datei, namen] of Object.entries(soll)) {

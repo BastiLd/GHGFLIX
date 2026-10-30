@@ -27,5 +27,31 @@ try {
   assert.equal(k.feedsLaden().length,0);assert.equal(k.beitraege({}).length,0);
   reset();const a=k.abholen("f"),b=k.abholen("f");await new Promise(r=>setImmediate(r));pending.shift()();const na=await a;pending.shift()();const nb=await b;
   assert.equal(na.length+nb.length,1);assert.equal(k.beitraege({}).length,2);
-  console.log("Feed races: concurrent edits, persistent custom title, unsubscribe and overlapping refresh deduplication passed.");
+  // Adding a channel also awaits network requests. Changes during that window must survive.
+  const finish = async (...promises) => {
+    let done = false;
+    const outcome = Promise.allSettled(promises).then((r) => { done = true; return r; });
+    for (let i = 0; i < 100 && !done; i++) {
+      await new Promise(r => setImmediate(r));
+      pending.splice(0).forEach(release => release());
+    }
+    assert.ok(done, "subscription did not settle");
+    return outcome;
+  };
+  reset(); const adding = k.abonnieren("UCabcdefghijklmnopqrstuv", "youtube");
+  await new Promise(r => setImmediate(r));
+  k.feedAendern("f", { titel: "Edited during add", gruppeIds: ["g1", "g2"], benachrichtigen: false });
+  assert.equal((await finish(adding))[0].status, "fulfilled");
+  assert.equal(k.feedsLaden().find(f => f.id === "f").titel, "Edited during add");
+  assert.deepEqual(k.gruppenIds(k.feedsLaden().find(f => f.id === "f")), ["g1", "g2"]);
+  reset(); const removeDuringAdd = k.abonnieren("UCabcdefghijklmnopqrstuv", "youtube");
+  await new Promise(r => setImmediate(r)); k.abbestellen("f"); await finish(removeDuringAdd);
+  assert.equal(k.feedsLaden().some(f => f.id === "f"), false);
+  reset(); const different = await finish(k.abonnieren("UCabcdefghijklmnopqrstuv"), k.abonnieren("UCzyxwvutsrqponmlkjihgfe"));
+  assert.ok(different.every(r => r.status === "fulfilled")); assert.equal(k.feedsLaden().length, 3);
+  reset(); const same = await finish(k.abonnieren("UCabcdefghijklmnopqrstuv"), k.abonnieren("UCabcdefghijklmnopqrstuv"));
+  assert.equal(same.filter(r => r.status === "fulfilled").length, 1);
+  assert.equal(same.filter(r => r.status === "rejected").length, 1);
+  assert.equal(k.feedsLaden().length, 2);
+  console.log("Feed races: concurrent edits, persistent custom title, unsubscribe, overlapping refresh and concurrent subscription commits passed.");
 } finally {global.fetch=original;db.openDb().close();rmSync(dir,{recursive:true,force:true});}

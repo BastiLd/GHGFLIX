@@ -41,8 +41,9 @@
  * NUR aus diesen gespeichert; jeder direkte Zugriff läuft über safe().
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Platform, Text, View } from "react-native";
+import { ActivityIndicator, Dimensions, Platform, Pressable, Text, View } from "react-native";
 import { FKnopf, FokusReihe, useDialog, useFernbedienung, useFokusElement } from "./fokus.js";
+import { PlayerKnopfleiste } from "./playerleiste.js";
 import { C, M, gross, st } from "./stile.js";
 import { Dialog, DialogListe, fmtZeit } from "./bausteine.js";
 import { untertitelHolen } from "./untertitel.js";
@@ -79,6 +80,7 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   const [pos, setPos] = useState(0);
   const [dauer, setDauer] = useState(0);
   const [balkenBreite, setBalkenBreite] = useState(0);
+  const [bedienBreite, setBedienBreite] = useState(Dimensions.get("window").width - 2 * M.rand);
   const [dialog, setDialog] = useState(null);   // null | "ton" | "ut" | "tempo" | "bild" | "info"
   const [tempo, setTempo] = useState(E.tempo);
   const [bildmodus, setBildmodus] = useState(E.bildmodus);
@@ -435,21 +437,34 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     );
   }
 
-  // Knopfspalten fortlaufend vergeben, damit übersprungene Knöpfe keine Lücke lassen
-  let sp = 0;
+  const knoepfe = [
+    { id: "zurueck", label: "Zurückspulen", text: String(E.sprungZurueck || 10), symbol: "⏪", onPress: () => springeUm(-(E.sprungZurueck || 10)) },
+    { id: "pause", label: laeuft ? "Pausieren" : "Abspielen", symbol: laeuft ? "⏸" : "▶", haupt: true, onPress: anHalten },
+    { id: "vor", label: "Vorspulen", text: String(E.sprungVor || 30), symbol: "⏩", onPress: () => springeUm(E.sprungVor || 30) },
+    nextEp && { id: "naechste", label: "Nächste Folge", text: "Nächste", symbol: "⏭", onPress: naechsteFolge },
+    tonListe.length > 1 && { id: "ton", label: "Tonspur", symbol: "🔊", text: "Ton", onPress: () => setDialog("ton") },
+    (utListe.length > 0 || utBildNur > 0) && { id: "ut", label: "Untertitel", symbol: "💬", text: utSpur ? "UT an" : "UT", onPress: () => setDialog("ut") },
+    { id: "tempo", label: "Geschwindigkeit", text: `${tempo}×`, onPress: () => setDialog("tempo") },
+    { id: "bild", label: "Bildanpassung", symbol: "⛶", onPress: () => setDialog("bild") },
+    { id: "info", label: "Wiedergabeinformationen", symbol: "ℹ", onPress: () => setDialog("info") },
+  ].filter(Boolean);
 
   return (
-    <View style={st.playerWurzel}>
+    <View style={st.playerWurzel} onTouchStart={wecken} onLayout={(e) => setBedienBreite(Math.max(1, e.nativeEvent.layout.width - 2 * M.rand))}>
       <VideoView
         style={{ flex: 1 }}
         player={player}
         contentFit={bildmodus}
         nativeControls={false}
         allowsFullscreen={false}
+        pointerEvents="none"
       />
 
+      <Pressable testID="player-wecken" accessible={false} focusable={false}
+        onPress={wecken} style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }} />
+
       {puffert && (
-        <View style={[st.center, { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, backgroundColor: "transparent" }]}>
+        <View pointerEvents="none" style={[st.center, { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, backgroundColor: "transparent" }]}>
           <ActivityIndicator size="large" color={C.red} />
         </View>
       )}
@@ -545,21 +560,7 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
             </Text>
           )}
 
-          <FokusReihe zeile={1}>
-            <View style={st.playerKnopfReihe}>
-              <PKnopf spalte={sp++} text={String(E.sprungZurueck || 10)} symbol="⏪" onPress={() => springeUm(-(E.sprungZurueck || 10))} />
-              <PKnopf spalte={sp++} symbol={laeuft ? "⏸" : "▶"} haupt grossKnopf onPress={anHalten} />
-              <PKnopf spalte={sp++} text={String(E.sprungVor || 30)} symbol="⏩" onPress={() => springeUm(E.sprungVor || 30)} />
-              {!!nextEp && <PKnopf spalte={sp++} text="Nächste" symbol="⏭" onPress={naechsteFolge} />}
-              {tonListe.length > 1 && <PKnopf spalte={sp++} symbol="🔊" text="Ton" onPress={() => setDialog("ton")} />}
-              {(utListe.length > 0 || utBildNur > 0) && (
-                <PKnopf spalte={sp++} symbol="💬" text={utSpur ? "UT an" : "UT"} onPress={() => setDialog("ut")} />
-              )}
-              <PKnopf spalte={sp++} text={`${tempo}×`} onPress={() => setDialog("tempo")} />
-              <PKnopf spalte={sp++} symbol="⛶" onPress={() => setDialog("bild")} />
-              <PKnopf spalte={sp++} symbol="ℹ" onPress={() => setDialog("info")} />
-            </View>
-          </FokusReihe>
+          <PlayerKnopfleiste breite={bedienBreite} knoepfe={knoepfe} />
         </View>
       )}
 
@@ -654,24 +655,5 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
         </Dialog>
       )}
     </View>
-  );
-}
-
-/** Knopf der Bedienleiste. */
-function PKnopf({ spalte, text, symbol, haupt, onPress, grossKnopf }) {
-  return (
-    <FKnopf
-      spalte={spalte}
-      onPress={onPress}
-      style={[
-        st.rundKnopf,
-        haupt && st.rundKnopfHaupt,
-        grossKnopf && { minWidth: gross ? 84 : 66, height: gross ? 70 : 56 },
-      ]}
-      fokusStil={st.fokus}
-    >
-      {!!symbol && <Text style={[st.rundKnopfText, grossKnopf && { fontSize: gross ? 26 : 20 }]}>{symbol}</Text>}
-      {!!text && <Text style={st.rundKnopfText}>{text}</Text>}
-    </FKnopf>
   );
 }

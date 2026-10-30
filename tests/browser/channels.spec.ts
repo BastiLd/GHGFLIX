@@ -79,3 +79,21 @@ test("group to channel to formats and back", async ({page}, info) => {
   await expect.poll(()=>settings.feed_group_image_g2).toBe("");
   expect(feed.gruppeIds).toEqual(["g1","g2"]);
  });
+
+test("shared channels count unread posts once in the overview", async ({page}) => {
+  await page.route("**/api/**", async route => {
+    if(route.request().url().endsWith("/api/ping")) return route.fulfill({json:{auth:false}});
+    const cmd=route.request().url().split("/").pop();
+    let result:unknown=null;
+    if(cmd==="feed_groups") result=["Science","Space"].map((name,i)=>({id:`g${i}`,name,emoji:"S",abos:1,kanaele:1,blogs:0,beitraege:1,ungelesen:1,bilder:[],standardOffen:false,sortierung:i}));
+    if(cmd==="feeds_list") result=[{id:"f",titel:"Lab",art:"youtube",gruppeIds:["g0","g1"],benachrichtigen:true}];
+    if(cmd==="feed_unread") result=1;
+    if(["feed_items","list_movies","list_shows"].includes(cmd!)) result=[];
+    if(cmd==="scan_status") result={running:false};
+    return route.fulfill({json:{result}});
+  });
+  await page.goto("/#/kanaele");
+  const header=page.getByRole("heading",{name:"Kanäle",exact:true}).locator("..");
+  await expect(header.getByText("1 neu",{exact:true})).toBeVisible();
+  await expect(header.getByText("2 neu",{exact:true})).toHaveCount(0);
+});

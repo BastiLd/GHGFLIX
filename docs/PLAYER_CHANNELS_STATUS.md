@@ -1,6 +1,6 @@
 # Player und Kanaele: Implementierungsstand
 
-Stand: 30.10.2026, vierter Umsetzungsstand. Branch: codex/player-channels-stability. Ausgangspunkt: 8151d0b.
+Stand: 30.10.2026, fünfter Umsetzungsstand. Branch: codex/player-channels-stability. Ausgangspunkt: 8151d0b.
 
 ## Implementiert
 
@@ -40,15 +40,28 @@ Stand: 30.10.2026, vierter Umsetzungsstand. Branch: codex/player-channels-stabil
 - Unter Windows wird der vom Server gestartete Medien-Prozessbaum beendet, einschließlich möglicher FFmpeg-Starter-Kinder. Der Server wartet beim Herunterfahren auf die Beendigung; belegte Transcode-Slots werden nicht vorzeitig freigegeben (Issue #14).
 - HLS-Sitzungsstarts sind serialisiert. Vor einer Kapazitätsprüfung werden ersetzte Sitzungen derselben Datei vollständig beendet. Spulen funktioniert deshalb auch bei transcode_max=1 (Issue #15).
 
+## Fünfter Umsetzungsstand: native App und zusätzliche Datenrennen
+
+- Vollständiger Mobile-App-Start geprüft und Initialisierungsabsturz behoben (#16). Die Updateprüfung liest die tatsächliche Expo-App-Version statt einer veralteten Konstante (#20).
+- Native Kanalansicht ergänzt (#17): vorhandene Gruppen/Bilder, Kanalnavigation, Suche, Formatfilter und manuelle Zuordnung, gespeicherte/ungelesene Beiträge, Gruppen-/Kanalbearbeitung, Mehrfachzuordnung und bestätigte Löschaktionen. Beiträge öffnen über die externe Quell-App/den Browser; ein eingebetteter nativer YouTube-Player ist damit nicht implementiert.
+- In-App-Zähler in der nativen Navigation, bei aktiver App alle 60 Sekunden aktualisiert. Keine ungefragte Betriebssystem-Berechtigung. Native Geräte-Push-Zustellung bleibt offen und wird in der Oberfläche als nicht verfügbar benannt.
+- Handy-Gruppenbilder über die echte Fotoauswahl; maximal 960 Pixel, JPEG und begrenzte Dateigröße. Abbruch erhält das bisherige Bild. Die TV-Ansicht zeigt gespeicherte Bilder und verweist für die Auswahl auf Handy/Web/Desktop.
+- Neue Abos führen ihre Ergebnisse nach dem Netzabruf mit den aktuellen Daten zusammen. Parallele Bearbeitungen/Löschungen bleiben erhalten; doppelte gleichzeitige Abos werden verhindert, in Server und Rust (#18).
+- Ungelesen-Gesamtzahl zählt Beiträge mehrfach zugeordneter Kanäle nur einmal (#19).
+- Android-Inhalte berücksichtigen Statusleiste und sichere Bildschirmränder (#22). TV-Navigationsschrift kompakter, Einstellungen vollständig sichtbar.
+- Playwright verwendet einen eigenen Ausgabe-Unterordner; seine automatische Bereinigung entfernt keine benachbarten Emulator-/Integrationstestartefakte mehr (#21).
+- Native Player-Knöpfe verteilen sich nach verfügbarer Breite auf explizite Fokuszeilen; Antippen weckt die Steuerung, ohne Wiedergabe umzuschalten (#23). Video-Touch-Ereignisse und sichere Bildschirmränder werden berücksichtigt.
+- Neue native Bibliotheken erfordern einen neuen nativen Build: runtimeVersion 2, Android versionCode 16. Kein OTA-Update an alte Binärdateien und keine Veröffentlichung vorgenommen.
+
 ## Verifikation
 
 - Frontend: 27 gezielte Vitest-Tests für Property-Handoff, Ereignisrennen, Drag-Seeking, unbekannte Dauer, Tastatur, Queue-Auswahl, Mini-Ladeabbruch und Browser-Medienwechsel erfolgreich.
 - TypeScript und Vite-Produktionsbuild erfolgreich. Vorhandene Bundle-/Importwarnungen bestehen weiter.
 - Vollstaendige Server-Testsuite erfolgreich, einschliesslich FFmpeg-Tests. Erweiterter Kanaltest: 69 Pruefungen erfolgreich.
 - Vollstaendige Mobile-Testsuite erfolgreich, inklusive simuliertem D-Pad und Player-Steuerung.
-- Rust cargo check --tests und alle neun gezielten Rust-Kanaltests erfolgreich. Native Oberflaeche wurde damit nicht getestet.
+- Rust cargo check --tests und alle zehn gezielten Rust-Kanaltests erfolgreich. Native Oberflaeche wurde damit nicht getestet.
 
-- Zwölf Headless-Chromium-Tests erfolgreich: Kanalnavigation/Formatänderung und tatsächliche Wiedergabe einer generierten WebM-Datei bei 1440x900, 390x844 und 1920x1080. Pro Player-Test drei Vollbild/Mini/Vergrößern-Zyklen, Dauer 90 Sekunden, Pause-Erhalt beim mittleren Zyklus, anschließendes pausiertes Spulen und zusätzlich Schließen/Neustart/Vollbild mit einem Klick. Backend-Antworten und Byte-Range-Medientransport sind Test-Fixtures.
+- 15 Headless-Chromium-Tests erfolgreich (einschließlich Zähler bei Mehrfachzuordnung): Kanalnavigation/Formatänderung und tatsächliche Wiedergabe einer generierten WebM-Datei bei 1440x900, 390x844 und 1920x1080. Pro Player-Test drei Vollbild/Mini/Vergrößern-Zyklen, Dauer 90 Sekunden, Pause-Erhalt beim mittleren Zyklus, anschließendes pausiertes Spulen und zusätzlich Schließen/Neustart/Vollbild mit einem Klick. Backend-Antworten und Byte-Range-Medientransport sind Test-Fixtures.
 - Zusätzlich neun erfolgreiche Wiederholungsdurchläufe des schnellen Vollbild/Mini-Wechsels nach Behebung des dabei gefundenen Timingfehlers.
 - Browser-Regressionsprüfung verzögert die Antwort für Folge 2 während Folge 1 läuft: kein Fortschritt unter Folge 2, keine spätere Verdrängung von Folge 3 und kein vorzeitiger Verbrauch des Queue-Eintrags.
 - Gruppenbild-Prüfung in allen drei Größen: erzeugtes PNG 1600x900 wird zu WebP 960x540; eigener Name und Bild bleiben nach Neuladen erhalten, Bildentfernung funktioniert; ein Kanal bleibt gleichzeitig in zwei Gruppen. Speicherung ist in dieser Browserprüfung simuliert. Backend-Gruppen und Erhalt paralleler Bearbeitungen sind separat in Server/Rust getestet.
@@ -64,7 +77,7 @@ Stand: 30.10.2026, vierter Umsetzungsstand. Branch: codex/player-channels-stabil
 - Automatische, verlässliche Live/Podcast/Trailer-Quelldaten über die bisher vorhandenen RSS/Shorts-Daten hinaus. Manuelle Zuordnung ist umgesetzt.
 - Web-Push-Provider-/Geräteabnahme und Einrichtung am Zielserver. Native Tauri-/Expo-Push-Anbindung ist nicht implementiert; die Oberfläche kennzeichnet fehlende Unterstützung.
 - Native Desktop-mpv-, iOS-/Android- und echte TV-Abnahme; reales PiP-Fenster und HLS/Transcode-Langzeit-/Lasttests. Der kurze echte Server-Browser-Integrationstest ersetzt diese nicht.
-- Eigene Gruppenbild-Uploads sind im Browser geprüft; die native Dateiübergabe und tatsächliche TV-Lesbarkeit auf Geräten bleiben abzunehmen.
+- Eigene Gruppenbild-Uploads sind im Browser und über den nativen Android-Fotodialog im Emulator geprüft. iOS-Dateiauswahl und tatsächliche TV-Lesbarkeit auf Geräten bleiben abzunehmen.
 - Keine Bereitstellung auf NAS oder Installation auf Nutzergeraeten erfolgt.
 - VLC-artiger Modus bleibt wie vereinbart zurueckgestellt.
 
@@ -82,8 +95,23 @@ Dritter Stand: #8 (Browser-Lade-/Spulrennen), #9 (Kanal-Datenverlust) und #10 (M
 
 ## Fehlen nur noch echte Gerätetests?
 
-**Nein.** Neben Geräteabnahme fehlen noch die native Tauri-/Expo-Push-Anbindung und ihre nötige Provider-/Build-Konfiguration sowie längere Last-/Dauertests. Web-Push ist implementiert, am Zielserver aber noch nicht eingerichtet/zugestellt. Die eigenständige Mobile-/Android-TV-App wurde bisher über ihre bestehende automatisierte Suite geprüft; eine vollständige visuelle und funktionale Gleichheit mit den neuen Web-/Desktop-Kanälen ist nicht nachgewiesen. Die normale Erfahrung gilt daher weiterhin nicht als vollständig abgenommen, und der VLC-Modus bleibt zurückgestellt.
+**Nein.** Neben Geräteabnahme fehlen noch die native Tauri-/Expo-Push-Anbindung und ihre nötige Provider-/Build-Konfiguration sowie längere Last-/Dauertests. Web-Push ist implementiert, am Zielserver aber noch nicht eingerichtet/zugestellt. Die native Android-App wurde zusätzlich als APK im eigenen fensterlosen Android-Emulator geprüft. Das Tablet-Systemimage mit TV-Layout und D-Pad-Eingaben ersetzt weder ein echtes Android-TV-System noch einen Fernseher. Native Kanalbeiträge öffnen extern; vollständige Funktionsgleichheit mit dem Web-Player ist nicht nachgewiesen. Die normale Erfahrung gilt daher weiterhin nicht als vollständig abgenommen, und der VLC-Modus bleibt zurückgestellt.
 
 Arbeitsumgebung: Drei ältere, ausschließlich generierte Integrationstestordner aus fehlgeschlagenen Läufen konnten wegen einer automatischen Policy-Ablehnung des nachträglichen Löschbefehls nicht bereinigt werden. Neue Testläufe räumen ihre eigenen Daten nach dem Prozess-Fix erfolgreich auf. Keine Nutzerbibliothek, kein NAS-Deployment und keine Geräteinstallation verändert.
 
 Quellen zur technischen Einordnung: [YouTube-Videoresource](https://developers.google.com/youtube/data/reference/rest/v3/videos) und [PushSubscription.options](https://developer.mozilla.org/en-US/docs/Web/API/PushSubscription/options). Eine Dauer oder ein Bildformat ersetzt keinen eindeutigen Formatsignal-Nachweis für den konkreten Beitrag.
+
+## Zusätzliche Verifikation vom 30.10.2026
+
+- Gesamte Server- und Mobile-Suiten erneut erfolgreich; neuer Mobile-API-Vertragstest gegen wirklichen HTTP-Invoke-Handler und SQLite. Abonnementrennen wurden vor dem Fix reproduziert. Vollständiger App-Start ist jetzt Bestandteil der Mobile-Oberflächenprüfung.
+- 14 React-Komponententests für native Kanäle, Fotoübergabe, Zähler-Lebenszyklus und Player-Bedienung. React Native/Video sind darin ersetzt; diese Tests belegen keine native Darstellung.
+- Android-x86_64-APK aus lokalem Gradle-Release-Build gebaut. Nur im eigenen Emulator installiert, mit dem generierten Debug-Signaturschlüssel; kein signiertes ARM-Geräterelease. iOS-JavaScript-Export erfolgreich, kein iOS-Binärbuild auf Windows.
+- Eigenes Android-35-Google-Play-Tablet-Systemimage, fensterlos/ohne Ton, eigener ADB-Server Port 5041, AVD GHGFlixStability. Darstellung 390x844 dp und 1280x800 dp geprüft. Keine Maus-/Tastatursteuerung des Nutzerdesktops. D-Pad-Eingaben ausschließlich per ADB in diesem AVD.
+- Isolierter lokaler Testserver mit eigener SQLite-Datenbank, synthetischem RSS und generiertem H.264/AAC-Testfilm (90 Sekunden). Native Wiedergabe hat Frames dekodiert und Fortschritt gespeichert. Keine Nutzerbibliothek für Wiedergabe verwendet.
+- Native Fotoauswahl tatsächlich geöffnet: generiertes PNG 1600x900 gewählt, als JPEG 960x540 am Testserver angekommen. Abbrechen der erneuten Fotoauswahl erhält denselben Bildhash. Mehrfachzuordnung und Kanal-Glocke über native Oberfläche gespeichert und am Server nachgelesen.
+- Native Gruppen, Formatdialog, Fernbedienungs-OK und Zurück geprüft. Unbekannter Testbeitrag erscheint nicht als sicher erkanntes Short. App-Version 3.3.0 in nativer Oberfläche kontrolliert. Statusleisten-Überlappung am Handy vor/nach Fix visuell verglichen.
+- Wiederverwendbare lokale Hilfen: `tests/integration/mobile-server.mjs` erzeugt ausschließlich Testdaten; `tests/integration/emulator-ui.py` verweigert Eingaben, wenn nicht exakt das eigene Test-AVD am eigenen ADB-Port antwortet. APK, Export, Screenshots und Logs liegen ignoriert unter `test-results/`; Playwright allein unter `test-results/browser/`.
+
+Bei der ersten Serverauswahl veränderte automatische NAS-Erkennung die angezeigte Liste während einer Koordinatenaktion; dadurch entstand eine unbestätigte Kopplungsanfrage. Es wurden keine Zugangsdaten eingegeben, keine Kopplung abgeschlossen und keine Installation/Bereitstellung vorgenommen. Danach ausschließlich explizite Verbindung zum lokalen Testserver und Prüfung aktueller UI-Knoten vor Klicks.
+
+Native Player-Nachprüfung (#23): Bei 390x844 dp alle sechs Knöpfe vollständig in zwei Zeilen sichtbar. Tatsächliche dekodierte Testframes, Pause bei 0:20, Sprung auf 0:50 unter Beibehaltung der Pause und identischer Frame/Zeit nach Ausblenden und Touch-Wiederherstellung. Screenshots `emulator-player-hidden.png` und `emulator-player-woken-paused.png` visuell verglichen. Zusätzliche React-Regressionsprüfung kontrolliert Zeilenwechsel per D-Pad und Neuzuordnung bei Breitenänderung. Die GitHub-Prüfung führt künftig die Frontend-, Mobile- und Kanalrennen-Regressionsprüfungen mit Node 24 aus; das ist keine Behauptung eines bereits erfolgreichen CI-Laufs.

@@ -22,13 +22,17 @@
  * Diese Datei hält nur noch alles zusammen: Verbindung, Navigation, Daten.
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Constants from "expo-constants";
 import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { BackHandler, Text, View } from "react-native";
+import { SafeAreaProvider, SafeAreaView, initialWindowMetrics } from "react-native-safe-area-context";
 
 import { FokusProvider, useFokusSystem } from "./src/fokus.js";
 import { Laden, se } from "./src/bausteine.js";
 import { Seitenleiste, Unterleiste } from "./src/seitenleiste.js";
+import { useKanalmeldungen } from "./src/kanalmeldungen.js";
+import { KanaeleSeite } from "./src/kanaele.js";
 import { PlayerScreen } from "./src/player.js";
 import { VerbindungsScreen } from "./src/verbindung.js";
 import { normUrl, ping } from "./src/netzsuche.js";
@@ -40,7 +44,7 @@ import {
   SerienSeite, StartSeite, SuchSeite,
 } from "./src/seiten.js";
 
-const APP_VERSION = "3.1.0";
+const APP_VERSION = Constants.expoConfig?.version || "unbekannt";
 
 /* ══ Absturzfang ═════════════════════════════════════════════════════════
  * Stürzt irgendwo etwas ab, soll der Bildschirm nicht schwarz bleiben,
@@ -117,6 +121,7 @@ function AppInner() {
   const [favoriten, setFavoriten] = useState([]);
   const [profile, setProfile] = useState([]);
   const [appAktuell, setAppAktuell] = useState(null);
+  const [kanalRevision, setKanalRevision] = useState(0);
 
   const oben = stapel[stapel.length - 1] || null;
   const push = useCallback((s) => setStapel((alt) => [...alt, s]), []);
@@ -162,16 +167,6 @@ function AppInner() {
     ladeConn().then((c) => { setConn(c); verbinden(c); });
   }, [verbinden]);
 
-  /* Beim Start nachsehen, ob auf dem Server eine neuere App-Fassung liegt.
-     Damit entfaellt das laestige Eintippen der Adresse im Downloader. */
-  useEffect(() => {
-    if (!basis) return;
-    ladeEinstellungen().then((E) => {
-      if (E.updatePruefen === false) return;
-      pruefeUpdate(api, APP_VERSION).then(setAppAktuell).catch(() => {});
-    });
-  }, [basis, api]);
-
   /* ── Serverzugriff ────────────────────────────────────────────────── */
   const api = useCallback(
     async (pfad, opt = {}) => {
@@ -188,6 +183,18 @@ function AppInner() {
     },
     [basis, conn],
   );
+
+  /* Beim Start nachsehen, ob auf dem Server eine neuere App-Fassung liegt.
+     Damit entfaellt das laestige Eintippen der Adresse im Downloader. */
+  useEffect(() => {
+    if (!basis) return;
+    ladeEinstellungen().then((E) => {
+      if (E.updatePruefen === false) return;
+      pruefeUpdate(api, APP_VERSION).then(setAppAktuell).catch(() => {});
+    });
+  }, [basis, api]);
+
+  const kanalUngelesen = useKanalmeldungen(api, !!basis && !!conn?.profile, kanalRevision);
 
   const img = useCallback(
     (pfad, groesse = "w500") =>
@@ -346,6 +353,8 @@ function AppInner() {
     );
   } else if (seite === "search") {
     inhalt = <SuchSeite lib={lib} img={img} aufTitel={aufTitel} />;
+  } else if (seite === "channels") {
+    inhalt = <KanaeleSeite key={`${basis}:${conn.profile}`} api={api} onChange={() => setKanalRevision((v) => v + 1)} />;
   } else if (seite === "profiles") {
     inhalt = (
       <ProfilSeite
@@ -375,6 +384,7 @@ function AppInner() {
     movies: lib?.movies?.length,
     shows: lib?.shows?.length,
     list: favoriten?.length || undefined,
+    channels: kanalUngelesen || undefined,
   };
   const wechsle = (s) => { setStapel([]); setSeite(s); };
 
@@ -436,11 +446,13 @@ function NavBeobachter({ aufOffen }) {
 export default function App() {
   return (
     <Absturzfang>
-      <View style={{ flex: 1, backgroundColor: C.bg }}>
-        <FokusProvider>
-          <AppInner />
-        </FokusProvider>
-      </View>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
+          <FokusProvider>
+            <AppInner />
+          </FokusProvider>
+        </SafeAreaView>
+      </SafeAreaProvider>
     </Absturzfang>
   );
 }

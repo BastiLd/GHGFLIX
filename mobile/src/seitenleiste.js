@@ -34,6 +34,7 @@ export const NAV = [
   { id: "movies",   text: "Filme",         kurz: "Filme",  symbol: "▶" },
   { id: "shows",    text: "Serien",        kurz: "Serien", symbol: "☰" },
   { id: "list",     text: "Meine Liste",   kurz: "Liste",  symbol: "♥" },
+  { id: "channels", text: "Kanäle",        kurz: "Kanäle", symbol: "▤" },
   { id: "search",   text: "Suche",         kurz: "Suche",  symbol: "⌕" },
   { id: "settings", text: "Einstellungen", kurz: "Mehr",   symbol: "⚙" },
 ];

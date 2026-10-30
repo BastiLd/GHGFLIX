@@ -324,8 +324,14 @@ export async function abonnieren(eingabe, art = "youtube") {
     };
   }
 
-  feeds.push(feed);
-  feedsSpeichern(feeds);
+  // Network lookups above may overlap edits, removals or other subscriptions.
+  // Recheck and append to the current list in one synchronous commit section.
+  const current = feedsLaden();
+  if (current.some(f => f.feedUrl === feed.feedUrl || (feed.kanalId && f.kanalId === feed.kanalId))) {
+    throw new Error("Dieser Kanal oder Feed ist schon abonniert");
+  }
+  current.push(feed);
+  feedsSpeichern(current);
   // Direkt einmal abholen, damit die Liste nicht leer bleibt.
   await abholen(feed.id).catch(() => {});
   return feedsLaden().find((f) => f.id === feed.id) ?? feed;

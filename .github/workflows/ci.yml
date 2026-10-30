@@ -15,8 +15,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       - run: npm ci
+      - run: npm ci --prefix mobile
+      - run: npm ci --prefix server
+      - name: Player- und Kanalregressionen
+        run: |
+          npm test
+          npm run test:mobile:channels
+          npm test --prefix mobile
+          node server/test/feed-races.test.mjs
+          node server/test/mobile-channels.test.mjs
       - name: TypeScript (Frontend + Desktop-Shell)
         run: npx tsc --noEmit
       - name: Web-Build (identisch zum Docker-Build)

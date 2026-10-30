@@ -84,8 +84,8 @@ export const st = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: C.line,
     paddingTop: 7,
-    // Platz für die Wisch-Leiste am unteren Rand moderner Telefone
-    paddingBottom: 22,
+    // Der äußere SafeAreaView berücksichtigt den tatsächlichen Gestenbereich.
+    paddingBottom: 8,
   },
   untenEintrag: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 2 },
   untenSymbol: { fontSize: 21, lineHeight: 25, marginBottom: 3 },
@@ -142,7 +142,7 @@ export const st = StyleSheet.create({
     borderColor: C.weiss,
   },
   navSymbol: { fontSize: gross ? 21 : 17, width: gross ? 26 : 22, textAlign: "center" },
-  navText: { color: C.muted, fontSize: gross ? 16 : 13.5, fontWeight: "600", flex: 1 },
+  navText: { color: C.muted, fontSize: istTV ? 14 : gross ? 16 : 13.5, fontWeight: "600", flex: 1 },
   navTextAktiv: { color: C.red },
   navTextFokus: { color: C.text },
   navZahl: {

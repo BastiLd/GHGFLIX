@@ -8,7 +8,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import {
   feedAdd, feedGroupAdd, feedGroupRemove, feedGroupUpdate, feedGroups, feedItems,
-  feedFormat, feedMarkRead, feedRefresh, feedRemove, feedSaved, feedUpdate, feedWatched, feedsList,
+  feedFormat, feedMarkRead, feedUnread, feedRefresh, feedRemove, feedSaved, feedUpdate, feedWatched, feedsList,
 } from "../lib/api";
 import { openUrl } from "../lib/backend";
 import { useStore } from "../lib/store";
@@ -151,7 +151,9 @@ function Kachelansicht({
   const [einstellen, setEinstellen] = useState<FeedGruppe | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const gesamtUngelesen = gruppen.reduce((n, g) => n + g.ungelesen, 0);
+  // Groups overlap; their unread counts cannot be added together.
+  const unread = useQuery({ queryKey: ["feedUnread"], queryFn: () => feedUnread() });
+  const gesamtUngelesen = unread.data ?? 0;
 
   const anlegen = async () => {
     if (!name.trim()) return;

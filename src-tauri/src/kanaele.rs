@@ -502,14 +502,23 @@ pub async fn abonnieren(
 
     {
         let conn = sperre.lock().unwrap();
-        let mut alle = feeds_laden(&conn);
-        alle.push(feed.clone());
-        feeds_speichern(&conn, &alle)?;
+        abo_einfuegen(&conn, &feed)?;
     }
     // Direkt einmal abholen, damit die Liste nicht leer bleibt.
     let _ = abholen(sperre, http, Some(&feed.id)).await;
     let conn = sperre.lock().unwrap();
     Ok(feeds_laden(&conn).into_iter().find(|f| f.id == feed.id).unwrap_or(feed))
+}
+
+// Called under the connection lock after all network lookups have finished.
+fn abo_einfuegen(conn: &Connection, feed: &Feed) -> Result<()> {
+    let mut alle = feeds_laden(conn);
+    if alle.iter().any(|f| f.feed_url == feed.feed_url
+        || (feed.kanal_id.is_some() && f.kanal_id == feed.kanal_id)) {
+        return Err(anyhow!("Dieser Kanal oder Feed ist schon abonniert"));
+    }
+    alle.push(feed.clone());
+    feeds_speichern(conn, &alle)
 }
 
 pub fn abbestellen(conn: &Connection, id: &str) -> Result<bool> {
@@ -1150,6 +1159,29 @@ mod tests {
             gruppe_id: None,
             gruppe_ids: None,
         }
+    }
+
+    #[test]
+    fn subscribing_preserves_current_edits_and_rejects_duplicate_commits() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);").unwrap();
+        let mut edited = feed("blog");
+        edited.titel = "Mein Name".into();
+        edited.gruppe_ids = Some(vec!["eins".into(), "zwei".into()]);
+        feeds_speichern(&conn, &[edited]).unwrap();
+        let mut new = feed("youtube");
+        new.id = "new".into(); new.feed_url = "https://youtube.com/feed".into();
+        new.kanal_id = Some("UCabcdefghijklmnopqrstuv".into());
+        abo_einfuegen(&conn, &new).unwrap();
+        assert_eq!(feeds_laden(&conn)[0].titel, "Mein Name");
+        assert_eq!(feeds_laden(&conn)[0].gruppen_ids(), vec!["eins", "zwei"]);
+        let mut duplicate = new.clone(); duplicate.id = "second-request".into();
+        assert!(abo_einfuegen(&conn, &duplicate).is_err());
+        assert_eq!(feeds_laden(&conn).len(), 2);
+        abbestellen(&conn, "f1").unwrap();
+        new.id = "another".into(); new.feed_url = "different".into(); new.kanal_id = None;
+        abo_einfuegen(&conn, &new).unwrap();
+        assert!(!feeds_laden(&conn).iter().any(|f| f.id == "f1"));
     }
 
     #[test]

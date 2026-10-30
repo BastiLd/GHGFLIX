@@ -1,0 +1,48 @@
+// Native-client commands against the real invoke handler and an isolated SQLite DB.
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+const dir = mkdtempSync(join(tmpdir(), "ghgflix-mobile-channels-"));
+process.env.DATA_DIR = dir;
+for (const key of ["SHOWS_DIRS", "MOVIES_DIRS", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_USER_ID", "TMDB_API_KEY", "PUSH_CONTACT"]) process.env[key] = "";
+const db = await import("../src/db.js");
+const { handleInvoke } = await import("../src/invoke.js");
+const { kanalAufruf, kanalUebersicht } = await import("../../mobile/src/kanaele-api.js");
+const api = async (path, options) => {
+  assert.equal(options.method, "POST");
+  assert.ok(path.startsWith("/api/invoke/"));
+  return { result: await handleInvoke(path.slice("/api/invoke/".length), options.body) };
+};
+const call = (command, args) => kanalAufruf(api, command, args);
+try {
+  const a = await call("feed_group_add", { name: "Science" });
+  const b = await call("feed_group_add", { name: "Space" });
+  db.setSetting("feeds", JSON.stringify([{ id: "f", art: "youtube", titel: "Lab", gruppeIds: [a.id, b.id], benachrichtigen: true }]));
+  db.setSetting("feed_items", JSON.stringify([{ id: "i", feedId: "f", titel: "Mars", art: "youtube", gelesen: false, istShort: null }]));
+  const image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aPekAAAAASUVORK5CYII=";
+  await call("set_setting", { key: `feed_group_image_${a.id}`, value: image });
+  let overview = await kanalUebersicht(api);
+  assert.equal(overview.unread, 1);
+  assert.equal(overview.groups.length, 2);
+  assert.equal(overview.groups[0].bild, image);
+  assert.deepEqual(overview.groups.map(g => g.ungelesen), [1, 1]);
+  assert.equal((await call("feed_items", { gruppeId: a.id, search: "Mars", format: "unknown" })).length, 1);
+  assert.deepEqual(await call("feed_items", { gruppeId: a.id, format: "shorts" }), []);
+  await call("feed_format", { id: "i", format: "podcasts" });
+  await call("feed_saved", { id: "i", on: true });
+  assert.equal((await call("feed_items", { savedOnly: true, format: "podcasts" })).length, 1);
+  await call("feed_update", { id: "f", titel: "Mein Labor", gruppeIds: [b.id], benachrichtigen: false });
+  assert.deepEqual(await call("feed_items", { gruppeId: a.id }), []);
+  await call("feed_group_update", { id: a.id, name: "Naturwissenschaft" });
+  overview = await kanalUebersicht(api);
+  assert.equal(overview.groups[0].bild, image);
+  assert.equal(overview.feeds[0].titel, "Mein Labor");
+  assert.equal(overview.feeds[0].benachrichtigen, false);
+  await call("feed_group_remove", { id: b.id });
+  assert.equal((await call("feeds_list")).length, 1);
+  assert.equal((await call("feed_items", { gruppeId: null, savedOnly: true })).length, 1);
+  await call("feed_mark_read", { ids: ["i"] });
+  assert.equal(await call("feed_unread"), 0);
+  console.log("PASS mobile command contract: real SQLite/invoke, existing images, multiple groups, filters, saved state and non-destructive group removal");
+} finally { db.openDb().close(); rmSync(dir, { recursive: true, force: true }); }

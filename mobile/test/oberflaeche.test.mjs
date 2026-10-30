@@ -39,6 +39,12 @@ const seiten = lade("src/seiten.js");
 const seitenleiste = lade("src/seitenleiste.js");
 const player = lade("src/player.js");
 
+/* The complete shell must render too: isolated pages miss hook-dependency TDZs. */
+console.log("\n── Vollständiger App-Start ───────────────────────────────────");
+let appFehler = null;
+try { render(e(lade("App.js").default)); } catch (err) { appFehler = err; }
+pruefe(appFehler ? `App-Start → ${appFehler.message}` : "App-Start ohne Ausnahme", !appFehler);
+
 /* ── Testdaten, wie sie der echte Server liefert ───────────────────────── */
 const jetzt = Math.floor(Date.now() / 1000);
 const lib = {
@@ -101,7 +107,7 @@ if (kern) {
   const inhalt = alle.filter((x) => x.bereich === "inhalt");
 
   console.log("\n── Alles meldet sich beim Fokus an ─────────────────────────");
-  pruefe(`Seitenleiste: ${nav.length} Einträge (6 Seiten + Profil = 7)`, nav.length === 7);
+  pruefe(`Seitenleiste: ${nav.length} Einträge (7 Seiten + Profil = 8)`, nav.length === 8);
   pruefe(`Inhalt: ${inhalt.length} auswählbare Elemente`, inhalt.length > 15);
   pruefe("etwas ist von Anfang an ausgewählt", kern.aktiv != null);
 

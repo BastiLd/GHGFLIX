@@ -24,3 +24,7 @@ Grundlagen: https://github.com/web-push-libs/web-push und https://developer.mozi
 Die Anzeige vergleicht den lokalen Browserstatus mit dem Servereintrag und dem aktuellen öffentlichen VAPID-Schlüssel. Nach Datenbank-/Schlüsselwechsel oder abgelaufener Anmeldung wird eine Erneuerung angeboten. Sie wird erst nach einem ausdrücklichen Einschalt-Klick durchgeführt. Ein Serverausfall zeigt einen unbekannten Status mit erneutem Prüfversuch. Beim Ausschalten wird zuerst die Serveranmeldung entfernt; scheitert danach das Aufräumen im Browser, meldet die Oberfläche diesen Unterschied.
 
 Technische Grundlage der Schlüsselbindung: [PushSubscription.options](https://developer.mozilla.org/en-US/docs/Web/API/PushSubscription/options) und [Push API](https://w3c.github.io/push-api/index.html). Validiert mit sieben UI-Komponententests und Server-Datenbanktests; weiterhin keine echte Providerzustellung.
+
+## Native In-App-Meldungen
+
+Die Expo-App zeigt neue Beiträge im Kanalbereich und als ungelesene Anzahl in der Navigation. Bei aktiver App wird der Server alle 60 Sekunden abgefragt, nach Bearbeitungen zusätzlich aktualisiert. Hintergrundzustand, Serverwechsel und veraltete Antworten werden berücksichtigt. Das ist kein Geräte-Push: es gibt dadurch keine Zustellung bei geschlossener App und keine Betriebssystem-Berechtigungsanfrage. Die Kanal-Glocke wird für die vorhandene Server-Push-Präferenz gespeichert; sie aktiviert keine native Push-Anbindung.

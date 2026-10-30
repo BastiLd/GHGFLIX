@@ -7,12 +7,20 @@
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0b0b0f",
     "newArchEnabled": false,
-    "runtimeVersion": "1",
+    "runtimeVersion": "2",
     "splash": {
       "backgroundColor": "#0b0b0f"
     },
     "plugins": [
-      "./plugins/withAndroidTv.js"
+      "./plugins/withAndroidTv.js",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "GHGFlix verwendet das von dir gewählte Foto als Gruppenbild.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ]
     ],
     "updates": {
       "url": "https://u.expo.dev/b14ed30d-3ecc-4465-ac79-7988b90ab0d8",
@@ -29,7 +37,7 @@
     },
     "android": {
       "package": "com.bastild.ghgflix",
-      "versionCode": 15
+      "versionCode": 16
     },
     "extra": {
       "eas": {
