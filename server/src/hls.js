@@ -28,6 +28,7 @@
 // Der Client kennt seinen Versatz also selbst — deshalb liefert die Sitzung ihn
 // zusätzlich im Header `X-GHG-Stream-Start` mit.
 // ============================================================================
+import { terminateMediaProcess } from "./media-process.js";
 import { spawn, spawnSync } from "node:child_process";
 import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -126,13 +127,9 @@ function aufraeumen(sid) {
   if (!s) return;
   sitzungen.delete(sid);
   if (nachSchluessel.get(s.schluessel) === sid) nachSchluessel.delete(s.schluessel);
-  try {
-    s.ff.kill("SIGKILL");
-  } catch {}
-  ffAbmelden(s.ff);
-  try {
-    rmSync(s.dir, { recursive: true, force: true });
-  } catch {}
+  return terminateMediaProcess(s.ff).then(() => {
+    try { rmSync(s.dir, { recursive: true, force: true }); } catch {}
+  }).catch(e => console.warn("[hls]", e.message));
 }
 
 /* Aufräumer. Ohne ihn bliebe für jedes weggelegte iPhone ein ffmpeg-Prozess
@@ -159,7 +156,7 @@ function waechterStarten() {
 
 /** Alle HLS-Sitzungen beenden (Container-Stopp, SRV-005). */
 export function alleHlsBeenden() {
-  for (const sid of [...sitzungen.keys()]) aufraeumen(sid);
+  return Promise.all([...sitzungen.keys()].map(sid => aufraeumen(sid)));
 }
 
 export const hlsSitzungsZahl = () => sitzungen.size;
@@ -168,7 +165,13 @@ export const hlsSitzungsZahl = () => sitzungen.size;
  * Sitzung anlegen (oder eine passende wiederverwenden) und die sid liefern.
  * Wirft, wenn die Obergrenze für gleichzeitige Umwandlungen erreicht ist.
  */
-export function sitzungStarten(row, { start = 0, quality = "original", audioIndex = 0 } = {}) {
+let startQueue = Promise.resolve();
+export function sitzungStarten(row, options = {}) {
+  const next = startQueue.then(() => sitzungAnlegen(row, options));
+  startQueue = next.then(() => {}, () => {});
+  return next;
+}
+async function sitzungAnlegen(row, { start = 0, quality = "original", audioIndex = 0 } = {}) {
   const opt = { start: Math.max(0, Math.round(start)), quality, audioIndex: Number(audioIndex) || 0 };
   const schluessel = schluesselFuer(row, opt);
 
@@ -179,22 +182,18 @@ export function sitzungStarten(row, { start = 0, quality = "original", audioInde
     return s;
   }
 
-  // Dieselbe Obergrenze wie beim MP4-Weg — beide zählen in dieselbe Liste.
+  // Free this file's old slots before checking the shared global limit.
+  // Await process termination: deleting a session alone does not free CPU capacity.
+  const gleicheDatei = [...sitzungen.values()]
+    .filter(s => s.pfad === row.path)
+    .sort((a, b) => a.letzterZugriff - b.letzterZugriff);
+  const limit = Math.min(MAX_JE_DATEI, transcodeMax());
+  while (gleicheDatei.length >= limit) await aufraeumen(gleicheDatei.shift().sid);
   if (activeTranscodeCount() >= transcodeMax()) {
-    const e = new Error(
-      `Zu viele gleichzeitige Video-Umwandlungen (max. ${transcodeMax()}). Kurz warten — oder TRANSCODE_MAX erhöhen.`,
-    );
+    const e = new Error(`Zu viele gleichzeitige Video-Umwandlungen (max. ${transcodeMax()}). Kurz warten — oder TRANSCODE_MAX erhöhen.`);
     e.code = 503;
     throw e;
   }
-
-  /* Vor dem Start aufräumen: zu viele Sitzungen auf dieselbe Datei entstehen
-     durch mehrfaches Spulen. Die am längsten unbenutzte fliegt raus, damit
-     nicht mehrere ffmpeg-Prozesse für ein Video nebeneinander laufen. */
-  const gleicheDatei = [...sitzungen.values()]
-    .filter((s) => s.pfad === row.path)
-    .sort((a, b) => a.letzterZugriff - b.letzterZugriff);
-  while (gleicheDatei.length >= MAX_JE_DATEI) aufraeumen(gleicheDatei.shift().sid);
 
   const sid = randomBytes(9).toString("hex");
   const dir = join(WURZEL, sid);

@@ -999,7 +999,7 @@ function BeitragsKachel({ b, onOeffnen, onAendern }: { b: FeedBeitrag; onOeffnen
           {!b.gelesen && (
             <span className="absolute top-2 left-2 zz-clip bg-ghg-red px-2 py-0.5 text-[10px] font-bold uppercase">Neu</span>
           )}
-          {b.videoId && !b.formatOverride && b.istShort == null && <span className="absolute bottom-2 left-2 rounded bg-black/70 px-2 py-0.5 text-[10px]">Format noch ungeprüft</span>}
+          {b.videoId && !b.formatOverride && b.istShort == null && <span className="absolute bottom-2 left-2 rounded bg-black/70 px-2 py-0.5 text-[10px]">Format nicht eindeutig erkannt</span>}
           {(b.formatOverride === "shorts" || (!b.formatOverride && b.istShort === true)) && (
             <span className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/70 rounded px-1.5 py-0.5 text-[10px] font-bold">
               <Zap className="w-3 h-3" /> SHORT

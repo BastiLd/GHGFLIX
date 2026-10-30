@@ -36,24 +36,12 @@ const MAX_PRO_FEED = 15;
 
 const HOLEN_TIMEOUT_MS = 15_000;
 
-/* Ein Short darf höchstens 3 Minuten lang sein (YouTube hat 2024 von 60 s
-   erhöht). Nur zusammen mit Hochformat aussagekräftig. */
-const MAX_SHORT_SEK = 185;
+// Classification cache version: older guesses from HTTP status/aspect ratio
+// are not evidence. User formatOverride choices remain untouched.
+const SHORTS_CHECK_VERSION = 2;
+const SHORTS_RETRY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Kopfzeilen für YouTube-Anfragen.
- *
- * DAS ZUSTIMMUNGS-COOKIE IST DER SPRINGENDE PUNKT (gemessen am 01.08.2026):
- * Ohne es antwortet YouTube aus der EU auf JEDE Anfrage mit
- * `302 → consent.youtube.com`. Die alte Shorts-Erkennung las das als
- * „Umleitung, also kein Short" — und markierte damit ausnahmslos jedes Video
- * als normales Video. Der Filter hat deshalb nie funktioniert.
- *
- * Mit `SOCS`/`CONSENT` liefert YouTube die echte Antwort:
- *   /shorts/<id>  →  200  = wirklich ein Short
- *                 →  303  = normales Video (leitet auf /watch um)
- * An 10 echten Videos geprüft, 10 von 10 richtig.
- */
+// Consent headers help reach the source but are never proof of a video format.
 const YT_KOPF = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
@@ -93,7 +81,7 @@ const feedsSpeichern = (v) => setSetting(FEEDS_KEY, JSON.stringify(v));
 
 export const beitraegeLaden = () => {
   const v = lesen(ITEMS_KEY, []);
-  return Array.isArray(v) ? v : [];
+  return Array.isArray(v) ? v.map(b => b.shortsPruefung === SHORTS_CHECK_VERSION ? b : { ...b, istShort: null, dauerSek: null }) : [];
 };
 const beitraegeSpeichern = (v) => setSetting(ITEMS_KEY, JSON.stringify(v.slice(0, MAX_ITEMS)));
 
@@ -521,61 +509,25 @@ function beitragAus(block, feed) {
   };
 }
 
-/**
- * Ist dieses YouTube-Video ein Short?
- *
- * Der Atom-Feed sagt es NICHT — dort steht kein Wort über Länge oder Format.
- * Es gibt aber einen verlässlichen Weg ohne API-Schlüssel: die Adresse
- * `youtube.com/shorts/<id>` beantwortet YouTube unterschiedlich.
- *   - echtes Short  → 200, die Seite existiert
- *   - normales Video → Umleitung auf /watch?v=…
- * Deshalb wird die Umleitung bewusst NICHT gefolgt und nur der Statuscode
- * angesehen. Das kostet einen kleinen Abruf pro NEUEM Video, und das Ergebnis
- * wird dauerhaft gemerkt — bestehende Beiträge werden nie erneut geprüft.
- *
- * Bei Zeitüberschreitung oder Fehler: null zurückgeben (unbekannt) statt zu
- * raten. Ein falsch einsortiertes Video wäre ärgerlicher als eins ohne Marke.
- */
+/** A redirect is useful only if the source explicitly selects /watch for this ID.
+ * HTTP 200 and image dimensions alone cannot establish a Shorts classification. */
+export function shortAusAntwort(videoId, status, location) {
+  if (status < 300 || status >= 400 || !location) return null;
+  try {
+    const url = new URL(location, "https://www.youtube.com");
+    return url.protocol === "https:" && ["youtube.com", "www.youtube.com", "m.youtube.com"].includes(url.hostname)
+      && !url.username && !url.password && !url.port && url.pathname === "/watch"
+      && url.searchParams.getAll("v").length === 1 && url.searchParams.get("v") === videoId ? false : null;
+  } catch { return null; }
+}
 export async function istShortPruefen(videoId) {
-  if (!videoId) return { istShort: null, dauerSek: null };
-
-  // ── Weg 1: die Adresse selbst fragen (billig, ein HEAD ohne Inhalt) ──
+  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId ?? "")) return { istShort: null, dauerSek: null };
   try {
-    const r = await mitZeitlimit((signal) =>
-      fetch(`https://www.youtube.com/shorts/${videoId}`, {
-        method: "HEAD",
-        redirect: "manual",
-        signal,
-        headers: YT_KOPF,
-      }),
-    );
-    if (r.status === 200) return { istShort: true, dauerSek: null };
-    if (r.status >= 300 && r.status < 400) return { istShort: false, dauerSek: null };
-  } catch {
-    /* weiter mit Weg 2 */
-  }
-
-  // ── Weg 2: die Videoseite lesen (Bildformat und Länge) ──
-  // Kostet mehr, liefert dafür auch die Laufzeit für die Anzeige.
-  try {
-    const t = await mitZeitlimit((signal) =>
-      fetch(`https://www.youtube.com/watch?v=${videoId}`, { signal, headers: YT_KOPF }).then((r) =>
-        r.ok ? r.text() : "",
-      ),
-    );
-    if (!t) return { istShort: null, dauerSek: null };
-    const dauer = /"lengthSeconds":"(\d+)"/.exec(t)?.[1];
-    const masse = /"width":(\d+),"height":(\d+)/.exec(t);
-    const dauerSek = dauer ? Number(dauer) : null;
-    if (!masse) return { istShort: null, dauerSek };
-    const hochkant = Number(masse[2]) > Number(masse[1]);
-    // Beides muss stimmen: hochkant UND kurz. Ein hochkant gedrehtes langes
-    // Video ist kein Short, ein kurzes Querformat auch nicht.
-    const istShort = hochkant && dauerSek != null && dauerSek <= MAX_SHORT_SEK;
-    return { istShort, dauerSek };
-  } catch {
-    return { istShort: null, dauerSek: null };
-  }
+    const r = await mitZeitlimit(signal => fetch(`https://www.youtube.com/shorts/${videoId}`, {
+      method: "HEAD", redirect: "manual", signal, headers: YT_KOPF,
+    }));
+    return { istShort: shortAusAntwort(videoId, r.status, r.headers.get("location")), dauerSek: null };
+  } catch { return { istShort: null, dauerSek: null }; }
 }
 
 /**
@@ -624,11 +576,16 @@ export async function abholen(nurId = null) {
      abonnierten Kanal wären es sonst 15 zusätzliche Abrufe auf einmal, und
      der Nutzer wartet vor einer leeren Seite. Was übrig bleibt, holt der
      nächste Durchlauf in 30 Minuten. */
-  const offen = vorhanden.filter((b) => b.art === "youtube" && b.videoId && b.istShort == null).slice(0, 25);
+  const targetIds = new Set(ziele.map(f => f.id));
+  const offen = vorhanden.filter(b => targetIds.has(b.feedId) && b.art === "youtube" && b.videoId && b.istShort == null
+    && (!b.shortsGeprueftAm || jetzt() - b.shortsGeprueftAm >= SHORTS_RETRY_MS))
+    .sort((a,b) => (a.shortsGeprueftAm || 0) - (b.shortsGeprueftAm || 0)).slice(0, 25);
   for (const b of offen) {
     const { istShort, dauerSek } = await istShortPruefen(b.videoId);
     b.istShort = istShort;
-    if (dauerSek != null) b.dauerSek = dauerSek;
+    b.dauerSek = dauerSek;
+    b.shortsPruefung = SHORTS_CHECK_VERSION;
+    b.shortsGeprueftAm = jetzt();
   }
 
   // No awaits in this commit section: always merge into the latest user data.
@@ -648,8 +605,12 @@ export async function abholen(nurId = null) {
     if (!activeIds.has(result.feedId)) continue;
     const current = byId.get(result.id);
     if (current) {
-      if (current.istShort == null && result.istShort != null) current.istShort = result.istShort;
-      if (current.dauerSek == null && result.dauerSek != null) current.dauerSek = result.dauerSek;
+      if (result.shortsPruefung === SHORTS_CHECK_VERSION && (result.shortsGeprueftAm || 0) > (current.shortsGeprueftAm || 0)) {
+        current.istShort = result.istShort;
+        current.dauerSek = result.dauerSek;
+        current.shortsPruefung = result.shortsPruefung;
+        current.shortsGeprueftAm = result.shortsGeprueftAm;
+      }
     } else if (!initialIds.has(result.id)) {
       currentItems.push(result);
       byId.set(result.id, result);

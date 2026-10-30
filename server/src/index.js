@@ -5,7 +5,7 @@ import { sendNewPosts } from "./push.js";
 import { createServer } from "node:http";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
-import { join, normalize, extname } from "node:path";
+import { join, normalize, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb, getSetting, setSetting, settingOr, listLibraries, addLibrary, removeLibrary } from "./db.js";
 import { scanLibrary, scanState, removeLibraryContent, detectLibraries, BROWSE_ROOTS, primaryRoot, isSystemDir } from "./scanner.js";
@@ -27,7 +27,7 @@ const PORT = parseInt(process.env.PORT || "8484", 10);
 const SERVER_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 // webapp/ = the REAL desktop UI built for the browser (vite build:web);
 // web/    = legacy fallback (icon, manifest) for files not in the build
-const WEBAPP_DIR = join(SERVER_ROOT, "webapp");
+const WEBAPP_DIR = process.env.GHGFLIX_WEB_DIR ? resolve(process.env.GHGFLIX_WEB_DIR) : join(SERVER_ROOT, "webapp");
 const LEGACY_DIR = join(SERVER_ROOT, "web");
 const WEB_DIR = existsSync(join(WEBAPP_DIR, "index.html")) ? WEBAPP_DIR : LEGACY_DIR;
 const VERSION = "2.8.0";
@@ -826,7 +826,7 @@ async function handle(req, res) {
     const tq = token ? `?token=${encodeURIComponent(token)}` : "";
     let s;
     try {
-      s = sitzungStarten(row, {
+      s = await sitzungStarten(row, {
         start: parseFloat(url.searchParams.get("t") || "0") || 0,
         quality: url.searchParams.get("q") || "original",
         audioIndex: parseInt(url.searchParams.get("a") || "0", 10) || 0,
@@ -1059,19 +1059,19 @@ const server = createServer((req, res) => {
     else res.end();
   });
 });
-server.listen(PORT, () => {
-  console.log(`GHGFlix Server v${VERSION} → http://0.0.0.0:${PORT}`);
+server.listen(PORT, process.env.HOST || "0.0.0.0", () => {
+  console.log(`GHGFlix Server v${VERSION} → http://${process.env.HOST || "0.0.0.0"}:${PORT}`);
 });
 
 // SRV-005: graceful shutdown — laufende ffmpeg-Prozesse sauber beenden, bevor
 // Docker den Container stoppt (Update mitten in einer Wiedergabe).
-const shutdown = (sig) => {
+const shutdown = async (sig) => {
   console.log(`[server] ${sig} — fahre herunter`);
   try {
     server.close();
   } catch {}
-  alleHlsBeenden(); // beendet die HLS-ffmpegs und räumt deren Temp-Ordner weg
-  killAllTranscodes();
+  await alleHlsBeenden(); // beendet die HLS-ffmpegs und räumt deren Temp-Ordner weg
+  try { await killAllTranscodes(); } catch (e) { console.warn("[shutdown]", e.message); }
   setTimeout(() => process.exit(0), 400).unref();
 };
 process.on("SIGTERM", () => shutdown("SIGTERM"));

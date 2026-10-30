@@ -16,8 +16,9 @@ function keys() {
   db.prepare("INSERT INTO push_keys VALUES (1, ?)").run(JSON.stringify(value));
   return value;
 }
-export function pushStatus() {
-  return { configured: configured(), publicKey: configured() ? keys().publicKey : null };
+export function pushStatus(endpoint = null) {
+  const registered = typeof endpoint === "string" && !!database().prepare("SELECT 1 FROM push_devices WHERE endpoint=?").get(endpoint);
+  return { configured: configured(), publicKey: configured() ? keys().publicKey : null, registered };
 }
 export function validateSubscription(subscription) {
   const url = new URL(subscription?.endpoint);

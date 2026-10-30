@@ -18,3 +18,9 @@ Zugestellt wird bei neuen Beiträgen durch den periodischen und manuellen Abruf.
 Verifiziert: Registrierung/Opt-in, stabile Schlüssel, Endpunktprüfung, Kanalpräferenzen, Transportaufruf und Entfernung abgelaufener Geräte mit lokalem Test und simuliertem Versand. Eine echte Provider-/Gerätezustellung wurde noch nicht durchgeführt.
 
 Grundlagen: https://github.com/web-push-libs/web-push und https://developer.mozilla.org/en-US/docs/Web/API/PushManager/subscribe
+
+## Wiederherstellen einer Geräteanmeldung
+
+Die Anzeige vergleicht den lokalen Browserstatus mit dem Servereintrag und dem aktuellen öffentlichen VAPID-Schlüssel. Nach Datenbank-/Schlüsselwechsel oder abgelaufener Anmeldung wird eine Erneuerung angeboten. Sie wird erst nach einem ausdrücklichen Einschalt-Klick durchgeführt. Ein Serverausfall zeigt einen unbekannten Status mit erneutem Prüfversuch. Beim Ausschalten wird zuerst die Serveranmeldung entfernt; scheitert danach das Aufräumen im Browser, meldet die Oberfläche diesen Unterschied.
+
+Technische Grundlage der Schlüsselbindung: [PushSubscription.options](https://developer.mozilla.org/en-US/docs/Web/API/PushSubscription/options) und [Push API](https://w3c.github.io/push-api/index.html). Validiert mit sieben UI-Komponententests und Server-Datenbanktests; weiterhin keine echte Providerzustellung.

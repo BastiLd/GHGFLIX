@@ -317,6 +317,8 @@ console.log("\n── Shorts trennen ──────────────�
   // Marken von Hand setzen — der echte Abruf gegen YouTube gehoert nicht in
   // einen Test, der ohne Netz laufen soll.
   const roh = JSON.parse((await import("../src/db.js")).getSetting("feed_items"));
+  roh[0].shortsPruefung = 2;
+  roh[1].shortsPruefung = 2;
   roh[0].istShort = true;
   roh[1].istShort = false;
   if (roh[2]) roh[2].istShort = null;

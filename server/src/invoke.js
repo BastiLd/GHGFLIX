@@ -334,7 +334,7 @@ export async function handleInvoke(cmd, a = {}) {
       return summary;
     }
     // ===== Kanäle & Feeds (Punkt 5) =====
-    case "push_status": return pushStatus();
+    case "push_status": return pushStatus(a.endpoint);
     case "push_subscribe": return subscribePush(a.subscription);
     case "push_unsubscribe": return unsubscribePush(a.endpoint);
     case "feeds_list":

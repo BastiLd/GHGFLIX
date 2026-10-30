@@ -64,3 +64,12 @@ it("canceling a pending probe preserves the currently playing source",async()=>{
   cancelPendingLoad();resolve(info(2));await loading;
   expect(document.querySelector("video")?.getAttribute("src")).toBe("/video1");
 });
+it("publishes the real pause state after a seek replaces the source",async()=>{
+  mocks.invoke.mockResolvedValue(info(1,false));await command("loadfile",["one"]);
+  const events:boolean[]=[];
+  const un=await observeProperties(["pause"],e=>{if(e.name==="pause") events.push(Boolean(e.data));});
+  events.length=0;
+  await command("seek",[20,"absolute"]);
+  expect(events[events.length-1]).toBe(true);
+  un();
+});

@@ -1,6 +1,7 @@
 // Video delivery: ffprobe (codec info), direct play with HTTP Range support,
 // and on-the-fly ffmpeg transcoding to fragmented MP4 (h264/aac) that every
 // browser and phone can play — with instant seeking via ?t=<seconds>.
+import { terminateMediaProcess } from "./media-process.js";
 import { spawn } from "node:child_process";
 import { createReadStream, statSync } from "node:fs";
 import { extname } from "node:path";
@@ -106,13 +107,8 @@ const QUALITY = {
 // komplett auslasten. SRV-005: beim Container-Stopp alle sauber beenden.
 const activeFF = new Set();
 export const activeTranscodeCount = () => activeFF.size;
-export function killAllTranscodes() {
-  for (const p of activeFF) {
-    try {
-      p.kill("SIGKILL");
-    } catch {}
-  }
-  activeFF.clear();
+export async function killAllTranscodes() {
+  await Promise.all([...activeFF].map(p => terminateMediaProcess(p)));
 }
 
 /* Der HLS-Weg (hls.js, für iPhone/iPad) startet eigene ffmpeg-Prozesse. Sie
@@ -201,11 +197,7 @@ export function serveTranscode(req, res, row, { start = 0, quality = "original",
       console.warn(`[transcode] Timestamp-Warnung bei "${row.path}" (t=${start}): ${errBuf.trim().split("\n").pop()}`);
     }
   });
-  const kill = () => {
-    try {
-      ff.kill("SIGKILL");
-    } catch {}
-  };
+  const kill = () => { void terminateMediaProcess(ff).catch(e => console.warn("[transcode]", e.message)); };
   req.on("close", kill);
   ff.on("close", (code) => {
     activeFF.delete(ff);

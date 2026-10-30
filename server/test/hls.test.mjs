@@ -245,7 +245,8 @@ if (filmId) {
      Video hinterlassen — sonst wäre TRANSCODE_MAX nach vier-, fünfmal Spulen
      erreicht und die Wiedergabe bräche mit 503 ab. */
   for (const t of [1, 2, 4, 5]) {
-    await hole(`/api/hls/movie/${filmId}/master.m3u8?t=${t}&token=${token}`);
+    const seek = await hole(`/api/hls/movie/${filmId}/master.m3u8?t=${t}&token=${token}`);
+    pruefe(`Spulen auf ${t}s liefert eine neue Playlist`, seek.status === 200);
   }
   pruefe("mehrfaches Spulen lässt höchstens 2 Sitzungen je Datei stehen", hlsSitzungsZahl() <= 2);
 
@@ -255,7 +256,15 @@ if (filmId) {
   const hlsOrdner = join(DATEN, "hls-cache");
   pruefe("die Häppchen liegen unter DATA_DIR", existsSync(hlsOrdner) && readdirSync(hlsOrdner).length > 0);
 
-  alleHlsBeenden();
+  const { setSetting } = await import("../src/db.js");
+  setSetting("transcode_max", "1");
+  for (const t of [1, 3, 2]) {
+    const seek = await hole(`/api/hls/movie/${filmId}/master.m3u8?t=${t}&token=${token}`);
+    pruefe(`Spulen mit nur einem Transcode-Slot auf ${t}s bleibt möglich`, seek.status === 200);
+  }
+  await alleHlsBeenden();
+  const { killAllTranscodes } = await import("../src/stream.js");
+  await killAllTranscodes();
   pruefe("alleHlsBeenden() räumt sie alle weg", hlsSitzungsZahl() === 0);
 } else {
   ueberspringen("HLS-Wiedergabe (ffmpeg fehlt oder Testvideo scheiterte)");

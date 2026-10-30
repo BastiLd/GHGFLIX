@@ -74,17 +74,11 @@ impl Feed {
 const UA: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
-/* DAS ZUSTIMMUNGS-COOKIE IST DER SPRINGENDE PUNKT (gemessen am 01.08.2026):
-   Ohne es antwortet YouTube aus der EU auf JEDE Anfrage mit
-   302 -> consent.youtube.com. Die alte Shorts-Erkennung las das als
-   "Umleitung, also kein Short" und markierte damit ausnahmslos jedes Video
-   als normales Video. Der Filter hat deshalb nie funktioniert.
-   Mit SOCS/CONSENT antwortet /shorts/<id> ehrlich: 200 = Short,
-   303 = normales Video. An 10 echten Videos geprueft, 10 von 10 richtig. */
+// Consent headers are not evidence of a video format.
 const CONSENT_COOKIE: &str = "SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmRlIAEaBgiA_LyaBg; CONSENT=YES+cb";
 
-/// Ein Short darf hoechstens 3 Minuten lang sein (YouTube hat 2024 erhoeht).
-const MAX_SHORT_SEK: i64 = 185;
+const SHORTS_CHECK_VERSION: u32 = 2;
+const SHORTS_RETRY_MS: i64 = 24 * 60 * 60 * 1000;
 
 pub const GRUPPEN_KEY: &str = "feed_gruppen";
 
@@ -139,6 +133,10 @@ pub struct Beitrag {
     #[serde(default)]
     pub ist_short: Option<bool>,
     #[serde(default)]
+    pub shorts_pruefung: u32,
+    #[serde(default)]
+    pub shorts_geprueft_am: i64,
+    #[serde(default)]
     pub format_override: Option<String>,
     /// Merkliste („Spaeter ansehen")
     #[serde(default)]
@@ -174,7 +172,11 @@ fn feeds_speichern(conn: &Connection, v: &[Feed]) -> Result<()> {
     Ok(())
 }
 pub fn beitraege_laden(conn: &Connection) -> Vec<Beitrag> {
-    lesen(conn, ITEMS_KEY)
+    let mut items: Vec<Beitrag> = lesen(conn, ITEMS_KEY);
+    for b in &mut items {
+        if b.shorts_pruefung != SHORTS_CHECK_VERSION { b.ist_short = None; b.dauer_sek = None; }
+    }
+    items
 }
 fn beitraege_speichern(conn: &Connection, v: &[Beitrag]) -> Result<()> {
     let gekappt: Vec<&Beitrag> = v.iter().take(MAX_ITEMS).collect();
@@ -599,6 +601,8 @@ fn beitrag_aus(block: &str, feed: &Feed) -> Option<Beitrag> {
         veroeffentlicht: datum.and_then(|d| zeit_aus(&d)).unwrap_or_else(jetzt),
         gelesen: false,
         ist_short: None,
+        shorts_pruefung: 0,
+        shorts_geprueft_am: 0,
         format_override: None,
         gemerkt: false,
         gesehen: false,
@@ -716,19 +720,21 @@ pub async fn abholen(
        Bewusst NACH dem Einsammeln und mit Obergrenze: bei einem frisch
        abonnierten Kanal waeren es sonst 15 zusaetzliche Abrufe auf einmal.
        Was uebrig bleibt, holt der naechste Durchlauf. */
+    let target_ids: HashSet<&str> = ziele.iter().map(|&i| feeds[i].id.as_str()).collect();
     let offen: Vec<(usize, String)> = vorhanden
         .iter()
         .enumerate()
-        .filter(|(_, b)| b.art == "youtube" && b.ist_short.is_none())
+        .filter(|(_, b)| target_ids.contains(b.feed_id.as_str()) && b.art == "youtube" && b.ist_short.is_none()
+            && (b.shorts_geprueft_am == 0 || jetzt() - b.shorts_geprueft_am >= SHORTS_RETRY_MS))
         .filter_map(|(i, b)| b.video_id.clone().map(|v| (i, v)))
         .take(25)
         .collect();
     for (i, vid) in offen {
         let (ist_short, dauer) = ist_short_pruefen(&vid).await;
         vorhanden[i].ist_short = ist_short;
-        if dauer.is_some() {
-            vorhanden[i].dauer_sek = dauer;
-        }
+        vorhanden[i].dauer_sek = dauer;
+        vorhanden[i].shorts_pruefung = SHORTS_CHECK_VERSION;
+        vorhanden[i].shorts_geprueft_am = jetzt();
     }
 
     let results: Vec<Feed> = ziele.iter().map(|&i| feeds[i].clone()).collect();
@@ -760,8 +766,12 @@ fn refresh_speichern(
     for result in items {
         if !active.contains(&result.feed_id) { continue; }
         if let Some(current) = current_items.iter_mut().find(|b| b.id == result.id) {
-            if current.ist_short.is_none() { current.ist_short = result.ist_short; }
-            if current.dauer_sek.is_none() { current.dauer_sek = result.dauer_sek; }
+            if result.shorts_pruefung == SHORTS_CHECK_VERSION && result.shorts_geprueft_am > current.shorts_geprueft_am {
+                current.ist_short = result.ist_short;
+                current.dauer_sek = result.dauer_sek;
+                current.shorts_pruefung = result.shorts_pruefung;
+                current.shorts_geprueft_am = result.shorts_geprueft_am;
+            }
         } else if !initial_ids.contains(&result.id) {
             inserted.insert(result.id.clone());
             current_items.push(result);
@@ -1037,69 +1047,28 @@ pub fn gruppen_uebersicht(conn: &Connection) -> Vec<GruppenKachel> {
     liste
 }
 
-/**
-Ist dieses YouTube-Video ein Short?
+/// Generic HTTP success, consent redirects and aspect ratio do not prove a format.
+fn short_aus_antwort(video_id: &str, status: u16, location: Option<&str>) -> Option<bool> {
+    if !(300..400).contains(&status) { return None; }
+    let base = reqwest::Url::parse("https://www.youtube.com").ok()?;
+    let url = base.join(location?).ok()?;
+    let ids: Vec<_> = url.query_pairs().filter(|(k, _)| k == "v").map(|(_, v)| v.into_owned()).collect();
+    if url.scheme() == "https" && matches!(url.host_str(), Some("youtube.com" | "www.youtube.com" | "m.youtube.com"))
+        && url.username().is_empty() && url.password().is_none() && url.port().is_none()
+        && url.path() == "/watch" && ids.len() == 1 && ids[0] == video_id {
+        Some(false)
+    } else { None }
+}
 
-Der Atom-Feed sagt es NICHT. Es gibt aber einen verlaesslichen Weg ohne
-API-Schluessel: `youtube.com/shorts/<id>` antwortet unterschiedlich —
-echtes Short mit 200, normales Video mit einer Umleitung auf /watch.
-Deshalb wird die Umleitung bewusst NICHT gefolgt.
-
-Bei Fehler oder Zeitueberschreitung: None (unbekannt) statt zu raten.
-*/
 async fn ist_short_pruefen(video_id: &str) -> (Option<bool>, Option<i64>) {
-    /* Eigener Client OHNE Umleitungsverfolgung. reqwest folgt sonst der
-       303 auf /watch und liefert 200 - dann waere JEDES Video ein Short. */
-    let Ok(client) = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    else {
+    if video_id.len() != 11 || !video_id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') {
         return (None, None);
-    };
-
-    // Weg 1: die Adresse selbst fragen (billig, ein HEAD ohne Inhalt).
-    if let Ok(res) = client
-        .head(format!("https://www.youtube.com/shorts/{video_id}"))
-        .header("User-Agent", UA)
-        .header("Cookie", CONSENT_COOKIE)
-        .send()
-        .await
-    {
-        let s = res.status().as_u16();
-        if s == 200 {
-            return (Some(true), None);
-        }
-        if (300..400).contains(&s) {
-            return (Some(false), None);
-        }
     }
-
-    // Weg 2: die Videoseite lesen (Bildformat und Laenge).
-    let Ok(res) = client
-        .get(format!("https://www.youtube.com/watch?v={video_id}"))
-        .header("User-Agent", UA)
-        .header("Cookie", CONSENT_COOKIE)
-        .send()
-        .await
-    else {
-        return (None, None);
-    };
-    let Ok(t) = res.text().await else { return (None, None) };
-
-    static RE_LEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""lengthSeconds":"(\d+)""#).unwrap());
-    static RE_WH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""width":(\d+),"height":(\d+)"#).unwrap());
-
-    let dauer = RE_LEN.captures(&t).and_then(|c| c[1].parse::<i64>().ok());
-    let Some(wh) = RE_WH.captures(&t) else { return (None, dauer) };
-    let (w, h) = (
-        wh[1].parse::<i64>().unwrap_or(0),
-        wh[2].parse::<i64>().unwrap_or(0),
-    );
-    // Beides muss stimmen: hochkant UND kurz. Ein hochkant gedrehtes langes
-    // Video ist kein Short, ein kurzes Querformat auch nicht.
-    let ist = h > w && dauer.is_some_and(|d| d <= MAX_SHORT_SEK);
-    (Some(ist), dauer)
+    let Ok(client) = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(10)).build() else { return (None, None) };
+    let Ok(res) = client.head(format!("https://www.youtube.com/shorts/{video_id}"))
+        .header("User-Agent", UA).header("Cookie", CONSENT_COOKIE).send().await else { return (None, None) };
+    (short_aus_antwort(video_id, res.status().as_u16(), res.headers().get("location").and_then(|v| v.to_str().ok())), None)
 }
 
 pub fn ungelesen_zahl(conn: &Connection, art: Option<&str>) -> i64 {
@@ -1234,6 +1203,36 @@ mod tests {
         assert!(commit().is_empty());
         assert!(feeds_laden(&conn).is_empty());
         assert!(beitraege_laden(&conn).is_empty());
+    }
+
+    #[test]
+    fn shorts_requires_a_matching_source_redirect() {
+        let id = "AAAAAAAAAAA";
+        assert_eq!(short_aus_antwort(id, 200, None), None);
+        assert_eq!(short_aus_antwort(id, 302, Some("https://consent.youtube.com/")), None);
+        assert_eq!(short_aus_antwort(id, 303, Some("/watch?v=BBBBBBBBBBB")), None);
+        assert_eq!(short_aus_antwort(id, 303, Some("https://example.test/watch?v=AAAAAAAAAAA")), None);
+        assert_eq!(short_aus_antwort(id, 303, Some("/watch?v=AAAAAAAAAAA&v=BBBBBBBBBBB")), None);
+        assert_eq!(short_aus_antwort(id, 303, Some("/watch?v=AAAAAAAAAAA")), Some(false));
+    }
+
+    #[test]
+    fn legacy_guesses_are_unknown_without_losing_user_fields() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);").unwrap();
+        let mut b = beitrag_aus(&eintraege(ATOM)[0], &feed("youtube")).unwrap();
+        b.ist_short = Some(true);
+        b.gemerkt = true;
+        b.format_override = Some("podcasts".into());
+        beitraege_speichern(&conn, &[b.clone()]).unwrap();
+        let legacy = beitraege_laden(&conn).remove(0);
+        assert_eq!(legacy.ist_short, None);
+        assert!(legacy.gemerkt);
+        assert_eq!(legacy.format_override.as_deref(), Some("podcasts"));
+        b.shorts_pruefung = SHORTS_CHECK_VERSION;
+        b.ist_short = Some(false);
+        beitraege_speichern(&conn, &[b]).unwrap();
+        assert_eq!(beitraege_laden(&conn)[0].ist_short, Some(false));
     }
 
     #[test]

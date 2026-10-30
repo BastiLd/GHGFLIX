@@ -244,7 +244,10 @@ async function startStream(at: number, forceTranscode = false, paused = S.video?
   applySubTrack();
   if (!paused) await v.play().catch(() => {});
   else v.pause();
-  if (revision === streamRevision) emit("duration", mediaDuration());
+  if (revision === streamRevision) {
+    emit("pause", v.paused);
+    emit("duration", mediaDuration());
+  }
 }
 
 async function webSeekAbs(t: number) {

@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "build:web": "vite build --base ./ --outDir server/webapp --emptyOutDir",
     "test": "vitest run",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "test:integration": "npm run build && node tests/integration/player.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",
