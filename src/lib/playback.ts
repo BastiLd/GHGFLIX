@@ -150,10 +150,11 @@ export const playback = () => usePlayback.getState();
 
 /** The corner rectangle (CSS px) the mini video occupies, from the pref size. */
 export function miniRect(size: "sm" | "md" | "lg") {
-  const w = size === "sm" ? 320 : size === "lg" ? 480 : 400;
+  const preferred = size === "sm" ? 320 : size === "lg" ? 480 : 400;
+  const w = Math.max(120, Math.min(preferred, window.innerWidth - 32));
   const h = Math.round((w * 9) / 16);
   const margin = 16;
-  return { w, h, right: margin, bottom: margin };
+  return { w, h, right: margin, bottom: window.innerWidth <= 640 ? 76 : margin };
 }
 
 /** Shrink the running mpv video into the mini corner (or restore full size). */

@@ -76,6 +76,7 @@ export const feedItems = (filter: FeedFilter = {}) => invoke<FeedBeitrag[]>("fee
 /** Merkliste „Später ansehen" umschalten. */
 export const feedSaved = (id: string, on: boolean) => invoke<boolean>("feed_saved", { id, on });
 /** Gesehen-Markierung umschalten. */
+export const feedFormat = (id: string, format: string | null) => invoke<boolean>("feed_format", { id, format });
 export const feedWatched = (id: string, on: boolean) => invoke<boolean>("feed_watched", { id, on });
 
 // ── Gruppen (ein Film / eine Serie und die Abos dazu) ──

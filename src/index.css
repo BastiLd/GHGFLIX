@@ -276,3 +276,25 @@ body.tv-mode :focus {
 body.tv-mode ::-webkit-scrollbar {
   display: none; /* TVs scrollen per Fokus, nicht per Maus */
 }
+
+/* Compact navigation leaves the content readable on phones. */
+@media (max-width: 640px) {
+  .app-shell { flex-direction: column; height: 100dvh; }
+  .app-sidebar { order: 2; width: 100%; flex-direction: row; align-items: center; border-right: 0; border-top: 1px solid var(--color-ghg-line); padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); }
+  .app-sidebar > div { display: none; }
+  .app-sidebar nav { display: flex; padding: 0; gap: 2px; min-width: 0; }
+  .app-sidebar nav a { flex: 1; margin: 0; padding: 12px 0; justify-content: center; }
+  .app-sidebar nav a > span:not(:first-child) { display: none; }
+  .app-sidebar > button { margin: 0 0 0 2px; padding: 4px; }
+  .app-sidebar > button > div:not(:first-child) { display: none; }
+  .app-content > header { padding: 0 12px; gap: 8px; }
+}
+
+.mini-player:focus-within .mini-player-controls { opacity: 1; pointer-events: auto; }
+@media (hover: none) {
+  .mini-player-controls { opacity: 1; pointer-events: auto; }
+}
+@media (max-width: 640px) {
+  .player-toolbar { gap: 4px; }
+  .player-toolbar > button { padding: 8px; }
+}

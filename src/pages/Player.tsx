@@ -1,3 +1,4 @@
+import { createFullscreenController } from "../lib/fullscreen";
 import { getCurrentWindow, join, LogicalSize, openDialog, pictureDir, webPickedFile } from "../lib/backend";
 import { IS_WEB } from "../lib/platform";
 import {
@@ -125,6 +126,8 @@ async function buildMpvArgs(): Promise<string[]> {
   return args;
 }
 
+let sharedFullscreen: ReturnType<typeof createFullscreenController> | undefined;
+
 export default function Player() {
   const { type, id } = useParams();
   const mediaType = (type === "episode" ? "episode" : "movie") as "movie" | "episode";
@@ -141,6 +144,22 @@ export default function Player() {
   const [volume, setVol] = useState(100);
   const [muted, setMuted] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreenControl] = useState(() => sharedFullscreen ??= createFullscreenController(getCurrentWindow()));
+  useEffect(() => {
+    const un = fullscreenControl.subscribe(setFullscreen);
+    const sync = () => { void fullscreenControl.sync().catch(() => {}); };
+    sync();
+    window.addEventListener("resize", sync);
+    window.addEventListener("focus", sync);
+    document.addEventListener("fullscreenchange", sync);
+    return () => {
+      un();
+      window.removeEventListener("resize", sync);
+      window.removeEventListener("focus", sync);
+      document.removeEventListener("fullscreenchange", sync);
+      void fullscreenControl.exit().catch(() => {});
+    };
+  }, [fullscreenControl]);
   const [pip, setPip] = useState(false);
   const [showUi, setShowUi] = useState(true);
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -377,7 +396,8 @@ export default function Player() {
   const leavePlayer = useCallback(
     async (action: "mini" | "close") => {
       saveProgress();
-      if (fullscreen) await getCurrentWindow().setFullscreen(false).catch(() => {});
+      try { await fullscreenControl.exit(); }
+      catch (e) { toast(`Vollbild konnte nicht beendet werden: ${String(e)}`, "error"); return; }
       if (pipRef.current) {
         await restoreWindow();
         pipRef.current = false;
@@ -397,7 +417,7 @@ export default function Player() {
       // overview the user actually came from — never back into the player.
       navigate(backTargetRef.current, { replace: true });
     },
-    [fullscreen, navigate, restoreWindow, saveProgress],
+    [fullscreenControl, navigate, restoreWindow, saveProgress, toast],
   );
 
   const goBack = useCallback(() => leavePlayer(prefsRef.current.backButtonAction), [leavePlayer]);
@@ -432,11 +452,9 @@ export default function Player() {
   }, [paused]);
 
   const toggleFullscreen = useCallback(async () => {
-    const w = getCurrentWindow();
-    const fs = await w.isFullscreen();
-    await w.setFullscreen(!fs);
-    setFullscreen(!fs);
-  }, []);
+    try { await fullscreenControl.toggle(); }
+    catch (e) { toast(`Vollbild konnte nicht geändert werden: ${String(e)}`, "error"); }
+  }, [fullscreenControl, toast]);
 
   useEffect(() => {
     if (!IS_WEB) return;
@@ -462,10 +480,8 @@ export default function Player() {
     }
     const w = getCurrentWindow();
     if (!pipRef.current) {
-      if (fullscreen) {
-        await w.setFullscreen(false).catch(() => {});
-        setFullscreen(false);
-      }
+      try { await fullscreenControl.exit(); }
+      catch (e) { toast(String(e), "error"); return; }
       await w.setDecorations(false).catch(() => {});
       await w.setResizable(true).catch(() => {});
       await w.setMinSize(new LogicalSize(160, 90)).catch(() => {});
@@ -480,7 +496,7 @@ export default function Player() {
       pipRef.current = false;
       setPip(false);
     }
-  }, [fullscreen, restoreWindow]);
+  }, [fullscreenControl, restoreWindow, toast]);
 
   const toggleMarker = useCallback(() => {
     if (markerRef.current == null) {
@@ -591,6 +607,7 @@ export default function Player() {
   useEffect(() => {
     let unobserve: (() => void) | null = null;
     let cancelled = false;
+    let attached = false;
     (async () => {
       try {
         markerKeyRef.current = ((await getSetting("marker_key")) || "k").toLowerCase();
@@ -617,6 +634,8 @@ export default function Player() {
                 : 176,
         );
         const mpvPath = (await getSetting("mpv_path"))?.trim();
+        if (cancelled) return;
+        attached = true;
         if (playback().mpvInited) {
           // mpv is already running (mini-player handoff) — reuse it seamlessly
           applyMiniMargins(false, prefsRef.current.miniSize);
@@ -697,6 +716,7 @@ export default function Player() {
     })();
     return () => {
       cancelled = true;
+      if (!attached) return;
       saveProgress();
       if (unobserve) unobserve();
       if (playback().handoff) {
@@ -1399,7 +1419,7 @@ export default function Player() {
           </button>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="player-toolbar flex flex-wrap items-center gap-2">
           <button onClick={togglePause} className="p-2.5 rounded-full bg-ghg-red hover:bg-ghg-red-bright transition">
             {paused ? <Play className="w-5 h-5 fill-white" /> : <Pause className="w-5 h-5 fill-white" />}
           </button>
@@ -1573,7 +1593,7 @@ export default function Player() {
           <button onClick={togglePip} className={`p-2 rounded-lg hover:bg-white/10 transition ${pip ? "text-ghg-red" : ""}`} title="Bild-im-Bild">
             <PictureInPicture2 className="w-5 h-5" />
           </button>
-          <button onClick={toggleFullscreen} className="p-2 rounded-lg hover:bg-white/10 transition" title="Vollbild">
+          <button onClick={toggleFullscreen} className="p-2 rounded-lg hover:bg-white/10 transition" title={fullscreen ? "Vollbild beenden" : "Vollbild"} aria-pressed={fullscreen}>
             <Maximize className="w-5 h-5" />
           </button>
         </div>

@@ -1,3 +1,4 @@
+import { PushSettings } from "../components/PushSettings";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
@@ -7,7 +8,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import {
   feedAdd, feedGroupAdd, feedGroupRemove, feedGroupUpdate, feedGroups, feedItems,
-  feedMarkRead, feedRefresh, feedRemove, feedSaved, feedUpdate, feedWatched, feedsList,
+  feedFormat, feedMarkRead, feedRefresh, feedRemove, feedSaved, feedUpdate, feedWatched, feedsList,
 } from "../lib/api";
 import { openUrl } from "../lib/backend";
 import { useStore } from "../lib/store";
@@ -17,7 +18,7 @@ import type { Feed, FeedBeitrag, FeedGruppe } from "../lib/types";
 type Art = "youtube" | "blog";
 const gruppenIds = (f: Feed) => f.gruppeIds ?? (f.gruppeId ? [f.gruppeId] : []);
 
-type Format = "alle" | "videos" | "shorts";
+type Format = "alle" | "videos" | "shorts" | "live" | "podcasts" | "trailer" | "unknown";
 type Reiter = "alle" | "ungelesen" | "gemerkt";
 
 /** Auswahl für die Textfarbe einer Gruppe — bewusst wenige, alle gut lesbar. */
@@ -183,7 +184,7 @@ function Kachelansicht({
   };
 
   return (
-    <div className="p-10">
+    <div className="p-4 sm:p-6 lg:p-10">
       <div className="flex items-center gap-3 flex-wrap mb-6">
         <h1 className="text-3xl font-black text-glow">Kanäle</h1>
         {gesamtUngelesen > 0 && (
@@ -216,7 +217,7 @@ function Kachelansicht({
         />
       )}
 
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,260px),1fr))] gap-4">
         {gruppen.map((g) => (
           <GruppenKachel
             key={g.id ?? "ohne"}
@@ -559,6 +560,7 @@ function GruppenAnsicht({
   const [suche, setSuche] = useState("");
   const [sort, setSort] = useState<"neu" | "alt" | "kanal">("neu");
   const [kanal, setKanal] = useState<string | null>(null);
+  const [inhaltOffen, setInhaltOffen] = useState(false);
   const [ohneGesehene, setOhneGesehene] = useState(false);
   const [video, setVideo] = useState<FeedBeitrag | null>(null);
   const [neuUrl, setNeuUrl] = useState("");
@@ -591,6 +593,7 @@ function GruppenAnsicht({
   const beitraege = useQuery({
     queryKey: ["feedItems", filter],
     queryFn: () => feedItems(filter),
+    enabled: inhaltOffen,
   });
 
   const meineAbos = useMemo(
@@ -632,9 +635,9 @@ function GruppenAnsicht({
   const titel = alles ? "Alles gemischt" : (gruppe?.name ?? "Ohne Gruppe");
 
   return (
-    <div className="p-10">
+    <div className="p-4 sm:p-6 lg:p-10">
       <div className="flex items-center gap-3 flex-wrap mb-5">
-        <button onClick={onZurueck} title="Zurück zu den Gruppen" className="p-2 rounded-lg bg-ghg-surface2 hover:bg-ghg-red transition">
+        <button onClick={() => { if (inhaltOffen) { setInhaltOffen(false); setKanal(null); } else onZurueck(); }} title={inhaltOffen ? "Zurück zu den Kanälen" : "Zurück zu den Gruppen"} className="p-2 rounded-lg bg-ghg-surface2 hover:bg-ghg-red transition">
           <ArrowLeft className="w-5 h-5" />
         </button>
         {gruppe && <span className="text-3xl leading-none">{gruppe.emoji}</span>}
@@ -684,6 +687,24 @@ function GruppenAnsicht({
         </div>
       </div>
 
+      {!inhaltOffen && (
+        <section aria-label="Kanäle in dieser Gruppe" className="mb-6">
+          <p className="mb-4 text-ghg-muted">Wähle einen Kanal oder öffne alle Beiträge dieser Gruppe.</p>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))] gap-4">
+            <button onClick={() => { setKanal(null); setInhaltOffen(true); }} className="p-5 text-left rounded-xl border border-ghg-line bg-ghg-surface hover:border-ghg-red">
+              <Play className="mb-3 w-6 h-6 text-ghg-red" /><strong>Alle Beiträge</strong>
+            </button>
+            {meineAbos.map((f) => <button key={f.id} onClick={() => { setKanal(f.id); setInhaltOffen(true); }} className="p-5 text-left rounded-xl border border-ghg-line bg-ghg-surface hover:border-ghg-red">
+              {f.art === "youtube" ? <Video className="mb-3 w-6 h-6 text-ghg-red" /> : <Newspaper className="mb-3 w-6 h-6 text-ghg-red" />}
+              <strong className="block truncate">{f.titel}</strong><span className="text-xs text-ghg-muted">{f.art === "youtube" ? "YouTube" : "Blog"}</span>
+              {f.fehler && <span className="block mt-2 text-xs text-ghg-muted">Abruf fehlgeschlagen – unter Abos prüfen</span>}
+            </button>)}
+          </div>
+        </section>
+      )}
+      {inhaltOffen && <h2 className="mb-4 text-xl font-bold">{meineAbos.find((f) => f.id === kanal)?.titel ?? "Alle Beiträge"}</h2>}
+      {inhaltOffen && <>
+      <p className="mb-3 text-xs text-ghg-muted">Shorts werden geprüft. Livestreams, Podcasts und Trailer kannst du am Beitrag zuordnen; unbekannte Formate bleiben unter „Ungeprüft“ sichtbar.</p>
       {/* Filterleiste */}
       <div className="flex items-center gap-2 flex-wrap mb-5">
         <Segment
@@ -700,6 +721,10 @@ function GruppenAnsicht({
             ["alle", "Alles"],
             ["videos", "Videos"],
             ["shorts", "Shorts"],
+            ["live", "Livestreams"],
+            ["podcasts", "Podcasts"],
+            ["trailer", "Trailer"],
+            ["unknown", "Ungeprüft"],
           ]}
           wert={format}
           setzen={(v) => setFormat(v as Format)}
@@ -740,33 +765,7 @@ function GruppenAnsicht({
         </label>
       </div>
 
-      {/* Kanal-Einzelansicht */}
-      {meineAbos.length > 1 && (
-        <div className="flex gap-2 flex-wrap mb-5">
-          <button
-            onClick={() => setKanal(null)}
-            className={clsx(
-              "px-3 py-1.5 rounded-lg text-sm transition",
-              kanal === null ? "bg-ghg-red text-white" : "bg-ghg-surface2 text-ghg-muted hover:text-ghg-text",
-            )}
-          >
-            Alle Kanäle
-          </button>
-          {meineAbos.map((f) => (
-            <button
-              key={f.id}
-              onClick={() => setKanal(kanal === f.id ? null : f.id)}
-              className={clsx(
-                "px-3 py-1.5 rounded-lg text-sm transition flex items-center gap-1.5",
-                kanal === f.id ? "bg-ghg-red text-white" : "bg-ghg-surface2 text-ghg-muted hover:text-ghg-text",
-              )}
-            >
-              {f.art === "youtube" ? <Video className="w-3.5 h-3.5" /> : <Newspaper className="w-3.5 h-3.5" />}
-              {f.titel}
-            </button>
-          ))}
-        </div>
-      )}
+      </>}
 
       {/* Abonnieren */}
       <div className="bg-ghg-surface border border-ghg-line rounded-2xl p-4 mb-6 flex gap-2 flex-wrap items-end">
@@ -792,6 +791,8 @@ function GruppenAnsicht({
         </Button>
       </div>
 
+      {inhaltOffen && <>
+      {beitraege.isError && <p role="alert">Beiträge konnten nicht geladen werden. Bitte erneut prüfen.</p>}
       {beitraege.isLoading && <Spinner />}
       {!beitraege.isLoading && (beitraege.data ?? []).length === 0 && (
         <EmptyState
@@ -806,11 +807,15 @@ function GruppenAnsicht({
         />
       )}
 
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,260px),1fr))] gap-4">
         {(beitraege.data ?? []).map((b) => (
           <BeitragsKachel key={b.id} b={b} onOeffnen={() => oeffnen(b)} onAendern={auffrischen} />
         ))}
       </div>
+
+      </>}
+
+      <PushSettings />
 
       {/* Abos verwalten */}
       <Modal open={abosOffen} onClose={() => setAbosOffen(false)} title="Abos" wide>
@@ -948,7 +953,7 @@ function Segment({
   setzen: (v: string) => void;
 }) {
   return (
-    <div className="flex rounded-lg overflow-hidden border border-ghg-line">
+    <div className="flex flex-wrap rounded-lg overflow-hidden border border-ghg-line max-w-full">
       {werte.map(([v, label]) => (
         <button
           key={v}
@@ -994,8 +999,8 @@ function BeitragsKachel({ b, onOeffnen, onAendern }: { b: FeedBeitrag; onOeffnen
           {!b.gelesen && (
             <span className="absolute top-2 left-2 zz-clip bg-ghg-red px-2 py-0.5 text-[10px] font-bold uppercase">Neu</span>
           )}
-          {b.videoId && b.istShort == null && <span className="absolute bottom-2 left-2 rounded bg-black/70 px-2 py-0.5 text-[10px]">Format noch ungeprüft</span>}
-          {b.istShort === true && (
+          {b.videoId && !b.formatOverride && b.istShort == null && <span className="absolute bottom-2 left-2 rounded bg-black/70 px-2 py-0.5 text-[10px]">Format noch ungeprüft</span>}
+          {(b.formatOverride === "shorts" || (!b.formatOverride && b.istShort === true)) && (
             <span className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/70 rounded px-1.5 py-0.5 text-[10px] font-bold">
               <Zap className="w-3 h-3" /> SHORT
             </span>
@@ -1018,6 +1023,17 @@ function BeitragsKachel({ b, onOeffnen, onAendern }: { b: FeedBeitrag; onOeffnen
           </p>
         </div>
       </button>
+
+      <label className="block px-3 pb-3 text-xs text-ghg-muted">
+        Format zuordnen
+        <select aria-label={`Format für ${b.titel}`} value={b.formatOverride ?? ""} className="ml-2 bg-ghg-bg border border-ghg-line rounded px-2 py-1" onChange={(e) => {
+          void feedFormat(b.id, e.target.value || null).then(onAendern).catch((e) => useStore.getState().toast(String(e), "error"));
+        }}>
+          <option value="">Automatisch / ungeprüft</option>
+          <option value="videos">Video</option><option value="shorts">Short</option>
+          <option value="live">Livestream</option><option value="podcasts">Podcast</option><option value="trailer">Trailer</option>
+        </select>
+      </label>
 
       {/* Merken / Gesehen — bewusst NEBEN dem Öffnen-Knopf, nicht darin:
           verschachtelte Knöpfe sind in HTML nicht erlaubt. */}

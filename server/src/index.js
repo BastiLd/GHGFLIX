@@ -1,3 +1,4 @@
+import { sendNewPosts } from "./push.js";
 // GHGFlix Server — a small Plex/Jellyfin-style media server with zero npm
 // dependencies. HTTP + routing on node:http, storage on node:sqlite,
 // video via ffmpeg. Designed for ZimaOS/Docker (see ../Dockerfile).
@@ -1094,6 +1095,7 @@ const feedsAbholen = () =>
     .abholen()
     .then((neu) => {
       if (neu.length > 0) console.log(`[feeds] ${neu.length} neue Beiträge`);
+      return sendNewPosts(neu, kanaele.feedsLaden());
     })
     .catch((e) => console.warn("[feeds]", String(e)));
 // Erster Abruf 20 s nach dem Start — nicht sofort, damit der Boot nicht auf

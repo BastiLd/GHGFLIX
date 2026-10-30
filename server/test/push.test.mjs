@@ -1,0 +1,29 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+const dir = mkdtempSync(join(tmpdir(), "ghgflix-push-"));
+process.env.DATA_DIR = dir;
+const p = await import("../src/push.js");
+const { openDb } = await import("../src/db.js");
+const sub = { endpoint: "https://fcm.googleapis.com/fcm/send/test", keys: {p256dh: Buffer.alloc(65,1).toString("base64url"), auth: Buffer.alloc(16,2).toString("base64url")} };
+try {
+  delete process.env.PUSH_CONTACT;
+  assert.equal(p.pushStatus().configured, false);
+  assert.throws(() => p.subscribePush(sub));
+  process.env.PUSH_CONTACT = "mailto:admin@example.test";
+  const status = p.pushStatus(); assert.ok(status.publicKey); assert.equal(status.privateKey, undefined);
+  assert.equal(p.pushStatus().publicKey, status.publicKey);
+  for (const endpoint of ["http://fcm.googleapis.com/test", "https://localhost/test", "https://127.0.0.1/test", "https://fcm.googleapis.com.evil.test/test", "https://fcm.googleapis.com:8443/test"]) assert.throws(() => p.validateSubscription({...sub, endpoint}));
+  p.subscribePush(sub); p.subscribePush(sub);
+  assert.equal(openDb().prepare("SELECT COUNT(*) AS n FROM push_devices").get().n, 1);
+  let sent = 0;
+  const send = async (_s, payload) => { sent++; assert.equal(JSON.parse(payload).body, "1 neue Beiträge in deinen Kanälen"); };
+  await p.sendNewPosts([{feedId:"off"}], [{id:"off",benachrichtigen:false}], send); assert.equal(sent, 0);
+  await p.sendNewPosts([{feedId:"on"},{feedId:"off"}], [{id:"on",benachrichtigen:true}], send); assert.equal(sent, 1);
+  await p.sendNewPosts([{feedId:"on"}], [{id:"on",benachrichtigen:true}], async () => { throw {statusCode:410}; });
+  assert.equal(openDb().prepare("SELECT COUNT(*) AS n FROM push_devices").get().n, 0);
+  p.subscribePush(sub); p.unsubscribePush(sub.endpoint);
+  assert.equal(openDb().prepare("SELECT COUNT(*) AS n FROM push_devices").get().n, 0);
+  console.log("Push: opt-in, stable keys, endpoint validation, deduplication, channel preferences, delivery and expired-device cleanup passed (mock transport).");
+} finally { openDb().close(); rmSync(dir,{recursive:true,force:true}); }

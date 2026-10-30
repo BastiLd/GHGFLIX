@@ -276,6 +276,7 @@ export interface FeedBeitrag {
   gelesen: boolean;
   /** null = noch nicht geprüft (der Feed verrät es nicht). */
   istShort?: boolean | null;
+  formatOverride?: "videos" | "shorts" | "live" | "podcasts" | "trailer" | null;
   /** Merkliste „Später ansehen" */
   gemerkt?: boolean;
   gesehen?: boolean;
@@ -316,7 +317,7 @@ export interface FeedFilter {
   unreadOnly?: boolean;
   savedOnly?: boolean;
   hideWatched?: boolean;
-  format?: "shorts" | "videos" | null;
+  format?: "shorts" | "videos" | "live" | "podcasts" | "trailer" | "unknown" | null;
   search?: string | null;
   sort?: "neu" | "alt" | "kanal";
 }

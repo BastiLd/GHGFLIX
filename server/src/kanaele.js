@@ -677,8 +677,8 @@ export function beitraege({
     .filter((b) => (ohneGesehene ? !b.gesehen : true))
     .filter((b) => {
       if (!format) return true;
-      if (format === "shorts") return b.istShort === true;
-      return b.istShort !== true; // "videos": auch ungeprüfte zeigen
+      const actual = b.formatOverride || (b.istShort === true ? "shorts" : b.istShort === false ? "videos" : "unknown");
+      return actual === format;
     })
     .filter((b) => {
       if (!q) return true;
@@ -739,4 +739,14 @@ export function alsGelesen(ids = null) {
   }
   beitraegeSpeichern(alle);
   return n;
+}
+
+export function formatSetzen(id, format) {
+  if (format != null && !["videos", "shorts", "live", "podcasts", "trailer"].includes(format)) throw new Error("Unbekanntes Format");
+  const all = beitraegeLaden();
+  const item = all.find((b) => b.id === id);
+  if (!item) throw new Error("Beitrag nicht gefunden");
+  item.formatOverride = format;
+  beitraegeSpeichern(all);
+  return true;
 }

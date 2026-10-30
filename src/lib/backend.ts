@@ -131,12 +131,8 @@ export interface WebWindowFacade {
 const webWindow: WebWindowFacade = {
   isFullscreen: async () => !!document.fullscreenElement,
   setFullscreen: async (v) => {
-    try {
-      if (v && !document.fullscreenElement) await document.documentElement.requestFullscreen();
-      else if (!v && document.fullscreenElement) await document.exitFullscreen();
-    } catch {
-      /* user gesture required / unsupported */
-    }
+    if (v && !document.fullscreenElement) await document.documentElement.requestFullscreen();
+    else if (!v && document.fullscreenElement) await document.exitFullscreen();
   },
   setVisibleOnAllWorkspaces: async () => {},
   setAlwaysOnTop: async () => {},

@@ -325,9 +325,19 @@ console.log("\n── Shorts trennen ──────────────�
   const shorts = k.beitraege({ format: "shorts" });
   const videos = k.beitraege({ format: "videos" });
   pruefe("Shorts-Filter liefert nur echte Shorts", shorts.length === 1 && shorts[0].istShort === true);
-  /* Ungeprueftes (istShort === null) MUSS bei "Videos" mitkommen - sonst
-     verschwinden neue Beitraege, solange die Pruefung noch aussteht. */
-  pruefe("Video-Filter zeigt auch ungeprueftes", videos.every((b) => b.istShort !== true) && videos.length === alle.length - 1);
+  // Ungeprueftes bleibt unter Alle/Ungeprueft sichtbar.
+  pruefe("Video-Filter zeigt nur gepruefte Videos", videos.every((b) => b.istShort === false) && videos.length === roh.filter(b => b.istShort === false).length);
+}
+
+{
+  const item = k.beitraege({})[0];
+  k.formatSetzen(item.id, "podcasts");
+  pruefe("Podcast-Zuordnung filterbar", k.beitraege({ format: "podcasts" }).some(b => b.id === item.id));
+  pruefe("Override gewinnt vor Shorts", !k.beitraege({ format: "shorts" }).some(b => b.id === item.id));
+  k.formatSetzen(item.id, null);
+  pruefe("automatische Einordnung wiederherstellbar", !k.beitraege({ format: "podcasts" }).some(b => b.id === item.id));
+  let rejected = false; try { k.formatSetzen(item.id, "invented"); } catch { rejected = true; }
+  pruefe("ungueltiges Format abgewiesen", rejected);
 }
 
 // ── Abbestellen ─────────────────────────────────────────────────────────────

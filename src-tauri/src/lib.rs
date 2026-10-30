@@ -240,6 +240,7 @@ pub fn run() {
             commands::reset_episode_numbers_from_files,
             commands::feed_saved,
             commands::feed_watched,
+            commands::feed_format,
             commands::feed_groups,
             commands::feed_group_add,
             commands::feed_group_update,

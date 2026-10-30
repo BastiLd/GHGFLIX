@@ -1,7 +1,7 @@
 # ============================================================================
 # GHGFlix Server — now ships the REAL desktop UI (the same React app as the
 # Windows app), built for the browser. Multi-stage: build the frontend from
-# the repo root, then copy it next to the zero-dependency Node server.
+# the repo root, then copy it next to the Node server.
 # Build context = repo ROOT:  docker build -f server/Dockerfile .
 # ============================================================================
 
@@ -18,13 +18,14 @@ COPY public ./public
 COPY src ./src
 RUN npx vite build --base ./ --outDir /out/webapp --emptyOutDir
 
-# ── Stage 2: the server (zero npm dependencies: copy + run) ──
+# ── Stage 2: the server (Web Push delivery dependency) ──
 FROM node:24-alpine
 
 RUN apk add --no-cache ffmpeg tini
 
 WORKDIR /app
-COPY server/package.json ./
+COPY server/package.json server/package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
 COPY server/src ./src
 COPY server/web ./web
 COPY --from=webbuild /out/webapp ./webapp

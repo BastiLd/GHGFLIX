@@ -24,6 +24,7 @@ export function MiniPlayer() {
   const [pos, setPos] = useState(0);
   const [dur, setDur] = useState(0);
   const [hover, setHover] = useState(false);
+  const [, geometryTick] = useState(0);
   const [showQueue, setShowQueue] = useState(false);
   const posRef = useRef(0);
   const durRef = useRef(0);
@@ -102,7 +103,7 @@ export function MiniPlayer() {
     endedRef.current = false;
     document.documentElement.classList.add("mpv-mini");
     applyMiniMargins(true, size);
-    const onResize = () => applyMiniMargins(true, size);
+    const onResize = () => { applyMiniMargins(true, size); geometryTick((n) => n + 1); };
     window.addEventListener("resize", onResize);
 
     let un: (() => void) | null = null;
@@ -165,7 +166,7 @@ export function MiniPlayer() {
 
   return (
     <div
-      className="fixed z-[150] rounded-xl overflow-hidden border border-ghg-line shadow-2xl"
+      className="mini-player fixed z-[150] rounded-xl overflow-hidden border border-ghg-line shadow-2xl"
       style={{ width: w, height: h, right, bottom }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => {
@@ -179,7 +180,7 @@ export function MiniPlayer() {
 
       {/* hover controls */}
       <div
-        className={`absolute inset-0 flex flex-col justify-between transition-opacity ${hover ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+        className={`mini-player-controls absolute inset-0 flex flex-col justify-between transition-opacity ${hover ? "opacity-100" : "opacity-0 pointer-events-none"}`}
       >
         <div className="flex items-start justify-between p-2 bg-gradient-to-b from-black/80 to-transparent">
           <button

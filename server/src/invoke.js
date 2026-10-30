@@ -1,3 +1,4 @@
+import { pushStatus, subscribePush, unsubscribePush, sendNewPosts } from "./push.js";
 // /api/invoke/<cmd> — the desktop app's ENTIRE Tauri command surface,
 // re-implemented against the server's SQLite DB. This is what lets the
 // unmodified desktop React UI run in the browser: src/lib/backend.ts routes
@@ -333,6 +334,9 @@ export async function handleInvoke(cmd, a = {}) {
       return summary;
     }
     // ===== Kanäle & Feeds (Punkt 5) =====
+    case "push_status": return pushStatus();
+    case "push_subscribe": return subscribePush(a.subscription);
+    case "push_unsubscribe": return unsubscribePush(a.endpoint);
     case "feeds_list":
       return kanaele.feedsLaden();
     case "feed_add":
@@ -362,6 +366,8 @@ export async function handleInvoke(cmd, a = {}) {
       });
     case "feed_saved":
       return kanaele.merken(String(a.id || ""), a.on !== false);
+    case "feed_format":
+      return kanaele.formatSetzen(String(a.id || ""), a.format ?? null);
     case "feed_watched":
       return kanaele.gesehenSetzen(String(a.id || ""), a.on !== false);
 
@@ -382,6 +388,7 @@ export async function handleInvoke(cmd, a = {}) {
       return kanaele.gruppeLoeschen(String(a.id || ""));
     case "feed_refresh": {
       const neu = await kanaele.abholen(a.id ? String(a.id) : null);
+      void sendNewPosts(neu, kanaele.feedsLaden()).catch(() => console.warn("[push] Zustellung fehlgeschlagen"));
       return { neu: neu.length, beitraege: neu };
     }
     case "feed_unread":

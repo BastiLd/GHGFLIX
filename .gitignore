@@ -38,3 +38,8 @@ docker-compose.zimaos.yml
 # Rund 17 MB Fremdbinaerdateien - gehoeren nicht ins Repo, holt sich das
 # Skript bei Bedarf selbst von Google.
 werkzeuge/
+
+# Browser test artifacts
+test-results/
+playwright-report/
+tests/.generated/

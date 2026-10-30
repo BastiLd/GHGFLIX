@@ -160,16 +160,8 @@ export function Layout() {
     const neu = ungelesen - vorher;
     const text = neu === 1 ? "1 neuer Beitrag in deinen Kanälen" : `${neu} neue Beiträge in deinen Kanälen`;
     toast(text, "info");
-    // Zusätzlich die Systembenachrichtigung, falls der Nutzer sie erlaubt hat.
-    // Ohne Erlaubnis passiert schlicht nichts — es wird NICHT von selbst
-    // gefragt, das wäre aufdringlich.
-    try {
-      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-        new Notification("GHGFlix", { body: text });
-      }
-    } catch {
-      /* manche Browser verbieten den Aufruf ganz — dann bleibt der Toast */
-    }
+    // Device notifications are delivered by the explicitly enabled push worker.
+
   }, [ungelesen, toast]);
 
   // Desktop: der Hintergrund-Abruf meldet sich direkt, statt auf den
@@ -200,11 +192,11 @@ export function Layout() {
 
   return (
     <div
-      className="flex h-screen bg-ghg-bg text-ghg-text overflow-hidden"
+      className="app-shell flex h-screen bg-ghg-bg text-ghg-text overflow-hidden"
       style={mini ? { clipPath: miniClipPath(miniSize) } : undefined}
     >
       {/* Sidebar (full or icon-only compact mode) */}
-      <aside className={clsx("shrink-0 bg-ghg-bg2 border-r border-ghg-line flex flex-col", compact ? "w-16" : "w-60")}>
+      <aside className={clsx("app-sidebar shrink-0 bg-ghg-bg2 border-r border-ghg-line flex flex-col", compact ? "w-16" : "w-60")}>
         <div className={compact ? "px-3 py-6 flex justify-center" : "px-5 py-6"}>
           {compact ? <ZigZag className="h-2 w-8" /> : <Wordmark />}
         </div>
@@ -285,7 +277,7 @@ export function Layout() {
       </aside>
 
       {/* Main */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="app-content flex-1 flex flex-col min-w-0 min-h-0">
         <header className="h-16 shrink-0 flex items-center gap-4 px-8 border-b border-ghg-line bg-ghg-bg/80 backdrop-blur">
           <div className="relative flex-1 max-w-md">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-ghg-muted" />

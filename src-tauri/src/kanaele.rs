@@ -138,6 +138,8 @@ pub struct Beitrag {
     /// None = noch nicht geprueft. Der Feed verraet es nicht.
     #[serde(default)]
     pub ist_short: Option<bool>,
+    #[serde(default)]
+    pub format_override: Option<String>,
     /// Merkliste („Spaeter ansehen")
     #[serde(default)]
     pub gemerkt: bool,
@@ -597,6 +599,7 @@ fn beitrag_aus(block: &str, feed: &Feed) -> Option<Beitrag> {
         veroeffentlicht: datum.and_then(|d| zeit_aus(&d)).unwrap_or_else(jetzt),
         gelesen: false,
         ist_short: None,
+        format_override: None,
         gemerkt: false,
         gesehen: false,
         dauer_sek: None,
@@ -794,12 +797,11 @@ pub fn beitraege(conn: &Connection, f: &Filter) -> Vec<Beitrag> {
         .filter(|b| !f.nur_ungelesen || !b.gelesen)
         .filter(|b| !f.nur_gemerkt || b.gemerkt)
         .filter(|b| !f.ohne_gesehene || !b.gesehen)
-        .filter(|b| match f.format.as_deref() {
-            Some("shorts") => b.ist_short == Some(true),
-            // "videos": auch ungeprueft zeigen — lieber einmal zu viel als
-            // etwas verschwinden lassen.
-            Some("videos") => b.ist_short != Some(true),
-            _ => true,
+        .filter(|b| {
+            let actual = b.format_override.as_deref().unwrap_or(match b.ist_short {
+                Some(true) => "shorts", Some(false) => "videos", None => "unknown",
+            });
+            f.format.as_deref().is_none_or(|wanted| actual == wanted)
         })
         .filter(|b| match &q {
             None => true,
@@ -847,6 +849,17 @@ pub fn merken(conn: &Connection, id: &str, an: bool) -> Result<bool> {
 }
 
 /// Gesehen-Markierung umschalten. Gesehenes gilt zugleich als gelesen.
+pub fn format_setzen(conn: &Connection, id: &str, format: Option<String>) -> Result<bool> {
+    if format.as_deref().is_some_and(|f| !["videos", "shorts", "live", "podcasts", "trailer"].contains(&f)) {
+        return Err(anyhow!("Unbekanntes Format"));
+    }
+    let mut all = beitraege_laden(conn);
+    let item = all.iter_mut().find(|b| b.id == id).ok_or_else(|| anyhow!("Beitrag nicht gefunden"))?;
+    item.format_override = format;
+    beitraege_speichern(conn, &all)?;
+    Ok(true)
+}
+
 pub fn gesehen_setzen(conn: &Connection, id: &str, an: bool) -> Result<bool> {
     let mut alle = beitraege_laden(conn);
     let b = alle.iter_mut().find(|x| x.id == id).ok_or_else(|| anyhow!("Diesen Beitrag gibt es nicht"))?;

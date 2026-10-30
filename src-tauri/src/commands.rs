@@ -1775,6 +1775,12 @@ pub fn feed_saved(state: State<AppState>, id: String, on: Option<bool>) -> R<boo
 
 /// Gesehen-Markierung umschalten.
 #[tauri::command]
+pub fn feed_format(state: State<AppState>, id: String, format: Option<String>) -> R<bool> {
+    let conn = state.conn.lock().unwrap();
+    crate::kanaele::format_setzen(&conn, &id, format).map_err(err)
+}
+
+#[tauri::command]
 pub fn feed_watched(state: State<AppState>, id: String, on: Option<bool>) -> R<bool> {
     let conn = state.conn.lock().unwrap();
     crate::kanaele::gesehen_setzen(&conn, &id, on.unwrap_or(true)).map_err(err)
