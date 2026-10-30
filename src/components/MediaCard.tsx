@@ -67,6 +67,10 @@ export function MediaCard({
           wide ? "aspect-video" : "aspect-[2/3]",
         )}
         onClick={onOpen}
+        role="button"
+        tabIndex={0}
+        aria-label={title}
+        onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen?.(); } }}
       >
         {poster ? (
           <img

@@ -223,6 +223,15 @@ if (filmId) {
     bytes[376] === 0x47;
   pruefe("und ist ein echter MPEG-Transportstrom (Sync-Byte 0x47 alle 188 Byte)", tsOk);
 
+  // Der Android-Fallback begrenzt 4K-Umwandlungen auf 1080p. Nicht nur den
+  // Original-Weg pruefen: ein ungueltiger Scale-Filter liefert sonst eine
+  // gueltige Master-Playlist, aber nie ein abspielbares Haeppchen.
+  const begrenzt = await hole(`/api/hls/movie/${filmId}/master.m3u8?q=high&token=${token}`);
+  const begrenztWeg = (await begrenzt.text()).split("\n").find((l) => l.startsWith("/api/hls/s/"));
+  const begrenztListe = await hole(begrenztWeg);
+  const begrenztText = await begrenztListe.text();
+  pruefe("1080p-Fallback liefert eine abspielbare Haeppchen-Liste", begrenztListe.status === 200 && /seg\d+\.ts/.test(begrenztText));
+
   // Zweiter Aufruf mit denselben Werten darf keine zweite Umwandlung starten.
   const nochmal = await hole(`/api/hls/movie/${filmId}/master.m3u8?token=${token}`);
   const zeile2 = (await nochmal.text()).split("\n").find((l) => l.startsWith("/api/hls/s/"));

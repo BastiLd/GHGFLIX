@@ -33,17 +33,19 @@ console.log("\n── Der normale Ablauf ─────────────
   pruefe("er läuft in etwa zehn Minuten ab",
     v.gueltigBis - Date.now() > 9 * 60_000 && v.gueltigBis - Date.now() <= 10 * 60_000);
 
-  pruefe("vor dem Einlösen: noch offen", pruefeKopplung(v.code).status === "offen");
+  pruefe("vor dem Einlösen: noch offen", pruefeKopplung(v.code, v.abholToken).status === "offen");
 
   const ok = loeseKopplungEin(v.code, "geheimes-token-123");
   pruefe("das Einlösen gelingt", ok === true);
 
-  const nachher = pruefeKopplung(v.code);
+  pruefe("QR-Code allein darf das Token nicht abholen",pruefeKopplung(v.code).status === "unbekannt");
+  pruefe("Fremdes Gerät darf es nicht abholen",pruefeKopplung(v.code,"x".repeat(64)).status === "unbekannt");
+  const nachher = pruefeKopplung(v.code, v.abholToken);
   pruefe("danach ist die Kopplung fertig", nachher.status === "fertig");
   pruefe("und das Token kommt an", nachher.token === "geheimes-token-123");
 
   pruefe("ein zweites Abholen findet nichts mehr (Code gilt einmal)",
-    pruefeKopplung(v.code).status === "unbekannt");
+    pruefeKopplung(v.code, v.abholToken).status === "unbekannt");
 }
 
 console.log("\n── Codes sind gut lesbar und eindeutig ─────────────────────");
@@ -74,10 +76,10 @@ console.log("\n── Was schiefgehen kann ────────────�
 
   const v = starteKopplung();
   pruefe("Kleinschreibung wird trotzdem erkannt",
-    pruefeKopplung(v.code.toLowerCase()).status === "offen");
+    pruefeKopplung(v.code.toLowerCase(), v.abholToken).status === "offen");
   loeseKopplungEin(v.code, "t1");
   pruefe("ein zweites Einlösen wird abgelehnt", loeseKopplungEin(v.code, "t2") === false);
-  pruefe("und es bleibt beim ersten Token", pruefeKopplung(v.code).token === "t1");
+  pruefe("und es bleibt beim ersten Token", pruefeKopplung(v.code, v.abholToken).token === "t1");
 }
 
 console.log("\n── Zwei Fernseher gleichzeitig ─────────────────────────────");
@@ -87,8 +89,8 @@ console.log("\n── Zwei Fernseher gleichzeitig ──────────
   const b = starteKopplung("Schlafzimmer");
   pruefe("beide bekommen verschiedene Codes", a.code !== b.code);
   loeseKopplungEin(b.code, "token-schlafzimmer");
-  pruefe("nur der eingelöste ist fertig", pruefeKopplung(b.code).status === "fertig");
-  pruefe("der andere bleibt offen", pruefeKopplung(a.code).status === "offen");
+  pruefe("nur der eingelöste ist fertig", pruefeKopplung(b.code, b.abholToken).status === "fertig");
+  pruefe("der andere bleibt offen", pruefeKopplung(a.code, a.abholToken).status === "offen");
 }
 
 console.log("\n── Die Seite fürs Handy ────────────────────────────────────");

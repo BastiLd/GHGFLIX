@@ -19,6 +19,7 @@ import React from "react";
 import { Text, View } from "react-native";
 import { FKnopf } from "./fokus.js";
 import { C, M, gross, st } from "./stile.js";
+import { Icon } from "./Icons.js";
 
 /**
  * Symbole als Text — keine Bild-Abhängigkeit, die beim Start fehlen könnte.
@@ -30,13 +31,13 @@ import { C, M, gross, st } from "./stile.js";
  * passen sich damit Auswahl und Fokus an, wie am Desktop.
  */
 export const NAV = [
-  { id: "home",     text: "Start",         kurz: "Start",  symbol: "⌂" },
-  { id: "movies",   text: "Filme",         kurz: "Filme",  symbol: "▶" },
-  { id: "shows",    text: "Serien",        kurz: "Serien", symbol: "☰" },
-  { id: "list",     text: "Meine Liste",   kurz: "Liste",  symbol: "♥" },
-  { id: "channels", text: "Kanäle",        kurz: "Kanäle", symbol: "▤" },
-  { id: "search",   text: "Suche",         kurz: "Suche",  symbol: "⌕" },
-  { id: "settings", text: "Einstellungen", kurz: "Mehr",   symbol: "⚙" },
+  { id: "home",     text: "Start",         kurz: "Start",  symbol: "home" },
+  { id: "movies",   text: "Filme",         kurz: "Filme",  symbol: "movies" },
+  { id: "shows",    text: "Serien",        kurz: "Serien", symbol: "shows" },
+  { id: "list",     text: "Meine Liste",   kurz: "Liste",  symbol: "heart" },
+  { id: "channels", text: "Kanäle", kurz: "Kanäle", symbol: "shows" },
+  { id: "search",   text: "Suche",         kurz: "Suche",  symbol: "search" },
+  { id: "settings", text: "Einstellungen", kurz: "Mehr",   symbol: "settings" },
 ];
 
 /**
@@ -53,10 +54,10 @@ export const NAV = [
  * Der Fokus-Bereich heißt weiterhin "nav", damit die Fernbedienung dieselbe
  * Logik benutzt — nur die Richtung dreht sich: hier zählt die SPALTE.
  */
-export function Unterleiste({ seite, aufSeite, zahlen }) {
+export function Unterleiste({ seite, aufSeite, zahlen, handy = false }) {
   return (
     <View style={st.unten}>
-      {NAV.map((n, i) => {
+      {NAV.filter((n) => !handy || n.id !== "list").map((n, i) => {
         const aktiv = seite === n.id;
         return (
           <FKnopf
@@ -65,6 +66,7 @@ export function Unterleiste({ seite, aufSeite, zahlen }) {
             zeile={0}
             spalte={i}
             id={"nav:" + n.id}
+            accessibilityLabel={n.text}
             onPress={() => aufSeite(n.id)}
             style={st.untenEintrag}
           >
@@ -73,7 +75,7 @@ export function Unterleiste({ seite, aufSeite, zahlen }) {
               return (
                 <>
                   <View>
-                    <Text style={[st.untenSymbol, { color: farbe }]}>{n.symbol}</Text>
+                    <Icon name={n.symbol} size={24} color={farbe} />
                     {zahlen?.[n.id] != null && (
                       <View style={st.untenBlase}>
                         <Text style={st.untenBlaseText} numberOfLines={1}>
@@ -121,9 +123,7 @@ export function Seitenleiste({ seite, aufSeite, zahlen, profilName, version, off
             >
               {({ fokus }) => (
                 <>
-                  <Text style={[st.navSymbol, { color: aktiv ? C.red : fokus ? C.text : C.muted }]}>
-                    {n.symbol}
-                  </Text>
+                  <Icon name={n.symbol} size={21} color={aktiv ? C.red : fokus ? C.text : C.muted} />
                   {breit && (
                     <>
                       <Text

@@ -26,7 +26,7 @@ export function MediaRow({ title, children }: { title: string; children: ReactNo
   };
 
   return (
-    <section className="mb-8 group/row">
+    <section className="ghg-media-row mb-8 group/row">
       <div className="flex items-center justify-between mb-3 px-8">
         <h2 className="text-xl font-bold flex items-center gap-2">
           <span className="inline-block w-1.5 h-5 bg-ghg-red rounded-sm" />

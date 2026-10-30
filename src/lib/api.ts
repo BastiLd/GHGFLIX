@@ -23,6 +23,7 @@ import type {
   TrailerVideo,
   Extra,
   ExtraArt,
+  ExtraDetail,
   ZuordnungEintrag,
   ZuordnungZiel,
 } from "./types";
@@ -202,8 +203,17 @@ export const applyRemoteProgress = (profileId: string, rows: RemoteProgressRow[]
   invoke<void>("apply_remote_progress", { profileId, rows });
 
 // ===== favorites / watched / stats / extras =====
-export const toggleFavorite = (profileId: string, mediaType: "movie" | "show", refId: number) =>
-  invoke<boolean>("toggle_favorite", { profileId, mediaType, refId });
+export const toggleFavorite = async (profileId: string, mediaType: "movie" | "show", refId: number) => {
+  const active = await invoke<boolean>("toggle_favorite", { profileId, mediaType, refId });
+  const media = (mediaType === "movie" ? await listMovies() : await listShows()).find(m => m.id === refId);
+  if (media?.tmdbId) {
+    const key = "favorite_sync_" + profileId, stamp = Date.now();
+    const journal = JSON.parse((await getSetting(key)) || "{}");
+    journal[mediaType + ":" + media.tmdbId] = { media_type: mediaType, tmdb_id: media.tmdbId, added_at: stamp, updated_at: stamp, removed: !active };
+    await setSetting(key,JSON.stringify(journal));
+  }
+  return active;
+};
 export const listFavorites = (profileId: string) => invoke<Favorite[]>("list_favorites", { profileId });
 export const setWatched = (profileId: string, mediaType: "movie" | "episode", refId: number, watched: boolean) =>
   invoke<void>("set_watched", { profileId, mediaType, refId, watched });
@@ -295,6 +305,7 @@ export const searchEpisodes = (query: string) => invoke<Episode[]>("search_episo
 
 // ===== Zusatzmaterial, Notizen, Handzuordnung =====
 export const showExtras = (showId: number) => invoke<Extra[]>("show_extras", { showId });
+export const getExtra = (id: number) => invoke<ExtraDetail | null>("get_extra", { id });
 export const setExtraArt = (id: number, art: ExtraArt, staffel: number | null) =>
   invoke<void>("set_extra_art", { id, art, staffel });
 export const setNote = (path: string, text: string) => invoke<void>("set_note", { path, text });

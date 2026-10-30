@@ -137,8 +137,10 @@ export function erzeugeSucher(stuecke) {
 
 /** Untertitel vom Server holen und aufbereiten. */
 export async function untertitelHolen(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 65000);
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) return null;
     const roh = await res.text();
     const stuecke = vttLesen(roh);
@@ -146,5 +148,5 @@ export async function untertitelHolen(url) {
     return erzeugeSucher(stuecke);
   } catch {
     return null;
-  }
+  } finally { clearTimeout(timeout); }
 }

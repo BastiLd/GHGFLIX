@@ -46,6 +46,8 @@ function Seite({ children, aufScrollRef }) {
       style={{ flex: 1 }}
       contentContainerStyle={{ paddingBottom: gross ? 70 : 44 }}
       onLayout={(e) => sys?.merkeSichtHoehe?.(e.nativeEvent.layout.height)}
+      onScroll={(e) => sys?.merkeScrollY?.(e.nativeEvent.contentOffset.y)}
+      scrollEventThrottle={16}
       showsVerticalScrollIndicator={false}
     >
       {children}
@@ -104,22 +106,18 @@ export function StartSeite({ lib, weiter, verlauf, favoriten, img, aufTitel, auf
   if (!lib) return <Laden text="Bibliothek wird geladen …" />;
   if (!alle.length) return <LeerHinweis />;
 
-  // Zeilennummern fortlaufend vergeben (siehe Erklärung im Dateikopf)
-  let z = 0;
-  const R = ({ titel, items, breit, ohneFortschritt, aufDruck }) => {
-    if (!items?.length) return null;
-    const zeile = z++;
-    return (
-      <>
-        <Text style={st.reihenTitel}>{titel}</Text>
-        {breit
-          ? <BreitReihe zeile={zeile} items={items} img={img} onPress={aufDruck} ohneFortschritt={ohneFortschritt} />
-          : <PosterReihe zeile={zeile} items={items} img={img} onPress={aufDruck} />}
-      </>
-    );
-  };
-
-  const heroZeile = hero ? z++ : -99;
+  // Stabile Komponenten und Schlüssel: Ein Hero-Wechsel darf keine Reihe neu
+  // montieren und damit die gerade ausgewählte Kachel verlieren.
+  const reihen = [
+    { titel: "Weiterschauen", items: weiter, breit: true, aufDruck: aufAbspielen },
+    { titel: "Neu hinzugefügt", items: neu, aufDruck: aufTitel },
+    { titel: "Meine Liste", items: meine, aufDruck: aufTitel },
+    { titel: "Serien", items: (lib.shows || []).map((x) => ({ ...x, _t: "show" })), aufDruck: aufTitel },
+    { titel: "Filme", items: (lib.movies || []).map((x) => ({ ...x, _t: "movie" })), aufDruck: aufTitel },
+    { titel: "Top bewertet", items: top, aufDruck: aufTitel },
+    { titel: "Zuletzt gesehen", items: verlauf, breit: true, ohneFortschritt: true, aufDruck: aufAbspielen },
+    ...genreReihen.map((g) => ({ titel: g.genre, items: g.items, aufDruck: aufTitel })),
+  ].filter((r) => r.items?.length);
 
   return (
     <Seite>
@@ -127,23 +125,20 @@ export function StartSeite({ lib, weiter, verlauf, favoriten, img, aufTitel, auf
         <Hero
           x={hero}
           img={img}
-          zeile={heroZeile}
+          zeile={0}
           aufAnsehen={() => aufAbspielen(hero)}
           aufInfos={() => aufTitel(hero)}
         />
       )}
-      <R titel="Weiterschauen" items={weiter} breit aufDruck={aufAbspielen} />
-      <R titel="Neu hinzugefügt" items={neu} aufDruck={aufTitel} />
-      <R titel="Meine Liste" items={meine} aufDruck={aufTitel} />
-      <R titel="Serien" items={(lib.shows || []).map((x) => ({ ...x, _t: "show" }))} aufDruck={aufTitel} />
-      <R titel="Filme" items={(lib.movies || []).map((x) => ({ ...x, _t: "movie" }))} aufDruck={aufTitel} />
-      <R titel="Top bewertet" items={top} aufDruck={aufTitel} />
-      <R titel="Zuletzt gesehen" items={verlauf} breit ohneFortschritt aufDruck={aufAbspielen} />
-      {genreReihen.map((g) => (
-        <R key={g.genre} titel={g.genre} items={g.items} aufDruck={aufTitel} />
-      ))}
+      {reihen.map((r, i) => <StartReihe key={r.titel} {...r} zeile={i + (hero ? 1 : 0)} img={img} />)}
     </Seite>
   );
+}
+
+function StartReihe({ titel, items, breit, ohneFortschritt, aufDruck, zeile, img }) {
+  return <><Text style={st.reihenTitel}>{titel}</Text>{breit
+    ? <BreitReihe zeile={zeile} items={items} img={img} onPress={aufDruck} ohneFortschritt={ohneFortschritt} />
+    : <PosterReihe zeile={zeile} items={items} img={img} onPress={aufDruck} />}</>;
 }
 
 function LeerHinweis() {
@@ -169,7 +164,7 @@ export function RasterSeite({ titel, items, img, aufTitel, leerText }) {
   return (
     <Seite>
       <View onLayout={(e) => setBreite(e.nativeEvent.layout.width)}>
-        <View style={{ paddingHorizontal: M.rand, paddingTop: gross ? 34 : 22, paddingBottom: 4 }}>
+        <View style={{ paddingHorizontal: M.rand, paddingTop: gross ? 24 : 16, paddingBottom: 4 }}>
           <Text style={st.h1}>{titel}</Text>
           <Text style={st.gedaempft}>
             {items.length} {items.length === 1 ? "Eintrag" : "Einträge"}
@@ -252,7 +247,7 @@ export function SuchSeite({ lib, img, aufTitel }) {
   return (
     <Seite>
       <View onLayout={(e) => setBreite(e.nativeEvent.layout.width)}>
-        <View style={{ paddingHorizontal: M.rand, paddingTop: gross ? 34 : 22 }}>
+        <View style={{ paddingHorizontal: M.rand, paddingTop: gross ? 24 : 16 }}>
           <Text style={[st.h1, { marginBottom: 12 }]}>Suche</Text>
           <FokusReihe zeile={0}>
             <FFeld
@@ -267,7 +262,7 @@ export function SuchSeite({ lib, img, aufTitel }) {
           <Text style={[st.gedaempft, { marginTop: 8 }]}>
             {q.trim()
               ? `${treffer.length} ${treffer.length === 1 ? "Treffer" : "Treffer"}`
-              : "Am Fernseher: Feld auswählen und OK drücken, dann erscheint die Tastatur."}
+              : gross ? "Feld auswählen und OK drücken, um einen Titel zu suchen." : "Suche nach Filmen und Serien aus deiner Mediathek."}
           </Text>
         </View>
 
@@ -309,7 +304,7 @@ export function SerienSeite({ api, img, id, startStaffel, aufAbspielen, aufZurue
   }, [api, id]);
   useEffect(laden, [laden]);
 
-  useDialog(dialog);
+  useDialog(dialog, () => setDialog(false));
 
   const fMap = useMemo(
     () => new Map(fortschritt.filter((x) => x.mediaType === "episode").map((x) => [x.refId, x])),
@@ -363,7 +358,7 @@ export function SerienSeite({ api, img, id, startStaffel, aufAbspielen, aufZurue
           ].filter(Boolean).join("   ·   ")}
         </Text>
         {!!show.overview && (
-          <Text style={[st.fliess, { marginBottom: 16, maxWidth: gross ? 900 : undefined }]}>
+          <Text numberOfLines={3} style={[st.fliess, { marginBottom: 12, maxWidth: gross ? 650 : undefined }]}>
             {show.overview}
           </Text>
         )}
@@ -411,7 +406,7 @@ export function SerienSeite({ api, img, id, startStaffel, aufAbspielen, aufZurue
           </View>
         </FokusReihe>
 
-        <Text style={[st.h2, { marginTop: gross ? 30 : 22, marginBottom: 10 }]}>
+        <Text style={[st.h2, { marginTop: gross ? 20 : 16, marginBottom: 10 }]}>
           {filmeAn
             ? `Filme zu dieser Serie · ${filme.length}`
             : aktuelle === 0
@@ -443,7 +438,7 @@ export function SerienSeite({ api, img, id, startStaffel, aufAbspielen, aufZurue
                   <View style={{ width: gross ? 100 : 70, height: gross ? 150 : 105, borderRadius: 8, backgroundColor: C.surface }} />
                 )}
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={{ color: C.text, fontWeight: "700", fontSize: gross ? 17 : 13.5 }}>
+                  <Text style={{ color: C.text, fontWeight: "700", fontSize: gross ? 14 : 12 }}>
                     {mv.title}
                     {mv.year ? `  (${mv.year})` : ""}
                   </Text>
@@ -484,10 +479,10 @@ export function SerienSeite({ api, img, id, startStaffel, aufAbspielen, aufZurue
                   {e.still ? (
                     <Image
                       source={{ uri: img(e.still, "w300") }}
-                      style={{ width: gross ? 190 : 128, height: gross ? 107 : 72, borderRadius: 8, backgroundColor: C.surface }}
+                      style={{ width: gross ? 150 : 108, height: gross ? 84 : 61, borderRadius: 8, backgroundColor: C.surface }}
                     />
                   ) : (
-                    <View style={{ width: gross ? 190 : 128, height: gross ? 107 : 72, borderRadius: 8, backgroundColor: C.surface }} />
+                    <View style={{ width: gross ? 150 : 108, height: gross ? 84 : 61, borderRadius: 8, backgroundColor: C.surface }} />
                   )}
                   {anteil > 0 && (
                     <View style={st.fortschrittBg}>
@@ -496,7 +491,7 @@ export function SerienSeite({ api, img, id, startStaffel, aufAbspielen, aufZurue
                   )}
                 </View>
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={{ color: C.text, fontWeight: "700", fontSize: gross ? 17 : 13.5 }}>
+                  <Text style={{ color: C.text, fontWeight: "700", fontSize: gross ? 14 : 12 }}>
                     {se(e.season, e.episode)}{e.title ? " · " + e.title : ""}
                     {f?.watched ? "  ✓" : ""}
                   </Text>
@@ -619,61 +614,7 @@ export function FilmSeite({ api, img, id, aufAbspielen, aufZurueck }) {
 
 /* ══ Profilauswahl ═══════════════════════════════════════════════════════ */
 
-export function ProfilSeite({ api, aufWahl, aufZurueck }) {
-  const [liste, setListe] = useState(null);
-  useEffect(() => {
-    api("/api/profiles").then((p) => setListe(Array.isArray(p) ? p : [])).catch(() => setListe([]));
-  }, [api]);
-
-  if (!liste) return <Laden />;
-
-  return (
-    <Seite>
-      <View style={{ padding: M.rand, paddingTop: gross ? 60 : 40 }}>
-        <Text style={[st.h1, { marginBottom: 6 }]}>Wer schaut?</Text>
-        <Text style={[st.gedaempft, { marginBottom: gross ? 30 : 20 }]}>
-          Jedes Profil merkt sich seinen eigenen Fortschritt.
-        </Text>
-        <FokusReihe zeile={0}>
-          <View style={{ flexDirection: "row", gap: M.luecke, flexWrap: "wrap" }}>
-            {liste.map((p, i) => (
-              <FKnopf
-                key={p.id}
-                spalte={i}
-                onPress={() => aufWahl(p.id)}
-                style={[st.kachel, { alignItems: "center", padding: 10 }]}
-                fokusStil={st.kachelFokus}
-              >
-                <View
-                  style={{
-                    width: gross ? 120 : 84, height: gross ? 120 : 84, borderRadius: 16,
-                    backgroundColor: C.red, alignItems: "center", justifyContent: "center",
-                  }}
-                >
-                  <Text style={{ color: C.weiss, fontSize: gross ? 46 : 32, fontWeight: "900" }}>
-                    {(p.name || "?").slice(0, 1).toUpperCase()}
-                  </Text>
-                </View>
-                <Text style={[st.kachelTitel, { textAlign: "center", width: gross ? 120 : 84 }]}>
-                  {p.name}
-                </Text>
-              </FKnopf>
-            ))}
-          </View>
-        </FokusReihe>
-        {!!aufZurueck && (
-          <View style={{ marginTop: 26 }}>
-            <FokusReihe zeile={1}>
-              <View style={{ flexDirection: "row" }}>
-                <Knopf text="Zurück" symbol="←" spalte={0} onPress={aufZurueck} />
-              </View>
-            </FokusReihe>
-          </View>
-        )}
-      </View>
-    </Seite>
-  );
-}
+export { ProfilSeite } from "./ProfileScreen.js";
 
 /* ══ Einstellungen ═══════════════════════════════════════════════════════ */
 
@@ -686,7 +627,7 @@ export function EinstellungenSeite({
   const [offenerDialog, setOffenerDialog] = useState(null);   // { name, titel, ... }
 
   useEffect(() => { ladeEinstellungen().then(setWerte); }, []);
-  useDialog(!!offenerDialog);
+  useDialog(!!offenerDialog, () => setOffenerDialog(null));
 
   const zeigen = (t) => { setMeldung(t); setTimeout(() => setMeldung(""), 4000); };
 
@@ -704,7 +645,7 @@ export function EinstellungenSeite({
 
   return (
     <Seite>
-      <View style={{ padding: M.rand, paddingTop: gross ? 34 : 22 }}>
+      <View style={{ padding: M.rand, paddingTop: gross ? 24 : 16 }}>
         <Text style={[st.h1, { marginBottom: 4 }]}>Einstellungen</Text>
         <Text style={[st.gedaempft, { marginBottom: gross ? 26 : 18 }]}>
           GHGFlix{version ? ` · App-Version ${version}` : ""}

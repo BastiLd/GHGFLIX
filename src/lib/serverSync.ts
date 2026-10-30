@@ -5,7 +5,8 @@
 // Endpoint auto-switching: several addresses can be configured (lokale IP,
 // Domain, Tailscale). In "auto" mode the first reachable one wins, so the
 // app keeps syncing at home AND on the go without touching anything.
-import { listMovies, listProgress, listShows, setProgress, getSetting, setSetting } from "./api";
+import { listMovies, listProgress, listShows, listFavorites, applyRemoteProgress, getSetting, setSetting } from "./api";
+import { invoke } from "./backend";
 import { useStore } from "./store";
 
 export interface ServerEndpoint {
@@ -101,110 +102,68 @@ async function serverApi<T>(base: string, cfg: ServerConfig, path: string, init?
   return res.json();
 }
 
-/** Server profile matching the local one by name (created if missing). */
-async function serverProfileId(base: string, cfg: ServerConfig, name: string): Promise<number> {
-  const profiles = await serverApi<{ id: number; name: string }[]>(base, cfg, "/api/profiles");
-  const hit = profiles.find((profile) => profile.name.toLowerCase() === name.toLowerCase());
-  if (hit) return hit.id;
-  const created = await serverApi<{ id: number }>(base, cfg, "/api/profiles", {
-    method: "POST",
-    body: JSON.stringify({ name }),
-  });
-  return created.id ?? profiles[0]?.id ?? 1;
+export async function serverProfileRequest<T>(path:string,method="GET",body?:unknown):Promise<T>{
+  const cfg=await loadServerConfig(),base=await resolveServer(cfg);
+  if(!cfg.enabled||!base)throw Error("Medienserver nicht erreichbar.");
+  return serverApi<T>(base,cfg,path,{method,body:body?JSON.stringify(body):undefined});
 }
 
-// tmdb coordinates → local refId, rebuilt lazily and cached for 10 minutes
-let mapCache: { at: number; movies: Map<number, number>; episodes: Map<string, number> } | null = null;
-async function tmdbMap() {
-  if (mapCache && Date.now() - mapCache.at < 600_000) return mapCache;
-  const movies = new Map<number, number>();
-  const episodes = new Map<string, number>();
-  for (const movie of await listMovies()) {
-    if (movie.tmdbId != null) movies.set(movie.tmdbId, movie.id);
-  }
-  const { listShowEpisodes } = await import("./api");
-  for (const show of await listShows()) {
-    if (show.tmdbId == null) continue;
-    for (const ep of await listShowEpisodes(show.id)) {
-      episodes.set(`${show.tmdbId}:${ep.season}:${ep.episode}`, ep.id);
-    }
-  }
-  mapCache = { at: Date.now(), movies, episodes };
-  return mapCache;
+/** Eine stabile Zuordnung überlebt Umbenennen; niemals beim Lesen Profile anlegen. */
+async function serverProfileId(base:string,cfg:ServerConfig,localId:string,name:string):Promise<number>{
+  const profiles=await serverApi<{id:number;name:string;avatar:string|null;supabase_id:string|null}[]>(base,cfg,"/api/profiles");
+  const links=JSON.parse((await getSetting("server_profile_links"))||"{}");
+  const cloudLinks=JSON.parse((await getSetting("supabase_profile_links"))||"{}");
+  const hit=profiles.find(p=>String(p.id)===String(links[localId]))
+    ??profiles.find(p=>p.supabase_id===(cloudLinks[localId]||localId))
+    ??profiles.find(p=>localId==='server:'+p.id)
+    ??profiles.find(p=>p.name.toLowerCase()===name.toLowerCase())
+    ??(profiles.length===1?profiles[0]:null);
+  if(!hit)throw Error("Bitte zuerst das passende Server-Profil auswählen.");
+  links[localId]=hit.id;await setSetting("server_profile_links",JSON.stringify(links));
+  if(useStore.getState().profileId===localId)useStore.getState().setProfile(localId,hit.name,hit.avatar);
+  return hit.id;
 }
-
-// Cursor key: prefer the stable server ID (S-017); fall back to the URL for
-// older servers that don't send an `id` yet (pre-2.2 API compatibility).
-const cursorKey = (base: string, profileId: string, dir: "pull" | "push") =>
-  `ghgflix.serverSync.${dir}.${profileId}.${activeServerId ?? base}`;
-
-/** One-time migration: move an existing URL-keyed cursor to the ID key so no
- *  full re-pull happens after the update (ARCH-14 in miniature). */
-function migrateCursor(base: string, profileId: string, dir: "pull" | "push"): void {
-  if (!activeServerId) return;
-  const idKey = `ghgflix.serverSync.${dir}.${profileId}.${activeServerId}`;
-  const urlKey = `ghgflix.serverSync.${dir}.${profileId}.${base}`;
-  if (localStorage.getItem(idKey) == null && localStorage.getItem(urlKey) != null) {
-    localStorage.setItem(idKey, localStorage.getItem(urlKey)!);
-    localStorage.removeItem(urlKey);
-  }
+let activeSync:Promise<{pushed:number;pulled:number}|null>|null=null;
+export function syncOnce():Promise<{pushed:number;pulled:number}|null>{
+  if(activeSync)return activeSync;
+  activeSync=syncRound().finally(()=>{activeSync=null;});return activeSync;
 }
-
-/** One full sync round: push local changes, pull remote ones (LWW). */
-export async function syncOnce(): Promise<{ pushed: number; pulled: number } | null> {
-  const cfg = await loadServerConfig();
-  if (!cfg.enabled) return null;
-  const base = await resolveServer(cfg);
-  if (!base) return null;
-
-  const { profileId, profileName } = useStore.getState();
-  const spid = await serverProfileId(base, cfg, profileName || "Standard");
-  const withProfile = (p: string) => `${p}${p.includes("?") ? "&" : "?"}profile=${spid}`;
-  migrateCursor(base, profileId, "push");
-  migrateCursor(base, profileId, "pull");
-
-  // ── push ──
-  const lastPush = parseInt(localStorage.getItem(cursorKey(base, profileId, "push")) ?? "0", 10);
-  const local = await listProgress(profileId);
-  const rows: SyncRow[] = local
-    .filter((p) => p.tmdbId != null && p.updatedAt > lastPush)
-    .map((p) => ({
-      mediaType: p.mediaType,
-      tmdbId: p.tmdbId!,
-      season: p.season ?? -1,
-      episode: p.episode ?? -1,
-      position: p.positionSec,
-      duration: p.durationSec,
-      watched: p.watched,
-      updatedAt: p.updatedAt,
-    }));
-  if (rows.length > 0) {
-    await serverApi(base, cfg, withProfile("/api/sync/progress"), { method: "POST", body: JSON.stringify({ rows }) });
+async function syncRound():Promise<{pushed:number;pulled:number}|null>{
+  const cfg=await loadServerConfig();if(!cfg.enabled)return null;
+  const base=await resolveServer(cfg);if(!base)throw Error("Medienserver nicht erreichbar.");
+  const {profileId,profileName}=useStore.getState();
+  const spid=await serverProfileId(base,cfg,profileId,profileName);
+  const path=(p:string)=>p+'?profile='+spid;
+  const local=await listProgress(profileId);
+  const rows:SyncRow[]=local.filter(p=>p.tmdbId!=null).map(p=>({mediaType:p.mediaType,tmdbId:p.tmdbId!,season:p.season??-1,episode:p.episode??-1,position:p.positionSec,duration:p.durationSec,watched:p.watched,updatedAt:p.updatedAt}));
+  for(let i=0;i<rows.length;i+=500)await serverApi(base,cfg,path('/api/sync/progress'),{method:'POST',body:JSON.stringify({rows:rows.slice(i,i+500)})});
+  const remote=await serverApi<{rows:{media_type:'movie'|'episode';tmdb_id:number;season:number;episode:number;position:number;duration:number;watched:number;updated_at:number}[]}>(base,cfg,path('/api/sync/progress'));
+  await applyRemoteProgress(profileId,remote.rows.map(r=>({mediaType:r.media_type,tmdbId:r.tmdb_id,season:r.season,episode:r.episode,positionSec:r.position,durationSec:r.duration,watched:!!r.watched,updatedAt:r.updated_at})));
+  const [favs,movies,shows]=await Promise.all([listFavorites(profileId),listMovies(),listShows()]);
+  type Fav={media_type:'movie'|'show';tmdb_id:number;added_at:number;removed:boolean;updated_at:number};
+  const journalKey='favorite_sync_'+profileId;
+  const journal:Record<string,Fav>=JSON.parse((await getSetting(journalKey))||'{}');
+  const states=new Map<string,Fav>();
+  for(const f of favs){const m=(f.mediaType==='movie'?movies:shows).find(x=>x.id===f.refId);if(m?.tmdbId)states.set(f.mediaType+':'+m.tmdbId,{media_type:f.mediaType,tmdb_id:m.tmdbId,added_at:f.addedAt,updated_at:f.addedAt,removed:false});}
+  for(const [k,r]of Object.entries(journal))if(!states.has(k)||r.updated_at>=states.get(k)!.updated_at)states.set(k,r);
+  const payload=[...states.values()];for(let i=0;i<payload.length;i+=500)await serverApi(base,cfg,path('/api/sync/favorites'),{method:'POST',body:JSON.stringify({rows:payload.slice(i,i+500)})});
+  const incoming=await serverApi<{rows:Fav[]}>(base,cfg,path('/api/sync/favorites'));
+  for(const r of incoming.rows){
+    const k=r.media_type+':'+r.tmdb_id;
+    if(states.has(k)&&states.get(k)!.updated_at>r.updated_at)continue;
+    // Ein Klick während des Netzabrufs muss auch in der sichtbaren Merkliste
+    // gewinnen, nicht erst im abschließend gespeicherten Änderungsjournal.
+    const [rawCurrent,currentFavorites]=await Promise.all([getSetting(journalKey),listFavorites(profileId)]);
+    const current:Record<string,Fav>=JSON.parse(rawCurrent||'{}');
+    if(current[k]&&current[k].updated_at>r.updated_at){journal[k]=current[k];continue;}
+    const m=(r.media_type==='movie'?movies:shows).find(x=>x.tmdbId===r.tmdb_id);
+    if(m){const present=currentFavorites.some(f=>f.mediaType===r.media_type&&f.refId===m.id);if(present===!!r.removed)await invoke('toggle_favorite',{profileId,mediaType:r.media_type,refId:m.id});}
+    journal[k]=r;
   }
-  localStorage.setItem(cursorKey(base, profileId, "push"), String(Date.now()));
-
-  // ── pull ──
-  const lastPull = parseInt(localStorage.getItem(cursorKey(base, profileId, "pull")) ?? "0", 10);
-  const remote = await serverApi<{ now: number; rows: { media_type: string; tmdb_id: number; season: number; episode: number; position: number; duration: number; watched: number; updated_at: number }[] }>(
-    base,
-    cfg,
-    withProfile(`/api/sync/progress?since=${lastPull}`),
-  );
-  const localByKey = new Map(local.map((p) => [`${p.mediaType}:${p.refId}`, p]));
-  const map = await tmdbMap();
-  let pulled = 0;
-  for (const r of remote.rows) {
-    const mediaType = r.media_type as "movie" | "episode";
-    const refId =
-      mediaType === "movie" ? map.movies.get(r.tmdb_id) : map.episodes.get(`${r.tmdb_id}:${r.season}:${r.episode}`);
-    if (refId == null) continue;
-    const existing = localByKey.get(`${mediaType}:${refId}`);
-    if (existing && existing.updatedAt >= r.updated_at) continue; // local is newer
-    await setProgress(profileId, mediaType, refId, r.position, r.duration, !!r.watched);
-    pulled++;
-  }
-  localStorage.setItem(cursorKey(base, profileId, "pull"), String(remote.now));
-  return { pushed: rows.length, pulled };
+  const latest:Record<string,Fav>=JSON.parse((await getSetting(journalKey))||'{}');for(const [k,r]of Object.entries(latest))if(!journal[k]||r.updated_at>journal[k].updated_at)journal[k]=r;
+  await setSetting(journalKey,JSON.stringify(journal));
+  window.dispatchEvent(new Event('ghgflix:sync'));
+  return {pushed:rows.length,pulled:remote.rows.length};
 }
 
 let loop: number | null = null;

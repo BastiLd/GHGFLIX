@@ -148,6 +148,7 @@ export function baueUmgebung(basis) {
       if (k === "StyleSheet") return { create: (o) => o, absoluteFill: {}, hairlineWidth: 1, flatten: (x) => x };
       if (k === "Platform") return { OS: "android", select: (o) => o.android ?? o.default };
       if (k === "Dimensions") return { get: () => ({ width: 1920, height: 1080 }), addEventListener: () => ({ remove() {} }) };
+      if (k === "useWindowDimensions") return () => ({ width: 1920, height: 1080, scale: 1, fontScale: 1 });
       if (k === "DeviceEventEmitter") return tastenBus;
       if (k === "findNodeHandle") return () => Math.floor(Math.random() * 1e6);
       if (k === "BackHandler") return { addEventListener: () => ({ remove() {} }) };

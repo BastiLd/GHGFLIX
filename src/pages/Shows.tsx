@@ -75,7 +75,7 @@ export default function Shows() {
           <Tv className="w-7 h-7 text-ghg-red" /> Serien
           <span className="text-base font-normal text-ghg-muted">({shows.length})</span>
         </h1>
-        <div className="flex items-center gap-3">
+        <div className="ghg-filterbar flex items-center gap-3">
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}

@@ -129,10 +129,16 @@ export interface WebWindowFacade {
 }
 
 const webWindow: WebWindowFacade = {
-  isFullscreen: async () => !!document.fullscreenElement,
+  isFullscreen: async () => !!document.fullscreenElement || !!(document.getElementById("ghgflix-video") as SafariVideo | null)?.webkitDisplayingFullscreen,
   setFullscreen: async (v) => {
-    if (v && !document.fullscreenElement) await document.documentElement.requestFullscreen();
-    else if (!v && document.fullscreenElement) await document.exitFullscreen();
+      const video = document.getElementById("ghgflix-video") as SafariVideo | null;
+      if (v && !document.fullscreenElement) {
+        if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
+        else video?.webkitEnterFullscreen?.();
+      } else if (!v) {
+        if (document.fullscreenElement) await document.exitFullscreen();
+        if (video?.webkitDisplayingFullscreen) video.webkitExitFullscreen?.();
+      }
   },
   setVisibleOnAllWorkspaces: async () => {},
   setAlwaysOnTop: async () => {},
@@ -143,6 +149,12 @@ const webWindow: WebWindowFacade = {
   startDragging: async () => {},
   show: async () => {},
   setFocus: async () => {},
+};
+
+type SafariVideo = HTMLVideoElement & {
+  webkitDisplayingFullscreen?: boolean;
+  webkitEnterFullscreen?: () => void;
+  webkitExitFullscreen?: () => void;
 };
 
 export { TauriLogicalSize };

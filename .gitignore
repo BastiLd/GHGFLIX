@@ -50,3 +50,17 @@ mobile/ios/
 mobile/.expo/
 mobile/google-services.json
 mobile/GoogleService-Info.plist
+# Generierte Client-Builds und lokale Vorschau-Testausgaben
+mobile/android/
+mobile/ios/
+mobile/.expo/
+mobile/build/
+tv/build/
+preview/test-results/
+preview/playwright-report/
+preview/public/sample.mp4
+preview/runtime/
+server/webapp/
+
+preview/evidence/
+release-artifacts/

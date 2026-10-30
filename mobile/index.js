@@ -7,6 +7,8 @@ import { registerRootComponent } from "expo";
 // ganz ohne PC und ohne adb.
 const istDiagnose = process.env.EXPO_PUBLIC_DIAGNOSE === "1";
 
-const App = istDiagnose ? require("./App.diagnose").default : require("./App").default;
+const App = istDiagnose ? require("./App.diagnose").default
+  : process.env.EXPO_PUBLIC_APP_VARIANT === "tv" ? require("../tv/App").default
+  : require("./App").default;
 
 registerRootComponent(App);

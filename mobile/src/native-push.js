@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AppState, Linking, Platform, Text, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
+import { istTVProdukt } from "./produkt.js";
 import { FKnopf, FokusReihe } from "./fokus.js";
 import { st } from "./stile.js";
 import { kanalAufruf } from "./kanaele-api.js";
@@ -12,7 +13,7 @@ try { notifications = require("expo-notifications"); } catch {}
 const projectId = Constants.expoConfig?.extra?.eas?.projectId || Constants.easConfig?.projectId;
 
 export function NativePushSettings({ api, serverId, row = 0 }) {
-  const client = useMemo(() => nativePushClient({ notifications, storage: AsyncStorage, platform: Platform, projectId, serverId,
+  const client = useMemo(() => nativePushClient({ notifications, storage: AsyncStorage, platform: { OS: Platform.OS, isTV: Platform.isTV || istTVProdukt }, projectId, serverId,
     call: (command, args) => kanalAufruf(api, command, args) }), [api, serverId]);
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(true);
@@ -75,7 +76,7 @@ export function useNativePushNavigation(serverId, onOpen, onReceived) {
   const handlers = useRef({ onOpen, onReceived }); handlers.current = { onOpen, onReceived };
   const consumed = useRef(null);
   useEffect(() => {
-    if (!notifications || !serverId || Platform.isTV) return;
+    if (!notifications || !serverId || Platform.isTV || istTVProdukt) return;
     let cancelled = false;
     const open = response => {
       if (cancelled || !notificationBelongsHere(response, serverId)) return;

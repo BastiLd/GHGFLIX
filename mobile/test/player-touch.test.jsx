@@ -29,7 +29,8 @@ it("maps narrow toolbar rows to remote coordinates and updates after resizing", 
 
 it("touch restores auto-hidden controls without pausing or reloading the player", async () => {
   vi.useFakeTimers();
-  const video = { playing: true, replace: vi.fn(), play: vi.fn(), pause: vi.fn(), addListener: () => ({ remove() {} }) };
+  const listeners = new Map();
+  const video = { playing: true, status: "readyToPlay", replace: vi.fn(), play: vi.fn(), pause: vi.fn(), addListener: (name, fn) => { const callbacks = listeners.get(name) || []; callbacks.push(fn); listeners.set(name, callbacks); return { remove() {} }; } };
   Module._load = function (name, ...args) {
     if (name === "expo-video") return { VideoView: () => <div>Video</div>, useVideoPlayer: () => video };
     if (name === "expo-keep-awake") return { useKeepAwake() {} };
@@ -38,6 +39,7 @@ it("touch restores auto-hidden controls without pausing or reloading the player"
   const { PlayerScreen } = await import("../src/player.js");
   const api = vi.fn(async (url) => url === "/api/progress" ? [] : { duration: 90, direct: true, directUrl: "/video.mp4", transcodeUrl: "/transcode", spuren: {} });
   await act(async () => render(<FokusProvider><PlayerScreen api={api} base="http://fixture" type="movie" id={1} title="Testfilm" pop={vi.fn()} push={vi.fn()} /></FokusProvider>));
+  act(() => { for (const fn of listeners.get("sourceLoad") || []) fn({ videoSource: { uri: video.replace.mock.calls.at(-1)[0] }, duration: 90 }); });
   expect(screen.getByRole("button", { name: "Pausieren" })).toBeTruthy();
   act(() => vi.advanceTimersByTime(6000));
   expect(screen.queryByRole("button", { name: "Pausieren" })).toBeNull();

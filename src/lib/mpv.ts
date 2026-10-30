@@ -50,6 +50,7 @@ interface WebState {
   aspect: string;
   observers: Set<PropCb>;
   subEl: HTMLTrackElement | null;
+  subDelay: number;
   posTimer: ReturnType<typeof setInterval> | null;
 }
 
@@ -69,6 +70,7 @@ const S: WebState = {
   aspect: "-1",
   observers: new Set(),
   subEl: null,
+  subDelay: 0,
   posTimer: null,
 };
 
@@ -211,8 +213,17 @@ function streamUrl(t: number): string {
   if (!S.transcoding) return withToken(info.directUrl);
   const a = Math.max(0, S.aid - 1);
   const sek = Math.max(0, Math.round(t * 10) / 10);
-  if (info.hlsUrl && brauchtHls()) return withToken(`${info.hlsUrl}&t=${sek}&a=${a}`);
-  return withToken(`${info.transcodeUrl}&t=${sek}&a=${a}`);
+  const q = webStreamQuality();
+  if (info.hlsUrl && brauchtHls()) return withToken(`${info.hlsUrl}&t=${sek}&a=${a}&q=${q}`);
+  return withToken(`${info.transcodeUrl}&t=${sek}&a=${a}&q=${q}`);
+}
+
+let sessionStreamQuality: string | null = null;
+export function webStreamQuality(): string {
+  if (sessionStreamQuality) return sessionStreamQuality;
+  let saved: string | null = null;
+  try { saved = localStorage.getItem("ghgflix.web.quality"); } catch { /* Storage can be disabled by browser policy. */ }
+  return saved && ["original", "high", "medium", "low"].includes(saved) ? saved : "high";
 }
 
 async function startStream(at: number, forceTranscode = false, paused = S.video?.paused ?? true) {
@@ -222,7 +233,8 @@ async function startStream(at: number, forceTranscode = false, paused = S.video?
   const revision = ++streamRevision;
   cancelMetadataSeek?.();
   cancelMetadataSeek = null;
-  S.transcoding = forceTranscode || !info.direct;
+  const limit = ({ high: 1080, medium: 720, low: 480 } as Record<string, number>)[webStreamQuality()];
+  S.transcoding = forceTranscode || !info.direct || !!(limit && (info.height || 0) > limit);
   // AV-03/AV-12: assumes the transcode stream starts EXACTLY at `at`. That is
   // guaranteed since the accurate-seek fix in server/src/stream.js (video is
   // re-encoded on seek instead of keyframe-snapped stream-copy).
@@ -283,9 +295,32 @@ function applySubTrack() {
   tr.src = withToken(`/api/subs/${S.info.mediaType}/${S.info.id}/${sub.index}.vtt`);
   tr.default = true;
   v.appendChild(tr);
-  tr.addEventListener("load", () => (tr.track.mode = "showing"));
+  tr.addEventListener("load", () => {
+    rememberCues(tr);
+    alignCues(tr);
+    tr.track.mode = "showing";
+  });
   tr.track.mode = "showing";
   S.subEl = tr;
+}
+
+// HLS beginnt beim Spulen wieder bei 0; die VTT-Zeiten gehoeren zur ganzen
+// Datei. Ohne diesen Ausgleich erscheinen Untertitel nach dem Spulen zu spaet.
+const cueSources = new WeakMap<HTMLTrackElement, { cue: VTTCue; start: number; end: number }[]>();
+function rememberCues(track: HTMLTrackElement) {
+  cueSources.set(track, Array.from(track.track.cues || []).map(c => ({ cue: c as VTTCue, start: c.startTime, end: c.endTime })));
+}
+function alignCues(track: HTMLTrackElement) {
+  const source = cueSources.get(track);
+  if (!source) return;
+  for (const c of Array.from(track.track.cues || [])) track.track.removeCue(c);
+  for (const {cue,start,end} of source) {
+    const delta = S.subDelay - S.offset;
+    if (end + delta <= 0) continue;
+    cue.startTime = Math.max(0, start + delta);
+    cue.endTime = Math.max(cue.startTime + .001, end + delta);
+    track.track.addCue(cue);
+  }
 }
 
 // ─── public API (mpv-compatible surface) ─────────────────────────────────────
@@ -326,6 +361,7 @@ export async function destroy(): Promise<void> {
     loop: false,
     margins: { l: 0, r: 0, t: 0, b: 0 },
     subEl: null,
+    subDelay: 0,
     posTimer: null,
   });
 }
@@ -393,6 +429,7 @@ export async function command(name: string, args: unknown[] = []): Promise<void>
         tr.src = url;
         tr.default = true;
         v.appendChild(tr);
+        tr.addEventListener("load", () => { rememberCues(tr); alignCues(tr); });
         tr.track.mode = "showing";
         S.subEl = tr;
       }
@@ -427,10 +464,10 @@ export async function getProperty<T>(name: string): Promise<T> {
       const info = S.info;
       const out: unknown[] = [];
       (info?.audioStreams ?? []).forEach((a, i) =>
-        out.push({ id: i + 1, type: "audio", selected: S.aid === i + 1, lang: a.lang ?? undefined, title: a.title ?? a.codec ?? undefined }),
+        out.push({ id: i + 1, type: "audio", selected: S.aid === i + 1, lang: a.lang ?? undefined, title: a.title ?? undefined, codec: a.codec }),
       );
       (info?.subtitleStreams ?? []).forEach((s, i) =>
-        out.push({ id: i + 1, type: "sub", selected: S.sid === i + 1, lang: s.lang ?? undefined, title: s.title ?? s.codec ?? undefined }),
+        out.push({ id: i + 1, type: "sub", selected: S.sid === i + 1, lang: s.lang ?? undefined, title: s.title ?? undefined, codec: s.codec }),
       );
       return out as T;
     }
@@ -494,6 +531,13 @@ export async function setProperty(name: string, value: unknown): Promise<void> {
       S.sid = value === "no" ? "no" : Number(value) || "no";
       applySubTrack();
       break;
+    case "ghg-quality":
+      if (["original", "high", "medium", "low"].includes(String(value))) {
+        sessionStreamQuality = String(value);
+        try { localStorage.setItem("ghgflix.web.quality", String(value)); } catch { /* Playback remains available without persistent settings. */ }
+        if (S.info) await startStream(mediaPos());
+      }
+      break;
     case "loop-file":
       S.loop = value === "inf" || value === true;
       break;
@@ -518,9 +562,18 @@ export async function setProperty(name: string, value: unknown): Promise<void> {
       applyMargins();
       break;
     case "audio-delay":
-    case "sub-delay":
     case "audio-device":
       break; // not possible in a browser — documented in Einstellungen (Web-Hinweis)
+    case "sub-delay":
+      S.subDelay = Number(value) || 0;
+      if (S.subEl) alignCues(S.subEl);
+      break;
+    case "sub-scale": {
+      let style = document.getElementById("ghg-subtitle-style");
+      if (!style) { style = document.createElement("style"); style.id = "ghg-subtitle-style"; document.head.appendChild(style); }
+      style.textContent = `#ghgflix-video::cue { font-size: ${Math.round(100 * Math.min(2, Math.max(.5, Number(value) || 1)))}%; background: rgba(0,0,0,.7); color: white; }`;
+      break;
+    }
     default:
       break;
   }

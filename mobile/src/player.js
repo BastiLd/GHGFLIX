@@ -16,7 +16,8 @@
  * Die Bedienleiste ist ein festes Raster:
  *
  *     Zeile 0   [────────── Fortschrittsbalken ──────────]
- *     Zeile 1   [−10] [⏯] [+30] [Nächste] [Ton] [Untertitel] [Tempo] [Info]
+ *     Zeile 1   [−10 s] [Play/Pause] [+30 s] [Nächste Folge]
+ *     Zeile 2   [Sprache & Untertitel] [Optionen]
  *
  * ← → auf dem Balken springen im Video (der Balken behält die Tasten für
  * sich, siehe aufRichtung im Fokus-Kern). ↑ ↓ wechseln zwischen Balken und
@@ -41,14 +42,16 @@
  * NUR aus diesen gespeichert; jeder direkte Zugriff läuft über safe().
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Dimensions, Platform, Pressable, Text, View } from "react-native";
-import { FKnopf, FokusReihe, useDialog, useFernbedienung, useFokusElement } from "./fokus.js";
-import { PlayerKnopfleiste } from "./playerleiste.js";
+import { ActivityIndicator, Dimensions, BackHandler, useWindowDimensions, Platform, Pressable, Text, View } from "react-native";
+import { FKnopf, FokusReihe, useDialog, useFernbedienung, useFernbedienungVorher, useFokusSystem, useFokusElement } from "./fokus.js";
 import { folgenNach } from "./folgen.js";
 import { C, M, gross, st } from "./stile.js";
 import { Dialog, DialogListe, fmtZeit } from "./bausteine.js";
 import { untertitelHolen } from "./untertitel.js";
-import { jetzt as einstellungenJetzt, waehleTon, waehleUntertitel } from "./einstellungen.js";
+import { erzeugeFortschrittsSicherung } from "./fortschritt-sicherung.js";
+import { jetzt as einstellungenJetzt, sichern as einstellungenSichern, waehleTon, waehleUntertitel } from "./einstellungen.js";
+import { Icon } from "./Icons.js";
+import { SpurenDialog } from "./SpurenDialog.js";
 
 /* ── expo-video vorsichtig laden ──────────────────────────────────────────
    Fehlt das Modul, soll die App eine verständliche Meldung zeigen statt
@@ -77,7 +80,11 @@ export function PlayerScreen(props) {
 
 function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, showId, nextEp: initialNextEp, retry }) {
   useKeepAwake();
-  const E = einstellungenJetzt();
+  const { width, height } = useWindowDimensions();
+  const kompakt = gross || width > height;
+  const fokusSystem = useFokusSystem();
+  const [E, setE] = useState(einstellungenJetzt);
+  const anpassen = (patch) => { const neu = { ...einstellungenJetzt(), ...patch }; setE(neu); einstellungenSichern(neu); };
 
   const [info, setInfo] = useState(null);
   const [resume, setResume] = useState(0);
@@ -91,7 +98,6 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
   const [pos, setPos] = useState(0);
   const [dauer, setDauer] = useState(0);
   const [balkenBreite, setBalkenBreite] = useState(0);
-  const [bedienBreite, setBedienBreite] = useState(Dimensions.get("window").width - 2 * M.rand);
   const [dialog, setDialog] = useState(null);   // null | "ton" | "ut" | "tempo" | "bild" | "info"
   const [tempo, setTempo] = useState(E.tempo);
   const tempoRef = useRef(tempo);
@@ -104,6 +110,8 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
   const [utSucher, setUtSucher] = useState(null);
   const [utText, setUtText] = useState(null);
   const [utLaedt, setUtLaedt] = useState(false);
+  const [utFehler, setUtFehler] = useState(null);
+  const [tonFehler, setTonFehler] = useState(null);
 
   const offsetRef = useRef(0);   // beim Umwandeln: Startpunkt des Datenstroms
   const modeRef = useRef("direct");
@@ -149,8 +157,12 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
         gemerkt && !gemerkt.watched && gemerkt.position > (E.fortsetzenAb || 30) &&
         gemerkt.position < (gemerkt.duration || 1e9) * 0.95
           ? gemerkt.position : 0;
-      modeRef.current = i.direct ? "direct" : "transcode";
-      offsetRef.current = i.direct ? 0 : bei;
+      // Die Server-Angabe beschreibt Browser. Android kann mit seinen nativen
+      // Decodern oft auch MKV/HEVC/E-AC3 direkt spielen. Erst ein echter
+      // Decoderfehler rechtfertigt die teure Umwandlung auf dem Server.
+      const direkt = i.direct || (Platform.OS === "android" && ["h264", "hevc", "vp8", "vp9", "av1", "mpeg4"].includes(i.vcodec));
+      modeRef.current = direkt ? "direct" : "transcode";
+      offsetRef.current = direkt ? 0 : bei;
       posRef.current = bei;
       durRef.current = Number.isFinite(i.duration) && i.duration > 0 ? i.duration : 0;
 
@@ -198,8 +210,10 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
          endlosen fragmentierten MP4-Strom von /api/transcode NICHT ab — das
          Bild bleibt schwarz. Für Apple liefert der Server denselben Inhalt
          als HLS (siehe server/src/hls.js). */
-      const weg = Platform.OS === "ios" && i.hlsUrl ? i.hlsUrl : i.transcodeUrl;
-      return dran(weg, `profile=${profil}&a=${a}&t=${Math.floor(t)}`);
+      const weg = (Platform.OS === "ios" || Platform.OS === "android") && i.hlsUrl ? i.hlsUrl : i.transcodeUrl;
+      // Fallback auf maximal 1080p: Eine nicht dekodierbare 4K-Datei darf
+      // nicht drei ungebremste 4K-Umwandlungen durch Player-Retries auslösen.
+      return dran(weg, `profile=${profil}&a=${a}&t=${Math.floor(t)}&q=high`);
     },
     [base, conn?.profile],
   );
@@ -236,10 +250,29 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
     ladeKette.current = ladeKette.current.then(replace, replace);
   }, [player, quelleFuer, safe]);
 
+  // Die Vorliebe muss nach dem Laden auch am nativen Decoder ankommen.
+  // Nur die Beschriftung zu setzen spielte bisher weiter die Standardspur.
+  const nativenTonSetzen = useCallback(() => safe(() => {
+    if (modeRef.current !== "direct" || !tonRef.current) return false;
+    const spur = (player.availableAudioTracks || [])[tonRef.current.nr];
+    if (!spur) return false;
+    player.audioTrack = spur;
+    return true;
+  }, false), [player, safe]);
+  useEffect(() => {
+    if (!player?.addListener) return;
+    const a = player.addListener("availableAudioTracksChange", nativenTonSetzen);
+    const b = player.addListener("sourceLoad", () => { nativenTonSetzen(); safe(() => { player.subtitleTrack = null; }); });
+    return () => { a.remove(); b.remove(); };
+  }, [player, nativenTonSetzen, safe]);
+
+
   /* ── Untertitel holen, sobald eine Spur gewählt ist ────────────────── */
   useEffect(() => {
     let abgebrochen = false;
-    if (!utSpur || !info?.untertitelUrl) { setUtSucher(null); setUtText(null); return; }
+    setUtFehler(null); setUtSucher(null); setUtText(null); setUtLaedt(false);
+    if (!utSpur) return;
+    if (!info?.untertitelUrl) { setUtFehler("Der Server liefert für diese Spur keine Untertiteladresse."); return; }
     setUtLaedt(true);
     const tr = info.untertitelUrl.includes("?") ? "&" : "?";
     untertitelHolen(`${base}${info.untertitelUrl}${tr}track=${utSpur.id}`.replace(base + base, base))
@@ -247,8 +280,9 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
         if (abgebrochen) return;
         setUtSucher(s);
         setUtLaedt(false);
+        if (!s) setUtFehler("Untertitel konnten nicht geladen werden. Bitte eine andere Spur wählen oder erneut versuchen.");
       })
-      .catch(() => { if (!abgebrochen) setUtLaedt(false); });
+      .catch(() => { if (!abgebrochen) { setUtLaedt(false); setUtFehler("Untertitel konnten nicht geladen werden."); } });
     return () => { abgebrochen = true; };
   }, [utSpur, info, base]);
 
@@ -287,17 +321,17 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
         if (durRef.current > 0) fortschrittRef.current = { position: posRef.current, duration: durRef.current };
       }));
       abos.push(player.addListener("playingChange", (e) => {
-        if (!lebtRef.current || quelleRef.current?.pending) return;
+        if (!lebtRef.current || !quelleRef.current || quelleRef.current.pending) return;
         const playing = !!(typeof e === "object" ? e?.isPlaying : e);
         // isPlaying also becomes false while buffering. It is not a pause command.
         setLaeuft(safe(() => player.status) === "loading" ? laufWunsch.current : playing);
       }));
       abos.push(player.addListener("playToEnd", () => {
-        if (!lebtRef.current || quelleRef.current?.pending) return;
+        if (!lebtRef.current || !quelleRef.current || quelleRef.current.pending) return;
         laufWunsch.current = false; setLaeuft(false);
       }));
       abos.push(player.addListener("statusChange", (e) => {
-        if (!lebtRef.current) return;
+        if (!lebtRef.current || !quelleRef.current) return;
         const s = typeof e === "object" ? e?.status : e;
         if (s === "loading") setPuffert(true);
         if (s === "readyToPlay" && !quelleRef.current?.pending) setPuffert(false);
@@ -325,6 +359,20 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [info, player, resume]);
 
+  // Auch ein nicht antwortender Stream muss enden koennen. Native Player
+  // melden in diesem Fall mitunter nur 'loading', aber niemals 'error'.
+  useEffect(() => {
+    if (!puffert || !info || fehler) return;
+    const t = setTimeout(() => {
+      setFehler("Der Videostream antwortet seit 45 Sekunden nicht. Bitte erneut versuchen oder den Medienserver prüfen.");
+      setPuffert(false); setLaeuft(false);
+      quelleRef.current = null;
+      safe(() => player.pause());
+      ladeKette.current = ladeKette.current.then(() => { if (lebtRef.current) return player.replaceAsync ? player.replaceAsync(null) : player.replace(null); }).catch(() => {});
+    }, 45000);
+    return () => clearTimeout(t);
+  }, [puffert, info, fehler, player, safe]);
+
   /* ── Untertiteltext zur aktuellen Stelle bestimmen ─────────────────── */
   useEffect(() => {
     if (!utSucher) { setUtText(null); return; }
@@ -333,17 +381,16 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
   }, [pos, utSucher, E.utVersatz]);
 
   /* ── Fortschritt sichern ───────────────────────────────────────────── */
+  const fortschrittSchreiben = useMemo(() => erzeugeFortschrittsSicherung((body) =>
+    api("/api/progress", { method: "POST", body })), [api]);
   const sichern = useCallback(
     () => {
       const confirmed = fortschrittRef.current;
       if (!confirmed) return;
       const { duration: d, position: p } = confirmed;
-      api("/api/progress", {
-        method: "POST",
-        body: { mediaType: type, refId: +id, position: p, duration: d, watched: p >= d * 0.95 },
-      }).catch(() => {});
+      fortschrittSchreiben({ mediaType: type, refId: +id, position: p, duration: d, watched: p >= d * 0.95 });
     },
-    [api, type, id],
+    [fortschrittSchreiben, type, id],
   );
   useEffect(() => {
     const t = setInterval(() => sichern(), 10000);
@@ -355,9 +402,10 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
     setLeisteAn(true);
     if (versteckRef.current) clearTimeout(versteckRef.current);
     const nach = (E.leisteAus ?? 5) * 1000;
-    if (nach > 0) versteckRef.current = setTimeout(() => setLeisteAn(false), nach);
-  }, [E.leisteAus]);
+    if (nach > 0 && laeuft && !puffert && !dialog) versteckRef.current = setTimeout(() => setLeisteAn(false), nach);
+  }, [E.leisteAus, laeuft, puffert, dialog]);
   useEffect(() => { wecken(); }, [wecken]);
+
 
   /* ── Steuerung ─────────────────────────────────────────────────────── */
   const springeAuf = useCallback((t) => {
@@ -394,9 +442,8 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
     if (!nextEp || !lebtRef.current) return;
     sichern();
     lebtRef.current = false;
-    pop();
     push({
-      name: "play", type: "episode", id: nextEp.id, title, showId,
+      name: "play", replace: true, type: "episode", id: nextEp.id, title, showId,
       subtitle: (nextEp.se || "") + (nextEp.title ? " · " + nextEp.title : ""),
       nextEp: nextEp.next ?? null,
     });
@@ -415,32 +462,30 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
   /* ── Tonspur wechseln ──────────────────────────────────────────────── */
   const tonWaehlen = useCallback((kennung) => {
     const spur = (info?.spuren?.audio || []).find((s) => s.id === kennung);
-    if (!spur) return;
+    if (!spur || spur.id === tonRef.current?.id) return;
+    const vorher = tonRef.current;
     tonRef.current = spur;
-    setTonSpur(spur);
-    setDialog(null);
+    setTonFehler(null);
 
     if (modeRef.current === "direct") {
       /* Bei Direktwiedergabe schaltet expo-video die eingebettete Spur
          selbst um — ohne Neuladen und ohne Aussetzer. */
-      safe(() => {
-        const verfuegbar = player.availableAudioTracks || [];
-        if (verfuegbar[spur.nr]) player.audioTrack = verfuegbar[spur.nr];
-      });
+      if (nativenTonSetzen()) setTonSpur(spur);
+      else { tonRef.current = vorher; setTonFehler("Diese Tonspur ist am Player noch nicht verfügbar. Bitte kurz warten und erneut wählen."); }
       return;
     }
     /* Beim Umwandeln entscheidet der Server, welche Spur im Strom landet.
        Also an derselben Stelle neu anfordern — die Position bleibt erhalten. */
+    setTonSpur(spur);
     ladeQuelle(info, posRef.current);
     wecken();
-  }, [info, player, ladeQuelle, safe, wecken]);
+  }, [info, nativenTonSetzen, ladeQuelle, wecken]);
 
   /* ── Untertitel wechseln ───────────────────────────────────────────── */
   const utWaehlen = useCallback((kennung) => {
-    setDialog(null);
     if (kennung === "aus") { setUtSpur(null); setUtSucher(null); setUtText(null); return; }
     const spur = (info?.spuren?.sub || []).find((s) => s.id === kennung);
-    if (spur) setUtSpur(spur);
+    if (spur) setUtSpur({ ...spur });
     wecken();
   }, [info, wecken]);
 
@@ -449,6 +494,18 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
     safe(() => { player.playbackRate = v; });
     setDialog(null);
   }, [player, safe]);
+
+  const dialogZurueck = () => setDialog((d) => d === "utstil" ? "spuren" : ["tempo", "bild", "info"].includes(d) ? "optionen" : null);
+
+  useFernbedienungVorher((taste) => {
+    if (dialog) return false;
+    wecken();
+    if (leisteAn) return false;
+    if (taste === "select") anHalten();
+    else if (taste === "left") springeUm(-(E.sprungZurueck || 10));
+    else if (taste === "right") springeUm(E.sprungVor || 30);
+    return true;
+  });
 
   /* ── Fernbedienung: Medientasten wirken immer ──────────────────────── */
   useFernbedienung((taste) => {
@@ -464,7 +521,14 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
     }
   });
 
-  useDialog(!!dialog);
+  useEffect(() => {
+    const ab = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (dialog) { dialogZurueck(); return true; }
+      verlassen(); return true;
+    });
+    return () => ab.remove();
+  }, [dialog, verlassen]);
+  useDialog(!!dialog, dialogZurueck);
 
   /* ── Fortschrittsbalken als Fokus-Element ──────────────────────────── */
   const balkenRichtung = useCallback((r) => {
@@ -478,15 +542,23 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
     onPress: anHalten,
     aufRichtung: balkenRichtung,
     id: "player:balken",
+    uebersprigen: !leisteAn || !!fehler || !!videoLadeFehler || !VideoView,
   });
+
+  // Nach der Balken-Anmeldung: sie übernimmt zuerst die vorgemerkte Position.
+  useEffect(() => {
+    // OK im Player soll bei Play/Pause landen. Der erste registrierte Knopf
+    // war bisher Zurueck; nach erneutem Einblenden konnte OK dadurch den Film
+    // verlassen, statt ihn anzuhalten.
+    if (leisteAn && !fehler) fokusSystem?.kern.setzen("player:pause");
+  }, [leisteAn, fehler, fokusSystem]);
 
   /* ── Anzeige ───────────────────────────────────────────────────────── */
   const anteil = dauer > 0 ? Math.min(1, Math.max(0, pos / dauer)) : 0;
   const tonListe = info?.spuren?.audio || [];
-  const utListe = (info?.spuren?.sub || []).filter((s) => s.text && !s.bild);
-  const utBildNur = (info?.spuren?.sub || []).filter((s) => s.bild).length;
 
   if (fehler) return <View style={[st.center, { padding: 30 }]}>
+    <Text style={st.h2}>Wiedergabe nicht verfügbar</Text>
     <Text accessibilityRole="alert" style={st.fliess}>{fehler}</Text>
     <FKnopf zeile={0} spalte={0} onPress={retry} style={st.knopf} fokusStil={st.fokus}><Text style={st.knopfText}>Erneut versuchen</Text></FKnopf>
     <FKnopf zeile={1} spalte={0} onPress={verlassen} style={st.knopf} fokusStil={st.fokus}><Text style={st.knopfText}>Zurück</Text></FKnopf>
@@ -499,40 +571,30 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
           Wiedergabe nicht verfügbar
         </Text>
         <Text style={[st.gedaempft, { textAlign: "center", marginBottom: 20 }]}>
-          Das Video-Modul konnte nicht geladen werden:{"\n"}{videoLadeFehler}
+          {fehler || `Das Video-Modul konnte nicht geladen werden: ${videoLadeFehler}`}
         </Text>
-        <FKnopf onPress={pop} spalte={0} zeile={0} style={[st.knopf, st.knopfHaupt]} fokusStil={st.fokus}>
+        {info && <FKnopf onPress={retry} spalte={0} zeile={0} style={[st.knopf, st.knopfHaupt, { marginBottom: 12 }]} fokusStil={st.fokus}>
+          <Text style={[st.knopfText, st.knopfTextHaupt]}>Erneut versuchen</Text>
+        </FKnopf>}
+        <FKnopf onPress={pop} spalte={0} zeile={1} style={[st.knopf, st.knopfHaupt]} fokusStil={st.fokus}>
           <Text style={[st.knopfText, st.knopfTextHaupt]}>Zurück</Text>
         </FKnopf>
       </View>
     );
   }
 
-  const knoepfe = [
-    { id: "zurueck", label: "Zurückspulen", text: String(E.sprungZurueck || 10), symbol: "⏪", onPress: () => springeUm(-(E.sprungZurueck || 10)) },
-    { id: "pause", label: laeuft ? "Pausieren" : "Abspielen", symbol: laeuft ? "⏸" : "▶", haupt: true, onPress: anHalten },
-    { id: "vor", label: "Vorspulen", text: String(E.sprungVor || 30), symbol: "⏩", onPress: () => springeUm(E.sprungVor || 30) },
-    nextEp && { id: "naechste", label: "Nächste Folge", text: "Nächste", symbol: "⏭", onPress: naechsteFolge },
-    folgenFehler && { id: "folgen", label: "Folgenliste erneut laden", text: "Folgen laden", onPress: () => setFolgenVersuch((n) => n + 1) },
-    tonListe.length > 1 && { id: "ton", label: "Tonspur", symbol: "🔊", text: "Ton", onPress: () => setDialog("ton") },
-    (utListe.length > 0 || utBildNur > 0) && { id: "ut", label: "Untertitel", symbol: "💬", text: utSpur ? "UT an" : "UT", onPress: () => setDialog("ut") },
-    { id: "tempo", label: "Geschwindigkeit", text: `${tempo}×`, onPress: () => setDialog("tempo") },
-    { id: "bild", label: "Bildanpassung", symbol: "⛶", onPress: () => setDialog("bild") },
-    { id: "info", label: "Wiedergabeinformationen", symbol: "ℹ", onPress: () => setDialog("info") },
-  ].filter(Boolean);
-
   return (
-    <View style={st.playerWurzel} onTouchStart={wecken} onLayout={(e) => setBedienBreite(Math.max(1, e.nativeEvent.layout.width - 2 * M.rand))}>
+    <View style={st.playerWurzel} onTouchStart={wecken}>
       <VideoView
         style={{ flex: 1 }}
         player={player}
         contentFit={bildmodus}
         nativeControls={false}
-        allowsFullscreen={false}
+        fullscreenOptions={{ enable: false }}
         pointerEvents="none"
       />
 
-      <Pressable testID="player-wecken" accessible={false} focusable={false}
+      <Pressable testID="player-wecken" accessible={!leisteAn} accessibilityRole="button" accessibilityLabel="Bedienelemente anzeigen" focusable={false}
         onPress={wecken} style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }} />
 
       {puffert && (
@@ -547,9 +609,8 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
           pointerEvents="none"
           style={{
             position: "absolute", left: "6%", right: "6%",
-            bottom: leisteAn
-              ? `${Math.round((E.utPosition ?? 0.08) * 100) + (gross ? 18 : 15)}%`
-              : `${Math.round((E.utPosition ?? 0.08) * 100)}%`,
+            // Die neue zweizeilige Bedienung darf den Untertitel nicht überdecken.
+            bottom: leisteAn ? (kompakt ? 140 : 180) : `${Math.round((E.utPosition ?? 0.08) * 100)}%`,
             alignItems: "center",
           }}
         >
@@ -582,31 +643,16 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
             <FKnopf
               spalte={0}
               onPress={verlassen}
-              style={[st.rundKnopf, { minWidth: gross ? 54 : 44, height: gross ? 54 : 44 }]}
+              style={[st.rundKnopf, { minWidth: 40, height: 40 }]}
               fokusStil={st.fokus}
-              id="player:zurueck"
+              id="player:zurueck" accessibilityLabel="Wiedergabe verlassen"
             >
-              <Text style={st.rundKnopfText}>←</Text>
+              <Icon name="back" />
             </FKnopf>
           </FokusReihe>
           <View style={{ flex: 1 }}>
             <Text numberOfLines={1} style={st.playerTitel}>{title}</Text>
             {!!subtitle && <Text numberOfLines={1} style={st.playerUnter}>{subtitle}</Text>}
-          </View>
-          <View style={{ alignItems: "flex-end", gap: 4 }}>
-            {modeRef.current === "transcode" && (
-              <View style={[st.hinweis, { paddingVertical: 4, paddingHorizontal: 10 }]}>
-                <Text style={{ color: C.text, fontSize: M.klein, fontWeight: "700" }}>Umgewandelt</Text>
-              </View>
-            )}
-            {!!tonSpur && tonListe.length > 1 && (
-              <Text style={{ color: "#c9c9d6", fontSize: M.klein }}>🔊 {tonSpur.name}</Text>
-            )}
-            {!!utSpur && (
-              <Text style={{ color: "#c9c9d6", fontSize: M.klein }}>
-                💬 {utSpur.name}{utLaedt ? " (lädt …)" : ""}
-              </Text>
-            )}
           </View>
         </View>
       )}
@@ -614,16 +660,18 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
       {/* ── Bedienleiste ──────────────────────────────────────────────── */}
       {leisteAn && (
         <View pointerEvents="box-none" style={st.playerFuss}>
-          {folgenFehler && <Text style={st.gedaempft}>Folgenliste konnte nicht geladen werden.</Text>}
+          {folgenFehler && <View><Text style={st.gedaempft}>Folgenliste konnte nicht geladen werden.</Text><FKnopf accessibilityLabel="Folgenliste erneut laden" onPress={() => setFolgenVersuch(n => n + 1)} style={st.knopf} fokusStil={st.fokus}><Text style={st.knopfText}>Folgenliste erneut laden</Text></FKnopf></View>}
           <View style={[st.balkenRahmen, balkenAn && st.fokus]}>
             <Text style={st.playerZeit}>{fmtZeit(pos)}</Text>
-            <View style={st.balkenSpur} onLayout={(e) => setBalkenBreite(e.nativeEvent.layout.width)}>
+            <Pressable focusable={false} accessibilityLabel="Wiedergabeposition" hitSlop={18}
+              onPress={(e) => { if (balkenBreite > 0) springeAuf(e.nativeEvent.locationX / balkenBreite * dauer); }}
+              style={st.balkenSpur} onLayout={(e) => setBalkenBreite(e.nativeEvent.layout.width)}>
               <View style={[st.balkenVoll, { width: balkenBreite * anteil }]} />
               <View style={[st.balkenGriff, {
                 left: balkenBreite * anteil,
                 transform: [{ scale: balkenAn ? 1.35 : 1 }],
               }]} />
-            </View>
+            </Pressable>
             <Text style={[st.playerZeit, { textAlign: "right" }]}>−{fmtZeit(Math.max(0, dauer - pos))}</Text>
           </View>
 
@@ -633,50 +681,60 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
             </Text>
           )}
 
-          <PlayerKnopfleiste breite={bedienBreite} knoepfe={knoepfe} />
+          <View style={{ flexDirection: kompakt ? "row" : "column", justifyContent: "space-between", gap: 8, marginTop: 6 }}>
+          <FokusReihe zeile={1}>
+            <View style={st.playerKnopfReihe}>
+              <PKnopf spalte={0} text={`${E.sprungZurueck || 10} s`} label="Zurückspulen" symbol="rewind" onPress={() => springeUm(-(E.sprungZurueck || 10))} />
+              <PKnopf id="player:pause" spalte={1} symbol={laeuft ? "pause" : "play"} label={laeuft ? "Pausieren" : "Abspielen"} haupt grossKnopf onPress={anHalten} aufRichtung={(r) => { if (r !== "down") return false; fokusSystem?.kern.setzen("player:spuren"); return true; }} />
+              <PKnopf spalte={2} text={`${E.sprungVor || 30} s`} label="Vorspulen" symbol="forward" onPress={() => springeUm(E.sprungVor || 30)} />
+              {!!nextEp && <PKnopf spalte={3} label="Nächste Folge" symbol="next" onPress={naechsteFolge} />}
+            </View>
+          </FokusReihe>
+          <FokusReihe zeile={kompakt ? 1 : 2}>
+            <View style={{ flexDirection: "row", gap: 6, justifyContent: "center" }}>
+              <FKnopf id="player:spuren" accessibilityLabel="Sprache & Untertitel" hitSlop={gross ? 0 : 3} spalte={kompakt ? 4 : 1} aufRichtung={(r) => { if (r !== "up") return false; fokusSystem?.kern.setzen("player:pause"); return true; }} onPress={() => { fokusSystem?.kern.setzen("player:spuren"); setDialog("spuren"); }} style={[st.rundKnopf, { flex: kompakt ? undefined : 1, paddingHorizontal: 10, gap: 7 }]} fokusStil={st.fokus}>
+                <Icon name="subtitles" size={20} />
+                <Text style={{ color: "white", fontSize: 12, fontWeight: "600" }}>Sprache & Untertitel</Text>
+              </FKnopf>
+              <PKnopf id="player:optionen" spalte={kompakt ? 5 : 2} symbol="settings" label="Optionen" onPress={() => setDialog("optionen")} />
+            </View>
+          </FokusReihe>
+          </View>
+          {(utLaedt || utFehler) && <Text accessibilityRole="alert" style={{ color: utFehler ? "#ffca85" : "#bbc2d2", textAlign: "center", marginTop: 10, fontSize: M.klein }}>{utLaedt ? "Untertitel werden geladen …" : utFehler}</Text>}
         </View>
       )}
 
       {/* ── Dialoge ───────────────────────────────────────────────────── */}
-      {dialog === "ton" && (
-        <Dialog titel="Tonspur">
-          <DialogListe
-            aktiv={tonSpur?.id}
-            aufWahl={tonWaehlen}
-            eintraege={tonListe.map((s) => ({ wert: s.id, text: s.name }))}
-          />
-          {modeRef.current === "transcode" && (
-            <Text style={[st.gedaempft, { marginTop: 12, fontSize: M.klein }]}>
-              Beim Umwandeln wird nach dem Wechsel kurz neu geladen.
-            </Text>
-          )}
-        </Dialog>
-      )}
-
-      {dialog === "ut" && (
-        <Dialog titel="Untertitel">
-          <DialogListe
-            aktiv={utSpur?.id ?? "aus"}
-            aufWahl={utWaehlen}
-            eintraege={[
-              { wert: "aus", text: "Aus" },
-              ...utListe.map((s) => ({ wert: s.id, text: s.name })),
-            ]}
-          />
-          {utBildNur > 0 && (
-            <Text style={[st.gedaempft, { marginTop: 12, fontSize: M.klein }]}>
-              {utBildNur} weitere Spur{utBildNur > 1 ? "en" : ""} ist Bild-Untertitel (Blu-ray/DVD).
-              {"\n"}Die enthalten keinen Text und lassen sich nicht anzeigen.
-            </Text>
-          )}
-          <Text style={[st.gedaempft, { marginTop: 10, fontSize: M.klein }]}>
-            Größe, Farbe und Position stellst du unter Einstellungen ein.
-          </Text>
-        </Dialog>
-      )}
+      {dialog === "spuren" && <SpurenDialog
+        audio={tonListe} untertitel={info?.spuren?.sub || []} ton={tonSpur} ut={utSpur}
+        aufTon={tonWaehlen} aufUt={utWaehlen} aufSchliessen={() => setDialog(null)}
+        aufDarstellung={() => setDialog("utstil")} status={tonFehler || utFehler || (utLaedt ? "Untertitel werden geladen …" : null)}
+        aufMerken={() => anpassen({ tonSprache: tonSpur?.sprache || "", utAn: !!utSpur, utSprache: utSpur?.sprache || "" })}
+      />}
+      {dialog === "optionen" && <Dialog titel="Wiedergabeoptionen" aufSchliessen={() => setDialog(null)}>
+        <DialogListe aufWahl={setDialog} eintraege={[
+          { wert: "tempo", text: `Geschwindigkeit · ${tempo}×` },
+          { wert: "bild", text: `Bild · ${bildmodus === "contain" ? "Einpassen" : bildmodus === "cover" ? "Füllen" : "Strecken"}` },
+          { wert: "utstil", text: "Untertitel-Darstellung" },
+          { wert: "info", text: "Wiedergabeinformationen" },
+        ]} />
+      </Dialog>}
+      {dialog === "utstil" && <Dialog titel="Untertitel-Darstellung" aufSchliessen={() => setDialog("spuren")}>
+        <View style={{ alignItems: "center", backgroundColor: "#303b4a", borderRadius: 12, padding: 18, marginBottom: 14 }}><Text style={{ color: E.utFarbe, fontSize: (gross ? 24 : 18) * E.utGroesse, backgroundColor: `rgba(0,0,0,${E.utHintergrund})`, padding: 6, textAlign: "center" }}>So sehen deine Untertitel aus.</Text></View>
+        <DialogListe aufWahl={(key) => {
+          const werte = { utGroesse: [.8, 1, 1.25, 1.5], utHintergrund: [0, .55, .85], utFarbe: ["#ffffff", "#ffdf70"], utVersatz: [-2, -1, -.5, 0, .5, 1, 2] };
+          const optionen = werte[key]; anpassen({ [key]: optionen[(optionen.indexOf(E[key]) + 1) % optionen.length] });
+        }} eintraege={[
+          { wert: "utGroesse", text: `Schriftgröße · ${Math.round(E.utGroesse * 100)} %` },
+          { wert: "utFarbe", text: `Farbe · ${E.utFarbe === "#ffffff" ? "Weiß" : "Gelb"}` },
+          { wert: "utHintergrund", text: `Hintergrund · ${Math.round(E.utHintergrund * 100)} %` },
+          { wert: "utVersatz", text: `Zeitversatz · ${E.utVersatz > 0 ? "+" : ""}${E.utVersatz} s` },
+        ]} />
+        <Text style={{ color: "#aeb7c9", fontSize: M.klein, marginTop: 12 }}>Antippen / OK: nächster Wert. Positiver Zeitversatz zeigt den Text später.</Text>
+      </Dialog>}
 
       {dialog === "tempo" && (
-        <Dialog titel="Geschwindigkeit">
+        <Dialog titel="Geschwindigkeit" aufSchliessen={dialogZurueck}>
           <DialogListe
             aktiv={tempo}
             aufWahl={setzeTempo}
@@ -688,7 +746,7 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
       )}
 
       {dialog === "bild" && (
-        <Dialog titel="Bildanpassung">
+        <Dialog titel="Bildanpassung" aufSchliessen={dialogZurueck}>
           <DialogListe
             aktiv={bildmodus}
             aufWahl={(v) => { setBildmodus(v); setDialog(null); }}
@@ -702,7 +760,7 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
       )}
 
       {dialog === "info" && (
-        <Dialog titel={title}>
+        <Dialog titel={title} aufSchliessen={dialogZurueck}>
           {!!subtitle && <Text style={[st.fliess, { marginBottom: 10 }]}>{subtitle}</Text>}
           <Text style={st.gedaempft}>
             {[
@@ -728,5 +786,28 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
         </Dialog>
       )}
     </View>
+  );
+}
+
+/** Knopf der Bedienleiste. */
+function PKnopf({ id, spalte, text, symbol, label, haupt, onPress, grossKnopf, aufRichtung }) {
+  return (
+    <FKnopf
+      id={id}
+      accessibilityLabel={label || text}
+      aufRichtung={aufRichtung}
+      spalte={spalte}
+      onPress={onPress}
+      hitSlop={gross ? 0 : 3}
+      style={[
+        st.rundKnopf,
+        haupt && st.rundKnopfHaupt,
+        grossKnopf && { minWidth: 44, height: 40 },
+      ]}
+      fokusStil={st.fokus}
+    >
+      {!!symbol && <Icon name={symbol} size={grossKnopf ? 23 : 20} />}
+      {!!text && <Text style={st.rundKnopfText}>{text}</Text>}
+    </FKnopf>
   );
 }

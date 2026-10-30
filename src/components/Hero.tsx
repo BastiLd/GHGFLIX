@@ -31,7 +31,7 @@ export function Hero({
   onDetails?: () => void;
 }) {
   return (
-    <div className="relative h-[56vh] min-h-[380px] w-full mb-4">
+    <div className="ghg-hero relative h-[56vh] min-h-[380px] w-full mb-4">
       {backdrop ? (
         <img
           key={backdrop}
@@ -46,7 +46,7 @@ export function Hero({
       <div className="absolute inset-0 bg-gradient-to-t from-ghg-bg via-ghg-bg/30 to-transparent" />
       <div className="absolute inset-0 bg-gradient-to-r from-ghg-bg/95 via-ghg-bg/40 to-transparent" />
 
-      <div className="relative h-full flex flex-col justify-end p-10 max-w-2xl">
+      <div className="ghg-hero-content relative h-full flex flex-col justify-end p-10 max-w-2xl">
         <h1 className="text-5xl font-black mb-3 text-glow leading-tight">{title}</h1>
         <div className="flex items-center gap-2.5 mb-2 flex-wrap">
           {meta && <span className="text-sm font-semibold text-ghg-red">{meta}</span>}

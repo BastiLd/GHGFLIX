@@ -1,12 +1,15 @@
 {
   "name": "ghgflix-mobile",
-  "version": "3.3.0",
+  "version": "3.5.0",
   "main": "index.js",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "test": "node test/laden.test.mjs && node test/fokus.test.mjs && node test/oberflaeche.test.mjs && node test/netzsuche.test.mjs && node test/untertitel.test.mjs && node test/qr.test.mjs && node test/update.test.mjs"
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "test": "node test/laden.test.mjs && node test/fokus.test.mjs && node test/oberflaeche.test.mjs && node test/netzsuche.test.mjs && node test/untertitel.test.mjs && node test/qr.test.mjs && node test/update.test.mjs && node --test test/client-regression.test.mjs",
+    "start:tv": "node scripts/client.cjs tv start",
+    "build:tv": "node scripts/client.cjs tv build",
+    "build:mobile": "node scripts/client.cjs mobile build"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
@@ -20,6 +23,7 @@
     "expo-intent-launcher": "~13.0.8",
     "expo-keep-awake": "~15.0.8",
     "expo-notifications": "~0.32.17",
+    "expo-network": "~8.0.8",
     "expo-status-bar": "~3.0.9",
     "expo-updates": "~29.0.19",
     "expo-video": "~3.0.16",

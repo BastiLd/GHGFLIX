@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { DetailActions } from "../components/DetailActions";
 import clsx from "clsx";
 import { ArrowLeft, Check, ImageIcon, MoreVertical, Pencil, Play, Plus, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -187,7 +188,7 @@ export default function ShowDetail() {
 
   return (
     <div className="relative pb-12">
-      <div className="relative h-[42vh] min-h-[300px]">
+      <div className="ghg-detail-banner relative h-[42vh] min-h-[300px]">
         {backdropUrl(show.backdropPath) ? (
           <img src={backdropUrl(show.backdropPath)!} alt="" className="absolute inset-0 w-full h-full object-cover" />
         ) : (
@@ -203,7 +204,7 @@ export default function ShowDetail() {
         </button>
       </div>
 
-      <div className="px-10 -mt-32 relative flex gap-8">
+      <div className="ghg-detail-heading px-10 -mt-32 relative flex gap-8">
         {/* Der Rahmen nimmt das echte Seitenverhaeltnis des Bildes an —
             keine schwarzen Balken, nichts abgeschnitten. */}
         <AutoPoster src={posterUrl(show.posterPath, "w500")} fallbackText={show.title} />
@@ -273,6 +274,7 @@ export default function ShowDetail() {
             <Button variant="ghost" onClick={toggleFav}>
               {isFav ? <Check className="w-4 h-4" /> : <Plus className="w-4 h-4" />} Meine Liste
             </Button>
+            <DetailActions>
             {watchedCount < totalCount && (
               <Button variant="ghost" onClick={markShowWatched}>
                 <Check className="w-4 h-4" /> Alle gesehen
@@ -388,6 +390,7 @@ export default function ShowDetail() {
             <Button variant="ghost" onClick={playRandom}>
               🎲 Zufällige Folge
             </Button>
+            </DetailActions>
           </div>
         </div>
       </div>
@@ -540,7 +543,7 @@ export default function ShowDetail() {
         )}
 
         {!extraTab && !filmeTab && currentSeason && selectedSeason !== null && (
-          <div className="flex items-center gap-3 mb-4">
+          <div className="ghg-season-heading flex items-center gap-3 mb-4">
             {seasonArt.get(selectedSeason) && (
               <img
                 src={posterUrl(seasonArt.get(selectedSeason), "w185")!}
@@ -553,6 +556,7 @@ export default function ShowDetail() {
               {selectedSeason === 0 ? "Specials" : `Staffel ${selectedSeason}`}
               <span className="text-ghg-muted font-normal text-sm ml-2">{currentSeason.episodes.length} Folgen</span>
             </h3>
+            <DetailActions label="Staffelaktionen">
             <button
               onClick={() => {
                 const allSeen = seasonAllWatched(selectedSeason);
@@ -656,6 +660,7 @@ export default function ShowDetail() {
             >
               <ImageIcon className="w-4 h-4" /> Staffelbild ändern
             </button>
+            </DetailActions>
           </div>
         )}
 
@@ -903,12 +908,14 @@ function EpisodeRow({
   return (
     <div
       ref={rowRef}
-      className="group flex gap-4 p-3 rounded-xl hover:bg-ghg-surface2 transition border border-transparent hover:border-ghg-line"
+      className="ghg-episode-row group flex gap-4 p-3 rounded-xl hover:bg-ghg-surface2 transition border border-transparent hover:border-ghg-line"
       onContextMenu={(e) => openCtx(e, rowActions)}
     >
       <div
         className="relative w-44 aspect-video shrink-0 rounded-lg overflow-hidden bg-ghg-bg2 cursor-pointer"
         onClick={onPlay}
+        role="button" tabIndex={0} aria-label={`${seasonEpisodeLabel(ep.season, ep.episode)} ${ep.title || "Folge"} abspielen`}
+        onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPlay(); } }}
       >
         {still ? (
           <img src={still} alt="" className="w-full h-full object-cover" loading="lazy" />
@@ -963,6 +970,7 @@ function EpisodeRow({
         </button>
         <button
           onClick={() => setMenu((o) => !o)}
+          aria-label={`Optionen für ${seasonEpisodeLabel(ep.season, ep.episode)}`}
           className="p-1.5 rounded-lg hover:bg-ghg-elevated text-ghg-muted hover:text-ghg-text opacity-0 group-hover:opacity-100 transition"
         >
           <MoreVertical className="w-4 h-4" />

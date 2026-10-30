@@ -26,3 +26,5 @@ export const ActivityIndicator = () => <span>Loading</span>;
 export const Pressable = ({ children, onPress, disabled, accessibilityLabel, testID }) => <button data-testid={testID} disabled={disabled} aria-label={accessibilityLabel} onClick={onPress}>{children}</button>;
 export const TextInput = React.forwardRef(({ value, onChangeText, accessibilityLabel, onFocus, onBlur }, ref) => <input ref={ref} aria-label={accessibilityLabel} value={value ?? ""} onChange={(e) => onChangeText?.(e.target.value)} onFocus={onFocus} onBlur={onBlur} />);
 export const FlatList = ({ data, renderItem }) => data.map((item, index) => <React.Fragment key={item.id ?? index}>{renderItem({ item, index })}</React.Fragment>);
+
+export const useWindowDimensions = () => Dimensions.get("window");

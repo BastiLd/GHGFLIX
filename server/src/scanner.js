@@ -32,6 +32,8 @@ import { ffprobe } from "./stream.js";
 import * as tmdb from "./tmdb.js";
 import { findLocalArtwork, findSeasonArtwork, readNfo, asLocalRef, isLocalRef } from "./artwork.js";
 import { makeStill } from "./thumbs.js";
+import * as extras from "./extras.js";
+import * as zuordnung from "./zuordnung.js";
 
 export const scanState = {
   running: false, lastRun: 0, lastResult: "", shows: 0, movies: 0, episodes: 0,
@@ -184,23 +186,27 @@ function filmUeberschreibungen() {
   }
 }
 
+const kleinPfad = (p) => String(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+/* Bonusordner („Extras", „Featurettes", „Special Extras Season 1") werden
+   jetzt MIT durchlaufen: ihr Inhalt wird zu Zusatzmaterial der Serie statt
+   wie bisher stillschweigend zu fehlen (Desktop-Parität, 23.09.2026). Dass
+   daraus kein Film und keine Folge wird, entscheiden indexMovies/indexShows. */
 function* walkVideos(root, maxDepth = 8) {
   const ignoriert = ignorierteDateien();
-  const filmUeb = filmUeberschreibungen();
   const stack = [{ dir: root, depth: 0 }];
   while (stack.length) {
     const { dir, depth } = stack.pop();
     for (const e of listDir(dir)) {
       const p = join(dir, e.name);
       if (e.isDirectory()) {
-        if (depth >= maxDepth || skip(e.name) || isExtrasDir(e.name)) continue;
+        if (depth >= maxDepth || skip(e.name)) continue;
         stack.push({ dir: p, depth: depth + 1 });
       } else if (e.isFile() && isVideo(e.name)) {
         const stem = fileStem(e.name);
         if (isJunkClip(stem)) continue;
-        const norm = p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+        const norm = kleinPfad(p);
         if (ignoriert.size && ignoriert.has(norm)) continue;
-        if (filmUeb.size && filmUeb.has(norm)) continue;
         // Winzige Dateien sind fast immer Reste/Werbeschnipsel. Bewusst NIEDRIG
         // (1 MB), damit kurze Zeichentrickfolgen oder 240p-Rips nicht verschwinden.
         try {
@@ -266,11 +272,96 @@ function showSourceName(root, filePath) {
       // nur noch die Datei übrig — deren Name trägt den echten Titel
       return fileStem(basename(filePath));
     }
+    /* Sitzt ZWISCHEN dem ersten Ordner und der Datei ein echter Staffelordner,
+       gehört die Serie zu DESSEN Elternordner — sonst wirft eine Sammelablage
+       wie „Avengers" (Avengers\Suits\Season 1, Avengers\Daredevil\Season 1 …)
+       alles in EINE Serie namens „Avengers" (Desktop, gemessen 18.08.2026). */
+    if (comps.length >= 3) {
+      const idx = comps.findIndex((c, i) => i >= 1 && i < comps.length - 1 && isPureSeasonDir(c));
+      if (idx >= 1) return stripDomainSuffix(comps[idx - 1]);
+      return stripDomainSuffix(serieAusZweiOrdnern(comps[0], comps[1], fileStem(basename(filePath))));
+    }
     return stripDomainSuffix(first);
   }
   const rn = basename(root);
   if (rn && !isSiteDir(rn) && !isGenericDir(rn)) return stripDomainSuffix(rn);
   return fileStem(basename(filePath));
+}
+
+const titelWoerter = (s) =>
+  cleanShowTitle(s).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+
+/** Beginnt der Ordnername mit einer Staffel-/Band-Angabe? („Staffel 1 (2019)",
+ *  „Book One - Air", „Volume 2", „S01 German DL") — dann benennt er einen Teil
+ *  der Serie, nicht die Serie selbst. */
+export function wirktWieStaffelOrdner(name) {
+  return /^\s*(?:season|staffel|saison|book|buch|band|volume|vol\.?|teil|part|disc|disk|s)\s*(?:\d|(?:one|two|three|four|five|six|seven|eight|nine|ten|eins|zwei|drei|vier|fünf|fuenf|sechs|sieben|acht|neun|zehn)\b)/i.test(
+    String(name),
+  );
+}
+
+/**
+ * Liegt eine Datei ZWEI Ordner tief ohne erkannten Staffelordner, ist einer
+ * der beiden die Serie: entweder „Sammelordner/Serie/Datei" oder
+ * „Serie/Band-oder-Staffel/Datei". Bisher galt pauschal der zweite — damit hieß
+ * die Serie bei „Korra/Book One - Air/…" plötzlich „Book One - Air".
+ *
+ * Entscheidung: Der Dateiname trägt bei fast allen Releases den Serientitel —
+ * welcher Ordner teilt mehr Wörter mit ihm? Bei Gleichstand gewinnt der erste
+ * Ordner nur, wenn der zweite wie eine Staffel/ein Band aussieht; sonst bleibt
+ * es beim zweiten (Sammelordner-Fall). MUSS mit serie_aus_zwei_ordnern() in
+ * src-tauri/src/scanner.rs übereinstimmen.
+ */
+export function serieAusZweiOrdnern(erster, zweiter, stem) {
+  const datei = titelWoerter(stem);
+  if (datei.length) {
+    const anteil = (ordner) => {
+      const w = new Set(titelWoerter(ordner));
+      return datei.filter((t) => w.has(t)).length / datei.length;
+    };
+    const a = anteil(erster);
+    const b = anteil(zweiter);
+    if (a > b) return erster;
+    if (b > a) return zweiter;
+  }
+  return wirktWieStaffelOrdner(zweiter) ? erster : zweiter;
+}
+
+/** Liegt die Datei unter einem Staffel- oder Bonusordner? Dann ist sie Teil
+ *  einer Serie und NIE ein eigenständiger Film (sonst: Geisterfilme wie „Gag"
+ *  von 2006 für ein „Gag Reel.mkv"). */
+function istSerienBeiwerk(root, filePath) {
+  const comps = relative(root, filePath).split(sep).filter(Boolean);
+  return comps.slice(0, -1).some((c) => isPureSeasonDir(c) || isExtrasDir(c));
+}
+
+/**
+ * Bonusmaterial der Serie zuordnen, zu der der Ordner gehört. Die Serie wird
+ * von der DATEI aus nach oben gesucht, Staffel- und Bonusordner übersprungen
+ * (…\The Newsroom\Featurettes\Season 1\Inside the Episode\Amen.mkv → „The
+ * Newsroom"). Gibt es die Serie (noch) nicht, bleibt die Datei draußen — beim
+ * nächsten Scan mit Folgen wird sie nachgeholt.
+ */
+function merkeExtra(db, root, filePath, stem) {
+  const ordner = relative(root, filePath).split(sep).filter(Boolean).slice(0, -1);
+  const serienOrdner = [...ordner].reverse().find((c) => !isPureSeasonDir(c) && !isExtrasDir(c) && !isGenericDir(c));
+  const quelle = serienOrdner != null ? stripDomainSuffix(serienOrdner) : basename(root);
+  const showId = showIdForKey(showKey(quelle));
+  if (!showId || !db.prepare("SELECT 1 FROM shows WHERE id = ?").get(showId)) return false;
+  const { art, staffel } = extras.artUndStaffel(ordner, stem);
+  extras.merken(showId, filePath, stem, art, staffel);
+  return true;
+}
+
+/** Titel + Jahr eines Films aus Datei- bzw. (bei EINEM Video im Ordner) Ordnernamen. */
+function filmTitel(root, f, videosImOrdner) {
+  // "Film (2019)/film.mkv": der ORDNERNAME ist meist sauberer als der
+  // Dateiname — genau wie bei Plex/Jellyfin, sobald er eine Jahreszahl trägt.
+  // Nur ein EINZELNER Film darf seinen Titel vom Ordner nehmen: „The Matrix
+  // 1-4 Pack (1999)" enthält vier Filme (gemessen 23.09.2026).
+  const fromFolder = f.dir !== root && videosImOrdner === 1 ? parseTitleYear(basename(f.dir)) : null;
+  const fromFile = parseTitleYear(f.stem);
+  return fromFolder?.year ? fromFolder : fromFile.title.length >= 2 ? fromFile : (fromFolder ?? fromFile);
 }
 
 // ── Indizieren: Filme ───────────────────────────────────────────────────────
@@ -280,25 +371,37 @@ function indexMovies(db, root, now) {
     "INSERT INTO movies (title, year, path, added_at) VALUES (?,?,?,?) ON CONFLICT(path) DO NOTHING",
   );
   const known = db.prepare("SELECT id FROM movies WHERE path = ?");
+  const loescheFilm = db.prepare("DELETE FROM movies WHERE path = ?");
+  const istFolge = db.prepare("SELECT 1 FROM episode_files WHERE path = ? UNION SELECT 1 FROM episodes WHERE path = ?");
+  const hand = zuordnung.alle();
   let n = 0;
-  /* Wie viele Videos liegen je Ordner? Nur ein EINZELNER Film darf seinen
-     Titel vom Ordnernamen nehmen. Gemessen 23.09.2026: „The Matrix 1-4 Pack
-     (1999)" enthält vier Filme — alle vier hießen danach „The Matrix". */
   const dateien = [...walkVideos(root)];
   const jeOrdner = new Map();
   for (const f of dateien) jeOrdner.set(f.dir, (jeOrdner.get(f.dir) ?? 0) + 1);
   for (const f of dateien) {
+    // Handentscheidung schlägt alles: Was der Nutzer als Folge, Bonus oder
+    // ausgeblendet festgelegt hat, wird hier NICHT zum Film.
+    const z = hand.get(f.path);
+    if (z && handentscheidung(db, root, f, z, jeOrdner.get(f.dir), now)) {
+      n++;
+      continue;
+    }
+    {
+      // „Serien & Filme": indexShows hat die Datei schon als Folge beansprucht.
+      if (istFolge.get(f.path, f.path)) continue;
+      // Bonusmaterial/Staffelinhalt einer Serie ist kein Film — ein früher
+      // fälschlich angelegter Film-Eintrag muss jetzt verschwinden.
+      if (istSerienBeiwerk(root, f.path)) {
+        loescheFilm.run(f.path);
+        merkeExtra(db, root, f.path, f.stem);
+        continue;
+      }
+    }
     if (known.get(f.path)) {
       n++;
       continue;
     }
-    // "Film (2019)/film.mkv": der ORDNERNAME ist meist sauberer als der
-    // Dateiname — genau wie bei Plex/Jellyfin bevorzugen wir ihn, sobald er
-    // eine Jahreszahl trägt.
-    const folderName = basename(f.dir);
-    const fromFolder = f.dir !== root && jeOrdner.get(f.dir) === 1 ? parseTitleYear(folderName) : null;
-    const fromFile = parseTitleYear(f.stem);
-    const pick = fromFolder?.year ? fromFolder : fromFile.title.length >= 2 ? fromFile : (fromFolder ?? fromFile);
+    const pick = filmTitel(root, f, jeOrdner.get(f.dir));
     insert.run(pick.title || f.stem, pick.year ?? null, f.path, now);
     n++;
     scanState.current = n;
@@ -373,9 +476,147 @@ function upsertEpisode(db, showId, season, episode, path, epTitle, episodeEnd, n
   return id;
 }
 
+/**
+ * Eine Datei aus ihrer bisherigen Folge lösen. Hat die Folge noch andere
+ * Dateien, wird die beste davon zur Hauptdatei; war es die einzige, fällt die
+ * Folge weg.
+ */
+function loeseFolgeDatei(db, path) {
+  const ef = db.prepare("SELECT id, episode_id FROM episode_files WHERE path = ?").get(path);
+  if (ef) db.prepare("DELETE FROM episode_files WHERE id = ?").run(ef.id);
+  const ep = ef
+    ? db.prepare("SELECT id, path FROM episodes WHERE id = ?").get(ef.episode_id)
+    : db.prepare("SELECT id, path FROM episodes WHERE path = ?").get(path);
+  if (!ep || ep.path !== path) return;
+  const rest = db
+    .prepare("SELECT path FROM episode_files WHERE episode_id = ? ORDER BY COALESCE(height,0) DESC, id LIMIT 1")
+    .get(ep.id);
+  if (rest) db.prepare("UPDATE episodes SET path = ? WHERE id = ?").run(rest.path, ep.id);
+  else db.prepare("DELETE FROM episodes WHERE id = ?").run(ep.id);
+}
+
+/**
+ * Datei fest an Serie/Staffel/Folge setzen (Handentscheidung, Platzierung).
+ * Steht sie schon richtig, passiert NICHTS — sonst würde jeder Scan die Folge
+ * neu anlegen und dabei den Gesehen-Stand (hängt an der Folgen-ID) verlieren.
+ * Ist die Datei die einzige ihrer Folge und das Ziel noch frei, wandert die
+ * ganze Folge mit — ihre ID und damit der Fortschritt bleiben erhalten.
+ */
+function dateiPlatzieren(db, showId, season, episode, path, stem, now) {
+  const jetzt =
+    db
+      .prepare(
+        "SELECT e.id, e.show_id, e.season, e.episode FROM episode_files ef JOIN episodes e ON e.id = ef.episode_id WHERE ef.path = ?",
+      )
+      .get(path) ?? db.prepare("SELECT id, show_id, season, episode FROM episodes WHERE path = ?").get(path);
+  if (jetzt && jetzt.show_id === showId && jetzt.season === season && jetzt.episode === episode) return;
+  if (jetzt) {
+    const ziel = db.prepare("SELECT id FROM episodes WHERE show_id=? AND season=? AND episode=?").get(showId, season, episode);
+    const dateien = db.prepare("SELECT COUNT(*) c FROM episode_files WHERE episode_id = ?").get(jetzt.id).c;
+    if (!ziel && dateien <= 1) {
+      // Titel/Bild der ALTEN Position passen nicht mehr — beim Zuordnen neu laden.
+      db.prepare(
+        "UPDATE episodes SET show_id=?, season=?, episode=?, title=NULL, overview=NULL, still=NULL, air_date=NULL WHERE id=?",
+      ).run(showId, season, episode, jetzt.id);
+      db.prepare("INSERT OR IGNORE INTO episode_files (episode_id, path, added_at) VALUES (?,?,?)").run(jetzt.id, path, now);
+      return;
+    }
+    loeseFolgeDatei(db, path);
+  }
+  upsertEpisode(db, showId, season, episode, path, episodeTitleFromFile(stem), null, now);
+}
+
+/**
+ * Eine Handentscheidung aus dem Zuordnungs-Fenster umsetzen. Gilt in JEDER
+ * Bibliotheksart — auch eine Datei aus einer reinen Film-Bibliothek kann so
+ * zur Folge oder zum Bonus werden. Liefert false, wenn die Entscheidung
+ * unvollständig ist; dann entscheidet die Automatik.
+ */
+function handentscheidung(db, root, f, z, videosImOrdner, now) {
+  const weg = (tab) => db.prepare(`DELETE FROM ${tab} WHERE path = ?`).run(f.path);
+  switch (z.ziel) {
+    case "ignorieren":
+      loeseFolgeDatei(db, f.path);
+      weg("movies");
+      weg("extras");
+      return true;
+    case "film": {
+      /* Auch in einer REINEN Serien-Bibliothek muss der Film ankommen —
+         sonst verschwand die Datei nach „Eigenständiger Film" einfach
+         (indexMovies läuft dort gar nicht; gefunden 23.09.2026, am Desktop
+         genauso behoben). */
+      loeseFolgeDatei(db, f.path);
+      weg("extras");
+      const pick = filmTitel(root, f, videosImOrdner);
+      db.prepare("INSERT INTO movies (title, year, path, added_at) VALUES (?,?,?,?) ON CONFLICT(path) DO NOTHING").run(
+        pick.title || f.stem, pick.year ?? null, f.path, now,
+      );
+      return true;
+    }
+    case "extra": {
+      const sid = z.showTmdb ? db.prepare("SELECT id FROM shows WHERE tmdb_id = ? ORDER BY id LIMIT 1").get(z.showTmdb)?.id : null;
+      if (!sid || !z.extraArt) return false;
+      loeseFolgeDatei(db, f.path);
+      weg("movies");
+      extras.merken(sid, f.path, f.stem, z.extraArt, z.staffel);
+      db.prepare("UPDATE extras SET von_hand = 1 WHERE path = ?").run(f.path);
+      return true;
+    }
+    case "folge": {
+      if (!z.showTmdb || z.staffel == null || z.episode == null) return false;
+      weg("movies");
+      weg("extras");
+      const ziel = findOrCreateShowForTmdb(db, z.showTmdb, cleanShowTitle(showSourceName(root, f.path)), now);
+      dateiPlatzieren(db, ziel, z.staffel, z.episode, f.path, f.stem, now);
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * Handentscheidung für EINE Datei sofort umsetzen (Zuordnungs-Fenster →
+ * „Übernehmen"), statt bis zum nächsten Scan zu warten. Derselbe Code wie im
+ * Scan — es gibt nur eine Wahrheit.
+ */
+export function zuordnungSofort(path) {
+  const db = openDb();
+  const z = zuordnung.fuer(path);
+  if (!z) return false;
+  const lib = listLibraries()
+    .filter((l) => liegtUnter(path, l.path))
+    .sort((a, b) => b.path.length - a.path.length)[0];
+  const name = basename(path);
+  const f = { path, name, stem: fileStem(name), dir: dirname(path) };
+  return handentscheidung(db, lib?.path ?? dirname(path), f, z, 1, Date.now());
+}
+
 function indexShows(db, root, now) {
   let n = 0;
-  for (const f of walkVideos(root)) {
+  /* Bonusmaterial ohne Folgennummer — erst NACH der Schleife zuordnen, wenn
+     alle Serien dieses Ordners sicher angelegt sind (die Reihenfolge, in der
+     Ordner durchlaufen werden, ist nicht garantiert). */
+  const bonus = [];
+  const filmUeb = filmUeberschreibungen();
+  const hand = zuordnung.alle();
+  const jeOrdner = new Map();
+  const dateien = [...walkVideos(root)];
+  for (const f of dateien) jeOrdner.set(f.dir, (jeOrdner.get(f.dir) ?? 0) + 1);
+  for (const f of dateien) {
+    // per „Ist ein Film" aus einer Serie herausgelöst → steht schon in movies
+    if (filmUeb.size && filmUeb.has(kleinPfad(f.path))) continue;
+
+    /* Handentscheidung zuerst — sie kann eine Datei zur Folge einer ganz
+       anderen Serie machen, zum Bonusmaterial oder Film erklären oder
+       ausblenden. Ohne diesen Block ließ sich eine falsch zugeordnete
+       Sprach-/Qualitätsfassung nicht wieder loswerden. */
+    const z = hand.get(f.path);
+    if (z && handentscheidung(db, root, f, z, jeOrdner.get(f.dir), now)) {
+      n++;
+      continue;
+    }
+
     let sourceName = showSourceName(root, f.path);
     // LETZTE SICHERUNG gegen Müll-Titel: Ergibt der Ordner keinen brauchbaren
     // Namen (Release-Seite, nur Ziffern, nur eine Domain-Endung), zählt der
@@ -390,7 +631,8 @@ function indexShows(db, root, now) {
     const pl = placementFor(f.path);
     if (pl) {
       const target = findOrCreateShowForTmdb(db, pl.show_tmdb, cleanShowTitle(sourceName), now);
-      upsertEpisode(db, target, pl.season, pl.episode, f.path, episodeTitleFromFile(f.stem), null, now);
+      db.prepare("DELETE FROM movies WHERE path = ?").run(f.path);
+      dateiPlatzieren(db, target, pl.season, pl.episode, f.path, f.stem, now);
       n++;
       continue;
     }
@@ -416,17 +658,26 @@ function indexShows(db, root, now) {
       // Zweite Chance über den Staffelordner (…/Staffel 2/irgendwas.mkv)
       const hint = parseSeasonFromDir(parentDir);
       if (hint != null && parsed?.episode != null) season = hint;
-      else continue; // nicht erkennbar → wird übersprungen (wie am Desktop)
+      else {
+        /* Keine Folgennummer. Liegt die Datei in einem Staffel- oder
+           Bonusordner, ist es Zusatzmaterial der Serie — sonst wird sie
+           übersprungen (wie am Desktop). */
+        if (istSerienBeiwerk(root, f.path)) bonus.push(f);
+        continue;
+      }
     }
 
     const title = cleanShowTitle(sourceName);
     const { year } = parseTitleYear(sourceName);
     const showId = findOrCreateShow(db, key, title || sourceName, year, showFolderOf(root, f.path), now);
+    // „Serien & Filme": war die Datei vorher ein Film, darf sie nicht doppelt auftauchen.
+    db.prepare("DELETE FROM movies WHERE path = ?").run(f.path);
     upsertEpisode(db, showId, season, episode, f.path, episodeTitleFromFile(f.stem), parsed?.episodeEnd ?? null, now);
     n++;
     scanState.current = n;
     if (n % 25 === 0) scanState.message = `Folgen indiziert: ${n}`;
   }
+  for (const f of bonus) if (merkeExtra(db, root, f.path, f.stem)) n++;
   return n;
 }
 
@@ -492,7 +743,8 @@ function pruneMissing(db, foundPerLibrary = new Map()) {
       }
       // existiert, lieferte aber nichts — hatten wir vorher etwas davon?
       if ((foundPerLibrary.get(l.path) ?? 0) > 0) return false;
-      const quelle = l.kind === "movie" ? alleFilmPfade : alleFolgenPfade;
+      const quelle =
+        l.kind === "movie" ? alleFilmPfade : l.kind === "mixed" ? [...alleFilmPfade, ...alleFolgenPfade] : alleFolgenPfade;
       const had = quelle.filter((p) => liegtUnter(p, l.path)).length;
       if (had > 0) {
         console.warn(
@@ -538,6 +790,8 @@ function pruneMissing(db, foundPerLibrary = new Map()) {
   }
   db.exec("DELETE FROM shows WHERE id NOT IN (SELECT DISTINCT show_id FROM episodes)");
   db.exec("DELETE FROM show_keys WHERE show_id NOT IN (SELECT id FROM shows)");
+  // Bonusmaterial, dessen Datei (oder Serie) weg ist
+  extras.aufraeumen(isOffline);
 }
 
 /** Serien, die auf derselben TMDb-ID gelandet sind, zusammenführen. */
@@ -550,6 +804,8 @@ function mergeShowsByTmdb(db) {
     const survivor = rows[0].id;
     for (const r of rows.slice(1)) {
       db.prepare("UPDATE episodes SET show_id=? WHERE show_id=?").run(survivor, r.id);
+      // Bonusmaterial wandert mit — sonst verschwänden die Reiter beim Zusammenlegen
+      db.prepare("UPDATE extras SET show_id=? WHERE show_id=?").run(survivor, r.id);
       db.prepare("UPDATE OR IGNORE favorites SET ref_id=? WHERE media_type='show' AND ref_id=?").run(survivor, r.id);
       // Reste, die wegen des UNIQUE-Schlüssels nicht umgehängt werden konnten
       // (beide Serien standen im selben Profil auf „Meine Liste“), aufräumen.
@@ -579,6 +835,9 @@ function mergeShowsByTmdb(db) {
 
 /** Gemerkte Zuordnung für eine Filmdatei (über den stabilen Namens-Key). */
 function movieOverride(path) {
+  // Eine Handentscheidung „das ist Film X" gilt vor allem anderen.
+  const z = zuordnung.fuer(path);
+  if (z?.ziel === "film" && z.tmdbId) return z.tmdbId;
   const key = movieKey(fileStem(basename(path)));
   return identityOverride("movie", key);
 }
@@ -878,6 +1137,8 @@ async function probeMissing(db, limit = 400) {
   const rows = [
     ...db.prepare("SELECT 'movie' t, id, path FROM movies WHERE duration IS NULL OR width IS NULL LIMIT ?").all(limit),
     ...db.prepare("SELECT 'episode' t, id, path FROM episodes WHERE duration IS NULL OR width IS NULL LIMIT ?").all(limit),
+    // Bonusmaterial: für die Qualitätsanzeige und die Direktwiedergabe im Browser
+    ...db.prepare("SELECT 'extra' t, id, path FROM extras WHERE duration IS NULL LIMIT ?").all(limit),
   ];
   // Zweitdateien (Qualitätsvarianten) IMMER mitprüfen — auch wenn oben nichts
   // offen ist. Vorher stand hier ein vorzeitiges return, wodurch nachträglich
@@ -891,7 +1152,7 @@ async function probeMissing(db, limit = 400) {
     scanState.current = i + 1;
     const info = await ffprobe(r.path);
     if (!info) continue;
-    const table = r.t === "movie" ? "movies" : "episodes";
+    const table = r.t === "movie" ? "movies" : r.t === "extra" ? "extras" : "episodes";
     const aspect = info.width && info.height ? info.width / info.height : null;
     db.prepare(
       `UPDATE ${table} SET duration=?, vcodec=?, acodec=?, container=?, width=?, height=?, aspect=? WHERE id=?`,
@@ -956,10 +1217,14 @@ export function removeLibraryContent(libPath, kind) {
   const db = openDb();
   const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
   const prefix = norm(libPath) + "/";
-  if (kind === "movie") {
+  if (kind === "movie" || kind === "mixed") {
     const del = db.prepare("DELETE FROM movies WHERE id = ?");
     for (const r of db.prepare("SELECT id, path FROM movies").all()) if (norm(r.path).startsWith(prefix)) del.run(r.id);
-  } else {
+  }
+  if (kind !== "movie") {
+    for (const r of db.prepare("SELECT id, path FROM extras").all()) {
+      if (norm(r.path).startsWith(prefix)) db.prepare("DELETE FROM extras WHERE id = ?").run(r.id);
+    }
     for (const r of db.prepare("SELECT id, path FROM episode_files").all()) {
       if (norm(r.path).startsWith(prefix)) db.prepare("DELETE FROM episode_files WHERE id = ?").run(r.id);
     }
@@ -967,6 +1232,7 @@ export function removeLibraryContent(libPath, kind) {
     for (const r of db.prepare("SELECT id, path FROM episodes").all()) if (norm(r.path).startsWith(prefix)) del.run(r.id);
     db.exec("DELETE FROM shows WHERE id NOT IN (SELECT DISTINCT show_id FROM episodes)");
     db.exec("DELETE FROM show_keys WHERE show_id NOT IN (SELECT id FROM shows)");
+    db.exec("DELETE FROM extras WHERE show_id NOT IN (SELECT id FROM shows)");
   }
 }
 
@@ -1009,7 +1275,14 @@ export async function scanLibrary() {
         continue;
       }
       setStage("index", `Durchsuche ${lib.path}`);
-      const n = lib.kind === "movie" ? indexMovies(db, lib.path, now) : indexShows(db, lib.path, now);
+      /* „Serien & Filme": erst die Folgen einsammeln (klare SxxEyy-Muster),
+         danach alles, was dabei nicht Folge oder Bonus wurde, als Film. */
+      const n =
+        lib.kind === "movie"
+          ? indexMovies(db, lib.path, now)
+          : lib.kind === "mixed"
+            ? indexShows(db, lib.path, now) + indexMovies(db, lib.path, now)
+            : indexShows(db, lib.path, now);
       foundPerLibrary.set(lib.path, n);
     }
 

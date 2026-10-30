@@ -20,10 +20,13 @@
 //   * „Meine Liste“ (Favoriten) wird mitsynchronisiert.
 //   * Fehler sind sichtbar (Statuszeile in den Einstellungen) statt nur im Log.
 // ============================================================================
+import { IS_WEB } from "./platform";
+import { useStore } from "./store";
+import { invoke } from "./backend";
 import { createClient, type SupabaseClient, type Session } from "@supabase/supabase-js";
 import {
   getSetting, setSetting, listProgress, applyRemoteProgress, listFavorites, listMovies, listShows,
-  toggleFavorite, type RemoteProgressRow,
+  type RemoteProgressRow,
 } from "./api";
 
 let client: SupabaseClient | null = null;
@@ -32,6 +35,7 @@ let initialized = false;
 // ── Verbindung ──────────────────────────────────────────────────────────────
 
 export async function initSupabase(): Promise<SupabaseClient | null> {
+  if (IS_WEB) return null; // Der NAS-Server synchronisiert zentral für alle Browser.
   if (initialized) return client;
   initialized = true;
   const url = (await getSetting("supabase_url"))?.trim();
@@ -106,6 +110,7 @@ export interface SupaProfile {
   id: string;
   name: string;
   avatar: string | null;
+  updated_at?: number;
 }
 
 export async function listProfiles(): Promise<SupaProfile[]> {
@@ -115,7 +120,7 @@ export async function listProfiles(): Promise<SupaProfile[]> {
   if (!user) return [];
   const { data, error } = await c
     .from("profiles")
-    .select("id,name,avatar")
+    .select("id,name,avatar,updated_at")
     .eq("user_id", user.id)
     .order("created_at");
   if (error) throw error;
@@ -128,9 +133,17 @@ export async function createProfile(name: string): Promise<SupaProfile> {
   if (!user) throw new Error("Nicht angemeldet");
   const { data, error } = await c
     .from("profiles")
-    .insert({ user_id: user.id, name })
-    .select("id,name,avatar")
+    .insert({ user_id: user.id, name, updated_at: Date.now() })
+    .select("id,name,avatar,updated_at")
     .single();
+  if (error) throw error;
+  return data as SupaProfile;
+}
+
+export async function updateProfile(id: string, name: string, avatar: string | null): Promise<SupaProfile> {
+  if (!name.trim() || name.trim().length > 40) throw Error("Bitte einen Namen mit 1 bis 40 Zeichen eingeben.");
+  const { data, error } = await requireClient().from("profiles")
+    .update({ name: name.trim(), avatar, updated_at: Date.now() }).eq("id", id).select("id,name,avatar,updated_at").single();
   if (error) throw error;
   return data as SupaProfile;
 }
@@ -179,7 +192,14 @@ export async function linkedCloudProfile(localId: string): Promise<string | null
 export async function ensureCloudProfile(localId: string, localName = "Lokal"): Promise<string | null> {
   const c = getClient();
   if (!c) return null;
-  if (isUuid(localId)) return localId;
+  if (isUuid(localId)) {
+    const { data, error } = await c.from("profiles").select("id").eq("id",localId).maybeSingle();
+    if (error) throw error;
+    if (data) return localId;
+    const remaining = await listProfiles();
+    if (remaining.length === 1) return remaining[0].id;
+    throw Error("Dieses Profil existiert nicht mehr. Bitte ein Profil auswählen.");
+  }
 
   const existing = await linkedCloudProfile(localId);
   if (existing) {
@@ -193,7 +213,7 @@ export async function ensureCloudProfile(localId: string, localName = "Lokal"): 
 
   const profiles = await listProfiles();
   const byName = profiles.find((p) => p.name.toLowerCase() === localName.toLowerCase());
-  const target = byName ?? profiles[0] ?? (await createProfile(localName || "Standard"));
+  const target = byName ?? (profiles.length === 1 ? profiles[0] : await createProfile(localName || "Standard"));
   await saveLink(localId, target.id);
   return target.id;
 }
@@ -230,8 +250,14 @@ export async function syncProgress(
 
   // 1) holen
   let pulled = 0;
-  const { data, error } = await c.from("watch_progress").select("*").eq("profile_id", cloudId);
-  if (error) throw error;
+  const data: RemoteRow[] = [];
+  for (let start = 0; ; start += 500) {
+    const { data: page, error } = await c.from("watch_progress").select("*").eq("profile_id", cloudId)
+      .order("media_type").order("tmdb_id").order("season").order("episode").range(start, start + 499);
+    if (error) throw error;
+    data.push(...(page as RemoteRow[]));
+    if (page.length < 500) break;
+  }
   if (data?.length) {
     const rows: RemoteProgressRow[] = (data as RemoteRow[]).map((r) => ({
       mediaType: r.media_type,
@@ -250,7 +276,7 @@ export async function syncProgress(
   // 2) schieben — der komplette lokale Stand, nicht nur Änderungen. Bei diesen
   //    Datenmengen unkritisch und robust gegen jeden Zeigerfehler.
   const local = await listProgress(localProfileId);
-  const toPush = local
+  const candidates = local
     .filter((p) => p.tmdbId != null)
     .map((p) => ({
       profile_id: cloudId,
@@ -263,6 +289,15 @@ export async function syncProgress(
       watched: p.watched,
       updated_at: p.updatedAt,
     }));
+  // Mehrere Dateiversionen eines Films teilen denselben Cloud-Schlüssel.
+  // Doppelte Schlüssel in einem Upsert lehnt PostgreSQL als Ganzes ab.
+  const unique = new Map<string, (typeof candidates)[number]>();
+  for (const row of candidates) {
+    const key = [row.media_type, row.tmdb_id, row.season, row.episode].join(":");
+    const previous = unique.get(key);
+    if (!previous || row.updated_at > previous.updated_at) unique.set(key, row);
+  }
+  const toPush = [...unique.values()];
   if (toPush.length) {
     // in Häppchen, damit sehr große Bibliotheken nicht an Größenlimits scheitern
     for (let i = 0; i < toPush.length; i += 500) {
@@ -273,7 +308,9 @@ export async function syncProgress(
     }
   }
 
-  await syncFavorites(localProfileId, cloudId).catch((e) => console.warn("[supabase] Favoriten:", e));
+  await syncFavorites(localProfileId, cloudId);
+  const profile = (await listProfiles()).find(p => p.id === cloudId);
+  if (profile && useStore.getState().profileId === localProfileId) useStore.getState().setProfile(localProfileId,profile.name,profile.avatar);
   await touchDevice().catch(() => {});
   return { pushed: toPush.length, pulled };
 }
@@ -288,48 +325,42 @@ export async function countLocalProgress(localProfileId: string): Promise<number
 
 /** Favoriten in TMDb-Koordinaten abgleichen (beide Richtungen, additiv). */
 export async function syncFavorites(localProfileId: string, cloudId: string): Promise<void> {
-  const c = getClient();
-  if (!c) return;
-  const [favs, movies, shows] = await Promise.all([listFavorites(localProfileId), listMovies(), listShows()]);
-  const movieById = new Map(movies.map((m) => [m.id, m]));
-  const showById = new Map(shows.map((s) => [s.id, s]));
-
-  // hoch
-  const rows = favs
-    .map((f) => {
-      const tmdbId = f.mediaType === "movie" ? movieById.get(f.refId)?.tmdbId : showById.get(f.refId)?.tmdbId;
-      return tmdbId
-        ? {
-            profile_id: cloudId,
-            media_type: f.mediaType,
-            tmdb_id: tmdbId,
-            added_at: f.addedAt,
-            removed: false,
-            updated_at: f.addedAt,
-          }
-        : null;
-    })
-    .filter((r): r is NonNullable<typeof r> => r !== null);
-  if (rows.length) {
-    await c.from("watch_favorites").upsert(rows, { onConflict: "profile_id,media_type,tmdb_id" });
-  }
-
-  // runter — was in der Cloud steht, aber lokal fehlt
-  const { data } = await c.from("watch_favorites").select("*").eq("profile_id", cloudId).eq("removed", false);
-  if (!data?.length) return;
-  const haveMovie = new Set(rows.filter((r) => r.media_type === "movie").map((r) => r.tmdb_id));
-  const haveShow = new Set(rows.filter((r) => r.media_type === "show").map((r) => r.tmdb_id));
-  for (const r of data as { media_type: "movie" | "show"; tmdb_id: number }[]) {
-    if (r.media_type === "movie") {
-      if (haveMovie.has(r.tmdb_id)) continue;
-      const m = movies.find((x) => x.tmdbId === r.tmdb_id);
-      if (m) await toggleFavorite(localProfileId, "movie", m.id).catch(() => {});
-    } else {
-      if (haveShow.has(r.tmdb_id)) continue;
-      const s = shows.find((x) => x.tmdbId === r.tmdb_id);
-      if (s) await toggleFavorite(localProfileId, "show", s.id).catch(() => {});
+  const c = getClient(); if (!c) return;
+  const [favs,movies,shows] = await Promise.all([listFavorites(localProfileId),listMovies(),listShows()]);
+  type Row = {profile_id:string;media_type:"movie"|"show";tmdb_id:number;added_at:number;removed:boolean;updated_at:number};
+  const journalKey = "favorite_sync_" + localProfileId;
+  const journal: Record<string,Row> = JSON.parse((await getSetting(journalKey)) || "{}");
+  const local = favs.flatMap(f => {
+    const tmdbId=(f.mediaType === "movie" ? movies : shows).find(m=>m.id===f.refId)?.tmdbId;
+    return tmdbId ? [{profile_id:cloudId,media_type:f.mediaType,tmdb_id:tmdbId,added_at:f.addedAt,removed:false,updated_at:f.addedAt}] : [];
+  });
+  const rows = new Map(local.map(r=>[r.media_type+":"+r.tmdb_id,r]));
+  for(const [k,r] of Object.entries(journal)) if(!rows.has(k)||r.updated_at>=rows.get(k)!.updated_at)rows.set(k,{...r,profile_id:cloudId});
+  const payload=[...rows.values()];
+  for(let i=0;i<payload.length;i+=500){const {error}=await c.from("watch_favorites").upsert(payload.slice(i,i+500),{onConflict:"profile_id,media_type,tmdb_id"});if(error)throw error;}
+  for(let start=0;;start+=500){
+    const {data,error}=await c.from("watch_favorites").select("*").eq("profile_id",cloudId).order("media_type").order("tmdb_id").range(start,start+499);
+    if(error)throw error;
+    for(const r of data as Row[]){
+      const k=r.media_type+":"+r.tmdb_id;
+      if(rows.has(k)&&rows.get(k)!.updated_at>r.updated_at)continue;
+      // Die vor dem Netzabruf gelesene Liste kann durch einen Benutzerklick
+      // inzwischen veraltet sein. Neuere lokale Änderungen behalten Vorrang.
+      const [rawCurrent,currentFavorites]=await Promise.all([getSetting(journalKey),listFavorites(localProfileId)]);
+      const current:Record<string,Row>=JSON.parse(rawCurrent||"{}");
+      if(current[k]&&current[k].updated_at>r.updated_at){journal[k]=current[k];continue;}
+      const media=(r.media_type==="movie"?movies:shows).find(m=>m.tmdbId===r.tmdb_id);
+      if(media){const present=currentFavorites.some(f=>f.mediaType===r.media_type&&f.refId===media.id);
+        if(present===r.removed)await invoke("toggle_favorite",{profileId:localProfileId,mediaType:r.media_type,refId:media.id});}
+      // Nicht lokal vorhandene Medien bleiben ebenfalls für spätere Scans erhalten.
+      journal[k]=r;
     }
+    if(data.length<500)break;
   }
+  // Während des Netzabrufs erfolgte Klicks dürfen nicht verloren gehen.
+  const newer=JSON.parse((await getSetting(journalKey))||"{}");
+  for(const [k,r]of Object.entries(newer) as [string,Row][])if(!journal[k]||r.updated_at>journal[k].updated_at)journal[k]=r;
+  await setSetting(journalKey,JSON.stringify(journal));
 }
 
 // ── Geräteliste (welches Gerät hat wann abgeglichen) ────────────────────────

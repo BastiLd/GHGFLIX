@@ -103,7 +103,7 @@ export function openDb() {
     CREATE TABLE IF NOT EXISTS libraries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       path TEXT NOT NULL UNIQUE,
-      kind TEXT NOT NULL CHECK (kind IN ('show','movie')),
+      kind TEXT NOT NULL CHECK (kind IN ('show','movie','mixed')),
       name TEXT,
       added_at INTEGER NOT NULL
     );
@@ -171,7 +171,43 @@ export function openDb() {
       file TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
+    -- ── Bonusmaterial, Notizen, Handentscheidungen (wie src-tauri/src/db.rs) ──
+    -- Zusatzmaterial einer Serie (Bloopers, Hinter den Kulissen, Specials …).
+    -- Die Technik-Spalten braucht der Server zusätzlich zum Streamen.
+    CREATE TABLE IF NOT EXISTS extras (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+      path TEXT NOT NULL UNIQUE,
+      titel TEXT NOT NULL,
+      art TEXT NOT NULL,
+      staffel INTEGER,
+      von_hand INTEGER NOT NULL DEFAULT 0,
+      added_at INTEGER NOT NULL,
+      duration REAL,
+      vcodec TEXT, acodec TEXT, container TEXT, width INTEGER, height INTEGER,
+      aspect REAL,
+      tracks TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_extras_show ON extras(show_id);
+    -- Kurze Notizen am DATEIPFAD („ca. S6 zwischen Ep 4 und 5") — überleben
+    -- „Bibliothek neu aufbauen", weil sie nicht an einer Datenbank-ID hängen.
+    CREATE TABLE IF NOT EXISTS notizen (
+      path TEXT PRIMARY KEY,
+      text TEXT NOT NULL
+    );
+    -- EINE Handentscheidung pro Datei; schlägt jede Automatik.
+    -- ziel = 'folge' | 'film' | 'extra' | 'ignorieren'
+    CREATE TABLE IF NOT EXISTS zuordnung (
+      path TEXT PRIMARY KEY,
+      ziel TEXT NOT NULL,
+      show_tmdb INTEGER,
+      staffel INTEGER,
+      episode INTEGER,
+      extra_art TEXT,
+      tmdb_id INTEGER
+    );
   `);
+  bibliotheksArtenErweitern(db);
   // column migrations for desktop-app parity (safe to re-run)
   const addCol = (table, ddl) => {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`); } catch { /* exists */ }
@@ -254,8 +290,41 @@ export function openDb() {
   }
   // `db` ist oben bereits gesetzt, openDb() ist also wiedereintrittsfähig —
   // die Migration darf getSetting/setSetting gefahrlos benutzen.
+  try { db.exec('ALTER TABLE profiles ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0'); } catch {}
+  db.exec(`CREATE TABLE IF NOT EXISTS favorite_sync (
+    profile_id INTEGER NOT NULL, media_type TEXT NOT NULL, tmdb_id INTEGER NOT NULL,
+    added_at INTEGER NOT NULL, removed INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL,
+    PRIMARY KEY(profile_id,media_type,tmdb_id))`);
   migrateTextProfiles(db);
   return db;
+}
+
+/**
+ * Bibliotheken dürfen auch „Serien & Filme" (mixed) sein — wie am Desktop.
+ *
+ * SQLite kann eine CHECK-Regel nicht nachträglich ändern. Ältere Datenbanken
+ * lassen deshalb nur 'show'/'movie' zu, und jeder Versuch, eine gemischte
+ * Bibliothek anzulegen, scheiterte. Die Tabelle wird hier EINMAL mit der
+ * erweiterten Regel neu angelegt; Inhalt und IDs bleiben erhalten.
+ */
+function bibliotheksArtenErweitern(db) {
+  const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='libraries'").get()?.sql ?? "";
+  if (!sql || sql.includes("'mixed'")) return;
+  db.exec(`
+    BEGIN;
+    CREATE TABLE libraries_neu (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      path TEXT NOT NULL UNIQUE,
+      kind TEXT NOT NULL CHECK (kind IN ('show','movie','mixed')),
+      name TEXT,
+      added_at INTEGER NOT NULL
+    );
+    INSERT INTO libraries_neu (id, path, kind, name, added_at) SELECT id, path, kind, name, added_at FROM libraries;
+    DROP TABLE libraries;
+    ALTER TABLE libraries_neu RENAME TO libraries;
+    COMMIT;
+  `);
+  console.log("[db] Bibliotheken dürfen jetzt auch „Serien & Filme“ gemischt enthalten");
 }
 
 export function listLibraries(kind) {
@@ -295,6 +364,8 @@ export function removeLibrary(id) {
 
 /** Numerische ID des Profils, das für nicht-numerische IDs einspringt. */
 function fallbackProfileId(db) {
+  const preferred = db.prepare("SELECT value FROM settings WHERE key='default_profile_id'").get()?.value;
+  if (preferred && db.prepare('SELECT id FROM profiles WHERE id=?').get(preferred)) return Number(preferred);
   const linked = db.prepare("SELECT id FROM profiles WHERE supabase_id IS NOT NULL ORDER BY id LIMIT 1").get();
   if (linked) return linked.id;
   const first = db.prepare("SELECT id FROM profiles ORDER BY id LIMIT 1").get();
@@ -310,6 +381,8 @@ function fallbackProfileId(db) {
 export function resolveProfile(raw) {
   const db = openDb();
   const s = String(raw ?? "").trim();
+  const cloud = db.prepare('SELECT id FROM profiles WHERE supabase_id=?').get(s);
+  if (cloud) return String(cloud.id);
   if (/^\d+$/.test(s)) {
     const hit = db.prepare("SELECT id FROM profiles WHERE id = ?").get(Number(s));
     if (hit) return String(hit.id);

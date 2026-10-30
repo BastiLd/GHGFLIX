@@ -1,8 +1,9 @@
 {
   "expo": {
-    "name": "GHGFlix",
+    "name": "GHGFlix Mobile",
     "slug": "ghgflix",
-    "version": "3.3.0",
+    "version": "3.5.0",
+    "icon": "./assets/app-icon.png",
     "orientation": "default",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0b0b0f",
@@ -12,12 +13,18 @@
       "backgroundColor": "#0b0b0f"
     },
     "plugins": [
-      ["expo-notifications", { "defaultChannel": "kanaele", "color": "#e50914" }],
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "kanaele",
+          "color": "#e50914"
+        }
+      ],
       "./plugins/withAndroidTv.js",
       [
         "expo-image-picker",
         {
-          "photosPermission": "GHGFlix verwendet das von dir gewählte Foto als Gruppenbild.",
+          "photosPermission": "GHGFlix verwendet das von dir gewÃ¤hlte Foto als Gruppenbild.",
           "cameraPermission": false,
           "microphonePermission": false
         }
@@ -30,7 +37,7 @@
     "ios": {
       "bundleIdentifier": "com.bastild.ghgflix",
       "supportsTablet": true,
-      "buildNumber": "1.1.0",
+      "buildNumber": "18",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
@@ -39,7 +46,7 @@
     },
     "android": {
       "package": "com.bastild.ghgflix",
-      "versionCode": 17
+      "versionCode": 18
     },
     "extra": {
       "eas": {

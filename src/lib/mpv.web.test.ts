@@ -73,3 +73,18 @@ it("publishes the real pause state after a seek replaces the source",async()=>{
   expect(events[events.length-1]).toBe(true);
   un();
 });
+
+it("playback and quality changes work when browser storage is blocked", async()=>{
+  vi.stubGlobal("localStorage", { getItem(){ throw new DOMException("Blocked", "SecurityError"); }, setItem(){ throw new DOMException("Blocked", "SecurityError"); } });
+  try {
+    mocks.invoke.mockResolvedValue({...info(1), height:2160});
+    await command("loadfile",["blocked-storage"]);
+    const {setProperty, webStreamQuality}=await import("./mpv");
+    await setProperty("ghg-quality","low");
+    expect(webStreamQuality()).toBe("low");
+    expect(document.querySelector("video")?.src).toContain("q=low");
+    await setProperty("ghg-quality","original");
+    expect(document.querySelector("video")?.getAttribute("src")).toBe("/video1");
+    await setProperty("ghg-quality","high");
+  } finally { vi.unstubAllGlobals(); }
+});

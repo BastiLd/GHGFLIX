@@ -14,6 +14,8 @@ import type { ScanProgress } from "../lib/types";
 import { Wordmark, ZigZag } from "./Brand";
 import { Mascot } from "./Mascot";
 import { Spinner, Toasts } from "./ui";
+import { refreshActiveProfile } from "../lib/profiles";
+import { MobileHeader, MobileNavigation } from "./MobileNavigation";
 
 const NAV = [
   { to: "/", label: "Start", icon: House, end: true },
@@ -39,6 +41,12 @@ function formatEta(sec: number): string {
 export function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const profileAvatar = useStore(s => s.profileAvatar);
+  useEffect(() => {
+    const refresh=()=>{void refreshActiveProfile().catch(()=>{});};
+    refresh(); const timer=window.setInterval(refresh,30000);window.addEventListener("focus",refresh);
+    return()=>{clearInterval(timer);window.removeEventListener("focus",refresh);};
+  },[]);
   const profileName = useStore((s) => s.profileName);
   const toast = useStore((s) => s.toast);
   const [scan, setScan] = useState<ScanProgress | null>(null);
@@ -192,11 +200,11 @@ export function Layout() {
 
   return (
     <div
-      className="app-shell flex h-screen bg-ghg-bg text-ghg-text overflow-hidden"
+      className="app-shell ghg-layout flex h-screen bg-ghg-bg text-ghg-text overflow-hidden"
       style={mini ? { clipPath: miniClipPath(miniSize) } : undefined}
     >
       {/* Sidebar (full or icon-only compact mode) */}
-      <aside className={clsx("app-sidebar shrink-0 bg-ghg-bg2 border-r border-ghg-line flex flex-col", compact ? "w-16" : "w-60")}>
+      <aside className={clsx("app-sidebar desktop-sidebar shrink-0 bg-ghg-bg2 border-r border-ghg-line flex flex-col", compact ? "w-16" : "w-60")}>
         <div className={compact ? "px-3 py-6 flex justify-center" : "px-5 py-6"}>
           {compact ? <ZigZag className="h-2 w-8" /> : <Wordmark />}
         </div>
@@ -257,8 +265,8 @@ export function Layout() {
             compact ? "justify-center px-0 py-2" : "px-3 py-2.5",
           )}
         >
-          <div className="w-9 h-9 rounded-lg bg-ghg-red flex items-center justify-center shrink-0">
-            <User className="w-5 h-5" />
+          <div className={`w-9 h-9 rounded-full overflow-hidden flex items-center justify-center shrink-0 ${profileAvatar?'':'bg-ghg-red'}`}>
+            {profileAvatar ? <img src={profileAvatar} alt="" className="w-full h-full object-cover"/> : <User className="w-5 h-5" />}
           </div>
           {!compact && (
             <div className="min-w-0">
@@ -278,7 +286,8 @@ export function Layout() {
 
       {/* Main */}
       <div className="app-content flex-1 flex flex-col min-w-0 min-h-0">
-        <header className="h-16 shrink-0 flex items-center gap-4 px-8 border-b border-ghg-line bg-ghg-bg/80 backdrop-blur">
+        <MobileHeader />
+        <header className="desktop-header h-16 shrink-0 flex items-center gap-4 px-8 border-b border-ghg-line bg-ghg-bg/80 backdrop-blur">
           <div className="relative flex-1 max-w-md">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-ghg-muted" />
             <input
@@ -365,6 +374,7 @@ export function Layout() {
       </div>
 
       <Mascot />
+      <MobileNavigation />
       <Toasts />
     </div>
   );

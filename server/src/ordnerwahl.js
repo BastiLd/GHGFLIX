@@ -202,7 +202,7 @@ export function apply({ root, kind, accept = [], reject = [] }) {
     if (deckend) {
       libraryId = deckend.id;
     } else {
-      const lib = addLibrary(normalize(root), kind === "movie" ? "movie" : "show", basename(root) || null);
+      const lib = addLibrary(normalize(root), kind === "movie" || kind === "mixed" ? kind : "show", basename(root) || null);
       libraryId = lib.id;
       libraryCreated = true;
     }

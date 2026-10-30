@@ -7,25 +7,24 @@
  *
  * MASSE UND FERNSEHER
  * Ein Fernseher steht drei Meter weg, ein Handy 30 cm. Deshalb skaliert die
- * Datei die wichtigsten Größen über `gross`: auf einem breiten Bildschirm
- * (ab 900 Punkten, also praktisch jeder Fernseher) werden Kacheln, Schriften
- * und Abstände größer. Ein einziger Satz Stile bedient damit beides.
+ * Datei die wichtigsten Größen über `gross`: im eigenen TV-Produkt werden
+ * Kacheln, Schriften und Abstände größer. Die Fensterbreite entscheidet
+ * nicht mehr darüber, welches Produkt angezeigt wird.
  */
-import { Dimensions, Platform, StyleSheet } from "react-native";
+import { Dimensions, StyleSheet } from "react-native";
+import { istTVProdukt } from "./produkt.js";
 
 const fenster = Dimensions.get("window");
-/** true auf Fernsehern und Tablets im Querformat. */
-export const gross = Math.max(fenster.width, fenster.height) >= 900;
+/** Ausschließlich der separate TV-Build verwendet die Fernseh-Maße. */
+export const gross = istTVProdukt;
 
 /**
  * Läuft die App auf einem Fernseher?
  *
- * React Native setzt `Platform.isTV` unter Android anhand des Gerätemodus
- * (UI_MODE_TYPE_TELEVISION) — auf einem Google-TV also zuverlässig true, auf
- * einem Handy false. Als zweites Merkmal ein sehr breiter Bildschirm, damit
- * auch ein an den Fernseher angeschlossener Stick richtig erkannt wird.
+ * Seit der Trennung entscheidet die Build-Variante. Ein breites Tablet oder
+ * ein gedrehtes Handy darf nicht versehentlich in die TV-Bedienung wechseln.
  */
-export const istTV = Platform.isTV === true || fenster.width >= 1200;
+export const istTV = istTVProdukt;
 
 /**
  * Schmales Gerät (Handy im Hochformat).
@@ -36,7 +35,7 @@ export const istTV = Platform.isTV === true || fenster.width >= 1200;
  * mitten im Wort umbrachen („Weitersch auen", „Serv er wech seln"). Deshalb
  * bekommt ein schmales Gerät die Navigation unten, wie bei Netflix.
  */
-export const istHandy = !istTV && Math.min(fenster.width, fenster.height) < 600;
+export const istHandy = !istTV;
 
 /** Farbpalette – identisch zur Desktop-App. */
 export const C = {
@@ -54,19 +53,19 @@ export const C = {
 
 /** Maße, die zwischen Handy und Fernseher wechseln. */
 export const M = {
-  posterB: gross ? 168 : 118,
-  posterH: gross ? 252 : 177,
-  breitB: gross ? 300 : 218,
-  breitH: gross ? 169 : 123,
-  rand: istTV ? 28 : gross ? 40 : 16,
-  luecke: gross ? 16 : 12,
-  heroH: istTV ? 340 : gross ? 460 : 300,
-  navBreit: istTV ? 190 : gross ? 230 : 190,
+  posterB: gross ? 124 : 108,
+  posterH: gross ? 186 : 162,
+  breitB: gross ? 220 : 192,
+  breitH: gross ? 124 : 108,
+  rand: gross ? 22 : 16,
+  luecke: gross ? 12 : 10,
+  heroH: gross ? Math.min(260, Math.max(200, fenster.height * .36)) : 274,
+  navBreit: gross ? 230 : 190,
   navSchmal: gross ? 76 : 64,
-  titel: istTV ? 28 : gross ? 34 : 22,
-  reiheTitel: istTV ? 18 : gross ? 22 : 15,
-  kachelTitel: gross ? 15 : 12,
-  klein: gross ? 13 : 11,
+  titel: gross ? 28 : 23,
+  reiheTitel: gross ? 19 : 16,
+  kachelTitel: gross ? 14 : 12,
+  klein: gross ? 12 : 11,
 };
 
 export const st = StyleSheet.create({
@@ -87,9 +86,9 @@ export const st = StyleSheet.create({
     // Der äußere SafeAreaView berücksichtigt den tatsächlichen Gestenbereich.
     paddingBottom: 8,
   },
-  untenEintrag: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 2 },
+  untenEintrag: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 4, minHeight: 44 },
   untenSymbol: { fontSize: 21, lineHeight: 25, marginBottom: 3 },
-  untenText: { fontSize: 10.5, fontWeight: "700", letterSpacing: 0.2 },
+  untenText: { fontSize: 10, fontWeight: "600", letterSpacing: 0.2 },
   /* Der Zähler sitzt als kleine Blase am Symbol — für „Filme 65" ist unten
      kein Platz, und als eigene Zeile würde er die Leiste zu hoch machen. */
   untenBlase: {
@@ -155,52 +154,49 @@ export const st = StyleSheet.create({
   /* ── Kopfbild ──────────────────────────────────────────────────────── */
   hero: { height: M.heroH, position: "relative" },
   heroBild: { width: "100%", height: M.heroH, backgroundColor: C.bg2 },
-  heroText: { position: "absolute", left: M.rand, right: M.rand, bottom: gross ? 34 : 14 },
+  heroText: { position: "absolute", left: M.rand, right: M.rand, bottom: gross ? 25 : 22 },
   heroTitel: {
-    color: C.text, fontSize: gross ? 46 : 26, fontWeight: "900",
+    color: C.text, fontSize: gross ? 32 : 26, fontWeight: "800",
     textShadowColor: "#000", textShadowRadius: 10, marginBottom: 4,
   },
-  heroMeta: { color: C.red, fontSize: gross ? 15 : 12, fontWeight: "700", marginBottom: 6 },
+  heroMeta: { color: "#e0c9cb", fontSize: gross ? 12 : 11, fontWeight: "600", marginBottom: 6 },
   heroBeschreibung: {
-    color: "#d8d8e2", fontSize: gross ? 15 : 12, lineHeight: gross ? 22 : 17,
-    maxWidth: gross ? 780 : undefined,
+    color: "#d8d8e2", fontSize: gross ? 14 : 12, lineHeight: gross ? 19 : 17,
+    maxWidth: gross ? 560 : undefined,
   },
-  heroKnopfReihe: { flexDirection: "row", gap: 12, marginTop: gross ? 18 : 12 },
+  heroKnopfReihe: { flexDirection: "row", gap: 8, marginTop: 10 },
 
   /* ── Knöpfe ────────────────────────────────────────────────────────── */
   knopf: {
     backgroundColor: C.surface2,
-    borderRadius: 10,
-    paddingHorizontal: gross ? 22 : 16,
-    paddingVertical: gross ? 13 : 10,
+    borderRadius: 7,
+    paddingHorizontal: gross ? 14 : 12,
+    paddingVertical: 6,
     borderWidth: 2,
     borderColor: "transparent",
+    minHeight: gross ? 36 : 38,
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 6,
   },
   knopfHaupt: { backgroundColor: C.red },
-  knopfText: { color: C.text, fontWeight: "800", fontSize: gross ? 16 : 13 },
+  knopfText: { color: C.text, fontWeight: "700", fontSize: gross ? 14 : 13 },
   knopfTextHaupt: { color: C.weiss },
 
   /* ── DIE MARKIERUNG ────────────────────────────────────────────────────
      Ein Rahmen allein ist auf drei Meter zu wenig. Deshalb: kräftiger
-     weißer Rahmen, leichte Aufhellung und ein Schatten, der die Kachel
-     vom Hintergrund abhebt. Die Rahmenbreite ist IMMER vorhanden (nur
+     weißer Rahmen und leichte Aufhellung. Androids Elevation erzeugt bei
+     transparenten Knöpfen störende Schatten innerhalb des Textes; deshalb
+     bleibt die Markierung flach. Die Rahmenbreite ist IMMER vorhanden (nur
      transparent), sonst würde beim Auswählen die ganze Reihe verrutschen. */
   fokus: {
     borderColor: C.weiss,
     backgroundColor: "#ffffff1f",
-    shadowColor: "#ffffff",
-    shadowOpacity: 0.55,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 12,
   },
 
   /* ── Kacheln ───────────────────────────────────────────────────────── */
   kachel: {
-    borderWidth: 3,
+    borderWidth: 2,
     borderColor: "transparent",
     borderRadius: 14,
     padding: 2,
@@ -208,12 +204,7 @@ export const st = StyleSheet.create({
   kachelFokus: {
     borderColor: C.weiss,
     backgroundColor: "#ffffff1a",
-    shadowColor: "#ffffff",
-    shadowOpacity: 0.6,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 14,
-    transform: [{ scale: 1.06 }],
+    transform: [{ scale: 1.015 }],
   },
   poster: { width: M.posterB, height: M.posterH, borderRadius: 10, backgroundColor: C.surface },
   breitBild: { width: M.breitB, height: M.breitH, borderRadius: 10, backgroundColor: C.surface },
@@ -247,14 +238,14 @@ export const st = StyleSheet.create({
   /* ── Reihen ────────────────────────────────────────────────────────── */
   reihenTitel: {
     color: C.text, fontSize: M.reiheTitel, fontWeight: "800",
-    paddingHorizontal: M.rand, marginTop: gross ? 26 : 18, marginBottom: gross ? 12 : 8,
+    paddingHorizontal: M.rand, marginTop: gross ? 20 : 16, marginBottom: 7,
   },
 
   /* ── Text ──────────────────────────────────────────────────────────── */
   h1: { color: C.text, fontSize: M.titel, fontWeight: "900" },
-  h2: { color: C.text, fontSize: gross ? 22 : 16, fontWeight: "800" },
-  fliess: { color: "#cfcfda", fontSize: gross ? 15 : 12.5, lineHeight: gross ? 23 : 19 },
-  gedaempft: { color: C.muted, fontSize: gross ? 14 : 12 },
+  h2: { color: C.text, fontSize: gross ? 18 : 15, fontWeight: "700" },
+  fliess: { color: "#cfcfda", fontSize: gross ? 14 : 13, lineHeight: gross ? 20 : 19 },
+  gedaempft: { color: "#a9abba", fontSize: gross ? 13 : 12 },
 
   /* ── Eingabefelder ─────────────────────────────────────────────────── */
   feld: {
@@ -282,12 +273,14 @@ export const st = StyleSheet.create({
   playerWurzel: { flex: 1, backgroundColor: "#000" },
   playerKopf: {
     position: "absolute", top: 0, left: 0, right: 0,
-    paddingHorizontal: M.rand, paddingTop: gross ? 30 : 20, paddingBottom: 40,
+    paddingHorizontal: M.rand, paddingTop: gross ? 20 : 16, paddingBottom: 12,
+    backgroundColor: "#00000099",
     flexDirection: "row", alignItems: "flex-start", gap: 14,
   },
   playerFuss: {
     position: "absolute", left: 0, right: 0, bottom: 0,
-    paddingHorizontal: M.rand, paddingBottom: gross ? 34 : 22, paddingTop: 60,
+    paddingHorizontal: M.rand, paddingBottom: gross ? 22 : 16, paddingTop: 10,
+    backgroundColor: "#000000aa",
   },
   balkenSpur: {
     height: 6, borderRadius: 3, backgroundColor: "#ffffff33", flex: 1,
@@ -302,20 +295,20 @@ export const st = StyleSheet.create({
   balkenRahmen: {
     flexDirection: "row", alignItems: "center", gap: 14,
     borderWidth: 2, borderColor: "transparent", borderRadius: 12,
-    paddingHorizontal: 10, paddingVertical: 10,
+    paddingHorizontal: 8, paddingVertical: 8,
   },
   playerZeit: { color: C.weiss, fontSize: gross ? 15 : 12, fontVariant: ["tabular-nums"], minWidth: gross ? 74 : 54 },
-  playerKnopfReihe: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: gross ? 14 : 10, marginTop: gross ? 16 : 10 },
+  playerKnopfReihe: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", alignItems: "center", gap: 6 },
   rundKnopf: {
-    minWidth: gross ? 62 : 50, height: gross ? 62 : 50, borderRadius: 14,
-    backgroundColor: "#ffffff1c", alignItems: "center", justifyContent: "center",
-    paddingHorizontal: gross ? 16 : 12, borderWidth: 3, borderColor: "transparent",
+    minWidth: 40, height: 40, borderRadius: 7,
+    backgroundColor: "#ffffff0c", alignItems: "center", justifyContent: "center",
+    paddingHorizontal: 9, borderWidth: 2, borderColor: "transparent",
     flexDirection: "row", gap: 6,
   },
   rundKnopfHaupt: { backgroundColor: C.red },
-  rundKnopfText: { color: C.weiss, fontWeight: "800", fontSize: gross ? 17 : 14 },
-  playerTitel: { color: C.weiss, fontSize: gross ? 24 : 17, fontWeight: "800" },
-  playerUnter: { color: "#c9c9d6", fontSize: gross ? 15 : 12, marginTop: 2 },
+  rundKnopfText: { color: C.weiss, fontWeight: "600", fontSize: 12 },
+  playerTitel: { color: C.weiss, fontSize: gross ? 19 : 15, fontWeight: "700" },
+  playerUnter: { color: "#c9c9d6", fontSize: gross ? 12 : 11, marginTop: 2 },
 
   /* ── Dialog ────────────────────────────────────────────────────────── */
   dialogHinter: {
@@ -325,7 +318,7 @@ export const st = StyleSheet.create({
   },
   dialogKasten: {
     backgroundColor: C.bg2, borderRadius: 16, borderWidth: 1, borderColor: C.line,
-    padding: gross ? 26 : 18, width: "100%", maxWidth: gross ? 720 : 520, maxHeight: "86%",
+    padding: gross ? 20 : 16, width: "100%", maxWidth: gross ? 500 : 440, maxHeight: "86%",
   },
 
   /* ── Sonstiges ─────────────────────────────────────────────────────── */

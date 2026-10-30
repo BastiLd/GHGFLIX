@@ -24,6 +24,7 @@ import Profiles from "./pages/Profiles";
 import SearchPage from "./pages/SearchPage";
 import Settings from "./pages/Settings";
 import Stats from "./pages/Stats";
+import More from "./pages/More";
 import ShowDetail from "./pages/ShowDetail";
 import Shows from "./pages/Shows";
 
@@ -34,19 +35,27 @@ function WebAuthGate({ children }: { children: React.ReactNode }) {
   const [pw, setPw] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [serverError, setServerError] = useState(false);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     if (!IS_WEB) return;
-    fetch("/api/ping")
-      .then((r) => r.json())
-      .then((r) => setNeeded(!!r.auth && !webToken()))
-      .catch(() => setNeeded(false));
+    setServerError(false);
+    let active = true;
+    const abort = new AbortController();
+    const timeout = window.setTimeout(() => abort.abort(), 10000);
+    fetch("/api/ping", { signal: abort.signal })
+      .then((r) => { if (!r.ok) throw new Error("Server nicht erreichbar"); return r.json(); })
+      .then((r) => { if (active) setNeeded(!!r.auth && !webToken()); })
+      .catch(() => { if (active) setServerError(true); })
+      .finally(() => window.clearTimeout(timeout));
     const onUnauthorized = () => setNeeded(true);
     window.addEventListener("ghgflix:unauthorized", onUnauthorized);
-    return () => window.removeEventListener("ghgflix:unauthorized", onUnauthorized);
-  }, []);
+    return () => { active = false; abort.abort(); window.clearTimeout(timeout); window.removeEventListener("ghgflix:unauthorized", onUnauthorized); };
+  }, [retry]);
 
-  if (needed === null) return null;
+  if (serverError) return <div className="h-screen grid place-items-center p-6"><div className="max-w-sm"><Wordmark size="lg"/><h1 className="text-2xl font-bold mt-8">Server nicht erreichbar</h1><p className="text-ghg-muted my-5">Prüfe deine Verbindung zum Heimnetz oder aktiviere Tailscale. Deine Bibliothek bleibt auf deinem Server gespeichert.</p><button className="bg-ghg-red rounded-xl px-5 py-3" onClick={() => setRetry(n => n + 1)}>Erneut verbinden</button></div></div>;
+  if (needed === null) return <div className="h-screen grid place-items-center"><p role="status" className="text-ghg-muted">Mit GHGFlix verbinden …</p></div>;
   if (!needed) return <>{children}</>;
 
   const submit = async () => {
@@ -101,6 +110,17 @@ export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const prefs = useUiPrefs();
+  useEffect(() => {
+    const refresh=()=>{void qc.invalidateQueries({queryKey:['progress']});void qc.invalidateQueries({queryKey:['favorites']});};
+    window.addEventListener('ghgflix:sync',refresh);
+    return()=>window.removeEventListener('ghgflix:sync',refresh);
+  },[qc]);
+
+  // Der Vollbildzustand gehoert nur dem Player. Auch automatische Rueckkehr,
+  // Browser-Zurueck und veraltete Player-Callbacks muessen ihn verlassen.
+  useEffect(() => {
+    if (!location.pathname.startsWith("/play/")) void getCurrentWindow().setFullscreen(false).catch(() => {});
+  }, [location.pathname]);
 
   // ONE document-level horizontal-wheel handler — cannot go stale on re-renders.
   useGlobalHorizontalWheel();
@@ -200,6 +220,7 @@ export default function App() {
           <Route path="/show/:id" element={<Fehlerfang schluessel={location.pathname}><ShowDetail /></Fehlerfang>} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/stats" element={<Stats />} />
+          <Route path="/more" element={<More />} />
           {/* Punkt 5: abonnierte YouTube-Kanäle plus Leaks/Blog */}
           <Route path="/kanaele" element={<Feeds />} />
           <Route path="/settings" element={<Settings />} />

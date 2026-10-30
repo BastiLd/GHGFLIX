@@ -15,27 +15,21 @@
  *      → Android hält die App auf einem Gerät ohne Touchscreen für zulässig
  *   3. android:banner → das Kachelbild im TV-Menü
  *
- * ── WARUM DAS BANNER JETZT DAS APP-SYMBOL IST ──────────────────────────────
- * Eine frühere Fassung kopierte ein eigenes 320×180-Bild nach
- * res/drawable/tv_banner.png und trug `@drawable/tv_banner` ins Manifest ein.
- * Kommt diese Datei beim Cloud-Build aus irgendeinem Grund NICHT an (der
- * android-Ordner wird beim Bauen neu erzeugt), verweist das Manifest auf eine
- * Ressource, die es nicht gibt — und Android bricht die App SOFORT BEIM START
- * ab: kurz schwarz, dann zurück ins Menü. Genau dieses Verhalten trat auf.
- *
- * `@mipmap/ic_launcher` ist das App-Symbol und existiert IMMER. Es sieht als
- * Kachel etwas schlichter aus, kann aber unmöglich fehlen. Stabilität geht
- * hier klar vor Optik.
+ * Das 320×180-Banner wird bei jedem Prebuild aus dem versionierten Asset
+ * kopiert. Eine nur im generierten android-Ordner vorhandene Bilddatei geht
+ * beim Neubau verloren und darf deshalb nicht die einzige Quelle sein.
  */
-const { withAndroidManifest } = require("expo/config-plugins");
+const { withAndroidManifest, withDangerousMod } = require("expo/config-plugins");
+const fs = require("node:fs");
+const path = require("node:path");
 
 /** <uses-feature ... required="false"> ergänzen, ohne Doppelte zu erzeugen. */
-function addUsesFeature(manifest, name) {
+function addUsesFeature(manifest, name, required = false) {
   manifest["uses-feature"] = manifest["uses-feature"] || [];
-  const exists = manifest["uses-feature"].some((f) => f?.$?.["android:name"] === name);
-  if (exists) return;
+  const exists = manifest["uses-feature"].find((f) => f?.$?.["android:name"] === name);
+  if (exists) { exists.$["android:required"] = String(required); return; }
   manifest["uses-feature"].push({
-    $: { "android:name": name, "android:required": "false" },
+    $: { "android:name": name, "android:required": String(required) },
   });
 }
 
@@ -49,20 +43,22 @@ function findLauncherActivity(application) {
   );
 }
 
-module.exports = function withAndroidTv(config) {
-  return withAndroidManifest(config, (cfg) => {
+module.exports = function withAndroidTv(config, options = { tv: true }) {
+  config = withAndroidManifest(config, (cfg) => {
     const manifest = cfg.modResults.manifest;
 
-    // 1) Gerätemerkmale: beides ausdrücklich NICHT erforderlich
-    addUsesFeature(manifest, "android.software.leanback");
+    const tv = options.tv !== false;
+    // Mobile erhält keinen TV-Launcher; nur der eigene TV-Build erscheint dort.
+    if (tv) addUsesFeature(manifest, "android.software.leanback", true);
+    else manifest["uses-feature"] = (manifest["uses-feature"] || []).filter((f) => f?.$?.["android:name"] !== "android.software.leanback");
     addUsesFeature(manifest, "android.hardware.touchscreen");
 
     const application = manifest.application?.[0];
     if (!application) return cfg;
 
-    // 2) Kachelbild: bewusst das App-Symbol — eine Ressource, die es garantiert
-    //    gibt (siehe Erklärung oben).
-    application.$["android:banner"] = "@mipmap/ic_launcher";
+    // 2) Das unten bei jedem Prebuild kopierte TV-Banner verwenden.
+    if (tv) application.$["android:banner"] = "@drawable/ghgflix_tv_banner";
+    else delete application.$["android:banner"];
 
     // 3) Unverschlüsseltes HTTP ausdrücklich erlauben.
     //    Ab Android 9 blockiert das System http:// standardmäßig — die App
@@ -85,11 +81,23 @@ module.exports = function withAndroidTv(config) {
         const has = filter.category.some(
           (c) => c?.$?.["android:name"] === "android.intent.category.LEANBACK_LAUNCHER",
         );
-        if (!has) {
+        if (tv && !has) {
           filter.category.push({ $: { "android:name": "android.intent.category.LEANBACK_LAUNCHER" } });
         }
+        if (!tv) filter.category = filter.category.filter((c) => c?.$?.["android:name"] !== "android.intent.category.LEANBACK_LAUNCHER");
       }
+      if (tv) activity.$["android:screenOrientation"] = "landscape";
+      else delete activity.$["android:screenOrientation"];
     }
     return cfg;
   });
+  if (options.tv !== false) config = withDangerousMod(config, ["android", async (cfg) => {
+    // Die Ressource wird bei JEDEM Prebuild kopiert, damit das Manifest niemals
+    // auf ein beim Neubau verlorenes Banner zeigt.
+    const target = path.join(cfg.modRequest.platformProjectRoot, "app/src/main/res/drawable/ghgflix_tv_banner.png");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(path.join(cfg.modRequest.projectRoot, "assets/tv-banner.png"), target);
+    return cfg;
+  }]);
+  return config;
 };
