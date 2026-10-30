@@ -1,4 +1,27 @@
-# GHGFlix auf den Fernseher bringen
+# GHGFlix TV ab Version 3.4
+
+Die TV-App ist jetzt ein eigenes Android-Produkt: `com.bastild.ghgflix.tv`,
+Querformat, Android-TV-Launcher mit Banner und eigenem Update-Runtime `tv-1`.
+Die Handy-App behält `com.bastild.ghgflix` und erhält keinen TV-Launcher.
+
+Lokaler Bau: im Ordner `../mobile` den Befehl `npm run build:tv` ausführen.
+Die Test-APK liegt anschließend unter `build/GHGFlix-TV-3.4.0-local.apk`.
+EAS-Bau: im selben Ordner `npx eas-cli build --platform android --profile tv`.
+Das Profil verwendet den Kanal `tv-preview`.
+
+Die neue TV-App wird zusätzlich zur bisherigen gemeinsamen App installiert.
+Der bisherige Server-Endpunkt `/apk` unterscheidet die Produkte noch nicht.
+Deshalb installiert die TV-App darüber keine automatischen APK-Updates.
+Die lokalen APKs verwenden einen Testschlüssel; sie sind kein signiertes
+Produktionsrelease.
+
+Details, tatsächliche Tests und Emulator-Vorschau:
+[TV_HANDY_TRENNUNG.md](../docs/TV_HANDY_TRENNUNG.md).
+
+## Historische Anleitung für die gemeinsame App bis 3.3
+
+Die folgende Anleitung dokumentiert den bisherigen gemeinsamen Build und
+dessen `/apk`-Verteilung. Für die getrennte TV-App gelten die Angaben oben.
 
 Geschrieben für einen **PeaQ Smart Google TV** — das ist ein Android-TV-Gerät
 mit Google-TV-Oberfläche. Alles hier gilt genauso für andere Android-TV- und

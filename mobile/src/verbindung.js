@@ -7,15 +7,16 @@
  * am Handy ist sie oft schneller, und für einen Server außerhalb des
  * Heimnetzes (Fernzugriff) gibt es keinen anderen Weg.
  */
+import * as Network from "expo-network";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Platform, ScrollView, Text, View } from "react-native";
 import { FKnopf, FokusReihe } from "./fokus.js";
 import { FFeld, Knopf, QrBild } from "./bausteine.js";
 import { C, M, gross, st } from "./stile.js";
-import { normUrl, ping, sucheServer } from "./netzsuche.js";
+import { netzTeil, normUrl, ping, sucheServer } from "./netzsuche.js";
 
 export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
-  const [zustand, setZustand] = useState("suche");   // suche | gefunden | hand
+  const [zustand, setZustand] = useState(gross ? "suche" : "hand");   // suche | gefunden | hand
   const [melde, setMelde] = useState("Server wird gesucht …");
   const [gefunden, setGefunden] = useState(null);
   const [adresse, setAdresse] = useState(conn?.manualUrl || conn?.list?.[0]?.url || "");
@@ -42,11 +43,13 @@ export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
     abbruchRef.current = false;
     setZustand("suche");
     setMelde("Server wird gesucht …");
+    let eigenesNetz = null;
+    if (Platform.OS !== "web") try { const ip=await Network.getIpAddressAsync(); if(ip!=="0.0.0.0") eigenesNetz=netzTeil(ip); } catch {}
     const t = await sucheServer(
       bekannte,
       setMelde,
       () => abbruchRef.current,
-      { zusatz: typeof zusatz === "string" && zusatz.trim() ? [zusatz] : [] },
+      { zusatz: [...(typeof zusatz === "string" && zusatz.trim() ? [zusatz] : []), ...(eigenesNetz ? [eigenesNetz] : [])] },
     );
     if (abbruchRef.current) return;
     if (t) {
@@ -60,7 +63,7 @@ export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
   }, [JSON.stringify(bekannte)]);
 
   useEffect(() => {
-    suchen();
+    if (gross || bekannte.length > 0) suchen();
     return () => { abbruchRef.current = true; };
   }, [suchen]);
 
@@ -75,10 +78,10 @@ export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
       const r = await fetch(`${basis}/api/pair/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ geraet: "Fernseher" }),
+        body: JSON.stringify({ geraet: gross ? "GHGFlix TV" : "GHGFlix Mobile" }),
       }).then((x) => x.json());
       if (!r?.code) { setHinweis(r?.error || "Der Server bietet keine Kopplung an."); return; }
-      setKopplung({ code: r.code, url: `${basis}/koppeln?code=${r.code}`, basis });
+      setKopplung({ code: r.code, abholToken: r.abholToken, url: `${basis}/koppeln?code=${r.code}`, basis });
       setZustand("koppeln");
     } catch {
       setHinweis("Der Server antwortet nicht mehr.");
@@ -91,7 +94,7 @@ export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
     let gestoppt = false;
     const sehen = async () => {
       try {
-        const r = await fetch(`${kopplung.basis}/api/pair/check?code=${kopplung.code}`)
+        const r = await fetch(`${kopplung.basis}/api/pair/check?code=${kopplung.code}&abholToken=${encodeURIComponent(kopplung.abholToken||"")}`)
           .then((x) => x.json());
         if (gestoppt) return;
         if (r?.status === "fertig" && r.token) {
@@ -201,7 +204,7 @@ export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
               {gefunden.info?.auth ? " · Passwort nötig" : ""}
             </Text>
 
-            {gefunden.info?.auth && !conn?.token && (
+            {gefunden.info?.auth && (
               <View style={{ marginBottom: 16 }}>
                 <Text style={[st.gedaempft, { marginBottom: 6 }]}>Server-Passwort</Text>
                 <FokusReihe zeile={0}>
@@ -231,7 +234,7 @@ export function VerbindungsScreen({ conn, aufSpeichern, aufAbbruch }) {
                   spalte={0}
                   onPress={() => !beschaeftigt && uebernehmen(gefunden.url, passwort)}
                 />
-                {gefunden.info?.auth && !conn?.token && (
+                {gefunden.info?.auth && (
                   <Knopf text="Mit Handy verbinden" symbol="📱" spalte={1}
                          onPress={() => kopplungStarten(gefunden.url)} />
                 )}

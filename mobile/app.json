@@ -1,18 +1,19 @@
 {
   "expo": {
-    "name": "GHGFlix",
+    "name": "GHGFlix Mobile",
     "slug": "ghgflix",
-    "version": "3.3.0",
+    "version": "3.4.0",
+    "icon": "./assets/app-icon.png",
     "orientation": "default",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0b0b0f",
     "newArchEnabled": false,
-    "runtimeVersion": "1",
+    "runtimeVersion": "mobile-2",
     "splash": {
       "backgroundColor": "#0b0b0f"
     },
     "plugins": [
-      "./plugins/withAndroidTv.js"
+      ["./plugins/withAndroidTv.js", { "tv": false }]
     ],
     "updates": {
       "url": "https://u.expo.dev/b14ed30d-3ecc-4465-ac79-7988b90ab0d8",
@@ -29,7 +30,7 @@
     },
     "android": {
       "package": "com.bastild.ghgflix",
-      "versionCode": 15
+      "versionCode": 16
     },
     "extra": {
       "eas": {

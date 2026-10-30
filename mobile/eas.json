@@ -16,7 +16,14 @@
       "channel": "preview",
       "android": {
         "buildType": "apk"
-      }
+      },
+      "env": { "EXPO_PUBLIC_APP_VARIANT": "mobile" }
+    },
+    "tv": {
+      "distribution": "internal",
+      "channel": "tv-preview",
+      "env": { "EXPO_PUBLIC_APP_VARIANT": "tv" },
+      "android": { "buildType": "apk" }
     },
     "production": {
       "autoIncrement": true,

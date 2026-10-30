@@ -93,7 +93,7 @@ export default function Movies() {
           <Film className="w-7 h-7 text-ghg-red" /> Filme
           <span className="text-base font-normal text-ghg-muted">({movies.length})</span>
         </h1>
-        <div className="flex items-center gap-3">
+        <div className="ghg-filterbar flex items-center gap-3">
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}

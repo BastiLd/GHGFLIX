@@ -343,6 +343,12 @@ export interface Extra {
   notiz?: string | null;
 }
 
+/** Ein Bonus-Eintrag samt Serie — für den Player. */
+export interface ExtraDetail extends Extra {
+  showTitle?: string | null;
+  artText: string;
+}
+
 /** Wohin eine Datei von Hand gehört. */
 export interface ZuordnungZiel {
   ziel: "folge" | "film" | "extra" | "ignorieren";

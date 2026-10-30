@@ -16,7 +16,8 @@
  * Die Bedienleiste ist ein festes Raster:
  *
  *     Zeile 0   [────────── Fortschrittsbalken ──────────]
- *     Zeile 1   [−10] [⏯] [+30] [Nächste] [Ton] [Untertitel] [Tempo] [Info]
+ *     Zeile 1   [−10 s] [Play/Pause] [+30 s] [Nächste Folge]
+ *     Zeile 2   [Sprache & Untertitel] [Optionen]
  *
  * ← → auf dem Balken springen im Video (der Balken behält die Tasten für
  * sich, siehe aufRichtung im Fokus-Kern). ↑ ↓ wechseln zwischen Balken und
@@ -41,12 +42,15 @@
  * NUR aus diesen gespeichert; jeder direkte Zugriff läuft über safe().
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Platform, Text, View } from "react-native";
-import { FKnopf, FokusReihe, useDialog, useFernbedienung, useFokusElement } from "./fokus.js";
+import { ActivityIndicator, BackHandler, Platform, Pressable, Text, View, useWindowDimensions } from "react-native";
+import { FKnopf, FokusReihe, useDialog, useFernbedienung, useFernbedienungVorher, useFokusElement, useFokusSystem } from "./fokus.js";
 import { C, M, gross, st } from "./stile.js";
 import { Dialog, DialogListe, fmtZeit } from "./bausteine.js";
 import { untertitelHolen } from "./untertitel.js";
-import { jetzt as einstellungenJetzt, waehleTon, waehleUntertitel } from "./einstellungen.js";
+import { erzeugeFortschrittsSicherung } from "./fortschritt-sicherung.js";
+import { jetzt as einstellungenJetzt, sichern as einstellungenSichern, waehleTon, waehleUntertitel } from "./einstellungen.js";
+import { Icon } from "./Icons.js";
+import { SpurenDialog } from "./SpurenDialog.js";
 
 /* ── expo-video vorsichtig laden ──────────────────────────────────────────
    Fehlt das Modul, soll die App eine verständliche Meldung zeigen statt
@@ -69,9 +73,14 @@ try { useKeepAwake = require("expo-keep-awake").useKeepAwake; } catch {}
 
 export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, nextEp }) {
   useKeepAwake();
-  const E = einstellungenJetzt();
+  const { width, height } = useWindowDimensions();
+  const kompakt = gross || width > height;
+  const fokusSystem = useFokusSystem();
+  const [E, setE] = useState(einstellungenJetzt);
+  const anpassen = (patch) => { const neu = { ...einstellungenJetzt(), ...patch }; setE(neu); einstellungenSichern(neu); };
 
   const [info, setInfo] = useState(null);
+  const [ladeFehler, setLadeFehler] = useState(null);
   const [resume, setResume] = useState(0);
   const [leisteAn, setLeisteAn] = useState(true);
   const [laeuft, setLaeuft] = useState(true);
@@ -89,6 +98,8 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   const [utSucher, setUtSucher] = useState(null);
   const [utText, setUtText] = useState(null);
   const [utLaedt, setUtLaedt] = useState(false);
+  const [utFehler, setUtFehler] = useState(null);
+  const [tonFehler, setTonFehler] = useState(null);
 
   const offsetRef = useRef(0);   // beim Umwandeln: Startpunkt des Datenstroms
   const modeRef = useRef("direct");
@@ -125,8 +136,12 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
         gemerkt && !gemerkt.watched && gemerkt.position > (E.fortsetzenAb || 30) &&
         gemerkt.position < (gemerkt.duration || 1e9) * 0.95
           ? gemerkt.position : 0;
-      modeRef.current = i.direct ? "direct" : "transcode";
-      offsetRef.current = i.direct ? 0 : bei;
+      // Die Server-Angabe beschreibt Browser. Android kann mit seinen nativen
+      // Decodern oft auch MKV/HEVC/E-AC3 direkt spielen. Erst ein echter
+      // Decoderfehler rechtfertigt die teure Umwandlung auf dem Server.
+      const direkt = i.direct || Platform.OS === "android";
+      modeRef.current = direkt ? "direct" : "transcode";
+      offsetRef.current = direkt ? 0 : bei;
       posRef.current = bei;
       durRef.current = i.duration || 0;
 
@@ -141,7 +156,7 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
       setDauer(i.duration || 0);
       setPos(bei);
       setInfo(i);
-    })().catch(() => {});
+    })().catch((e) => { setLadeFehler(e.message || "Das Video konnte nicht geladen werden."); setPuffert(false); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, type, id]);
 
@@ -159,8 +174,10 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
          endlosen fragmentierten MP4-Strom von /api/transcode NICHT ab — das
          Bild bleibt schwarz. Für Apple liefert der Server denselben Inhalt
          als HLS (siehe server/src/hls.js). */
-      const weg = Platform.OS === "ios" && i.hlsUrl ? i.hlsUrl : i.transcodeUrl;
-      return dran(weg, `profile=1&a=${a}&t=${Math.floor(t)}`);
+      const weg = (Platform.OS === "ios" || Platform.OS === "android") && i.hlsUrl ? i.hlsUrl : i.transcodeUrl;
+      // Fallback auf maximal 1080p: Eine nicht dekodierbare 4K-Datei darf
+      // nicht drei ungebremste 4K-Umwandlungen durch Player-Retries auslösen.
+      return dran(weg, `profile=1&a=${a}&t=${Math.floor(t)}&q=high`);
     },
     [base],
   );
@@ -168,6 +185,22 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   const player = useVideoPlayer(null, (p) => {
     if (p) p.timeUpdateEventInterval = 0.25;   // flüssige Untertitel
   });
+
+  // Die Vorliebe muss nach dem Laden auch am nativen Decoder ankommen.
+  // Nur die Beschriftung zu setzen spielte bisher weiter die Standardspur.
+  const nativenTonSetzen = useCallback(() => safe(() => {
+    if (modeRef.current !== "direct" || !tonRef.current) return false;
+    const spur = (player.availableAudioTracks || [])[tonRef.current.nr];
+    if (!spur) return false;
+    player.audioTrack = spur;
+    return true;
+  }, false), [player, safe]);
+  useEffect(() => {
+    if (!player?.addListener) return;
+    const a = player.addListener("availableAudioTracksChange", nativenTonSetzen);
+    const b = player.addListener("sourceLoad", () => { nativenTonSetzen(); safe(() => { player.subtitleTrack = null; }); });
+    return () => { a.remove(); b.remove(); };
+  }, [player, nativenTonSetzen, safe]);
 
   /* ── Quelle laden ──────────────────────────────────────────────────── */
   useEffect(() => {
@@ -187,7 +220,9 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   /* ── Untertitel holen, sobald eine Spur gewählt ist ────────────────── */
   useEffect(() => {
     let abgebrochen = false;
-    if (!utSpur || !info?.untertitelUrl) { setUtSucher(null); setUtText(null); return; }
+    setUtFehler(null); setUtSucher(null); setUtText(null); setUtLaedt(false);
+    if (!utSpur) return;
+    if (!info?.untertitelUrl) { setUtFehler("Der Server liefert für diese Spur keine Untertiteladresse."); return; }
     setUtLaedt(true);
     const tr = info.untertitelUrl.includes("?") ? "&" : "?";
     untertitelHolen(`${base}${info.untertitelUrl}${tr}track=${utSpur.id}`.replace(base + base, base))
@@ -195,8 +230,9 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
         if (abgebrochen) return;
         setUtSucher(s);
         setUtLaedt(false);
+        if (!s) setUtFehler("Untertitel konnten nicht geladen werden. Bitte eine andere Spur wählen oder erneut versuchen.");
       })
-      .catch(() => { if (!abgebrochen) setUtLaedt(false); });
+      .catch(() => { if (!abgebrochen) { setUtLaedt(false); setUtFehler("Untertitel konnten nicht geladen werden."); } });
     return () => { abgebrochen = true; };
   }, [utSpur, info, base]);
 
@@ -223,6 +259,7 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
         if (!lebtRef.current) return;
         const s = typeof e === "object" ? e?.status : e;
         setPuffert(s === "loading");
+        if (s === "readyToPlay") setLadeFehler(null);
 
         /* WICHTIG — nicht entfernen:
            Nicht jedes Video läuft auf jedem Gerät direkt (etwa DTS-Ton oder
@@ -252,11 +289,28 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
               player.play();
             });
           }
+        } else if (s === "error") {
+          setLadeFehler(/503/.test(String(e?.error?.message || ""))
+            ? "Der Medienserver ist mit Video-Umwandlungen ausgelastet. Bitte kurz warten und erneut versuchen."
+            : "Das Video konnte auch nach der Umwandlung nicht abgespielt werden. Prüfe die Verbindung und den Medienserver.");
+          setLaeuft(false);
         }
       }));
     } catch {}
     return () => abos.forEach((a) => { try { a?.remove?.(); } catch {} });
   }, [player, info, quelleFuer, safe]);
+
+  // Auch ein nicht antwortender Stream muss enden koennen. Native Player
+  // melden in diesem Fall mitunter nur 'loading', aber niemals 'error'.
+  useEffect(() => {
+    if (!puffert || !info || ladeFehler) return;
+    const t = setTimeout(() => {
+      setLadeFehler("Der Videostream antwortet seit 45 Sekunden nicht. Bitte erneut versuchen oder den Medienserver prüfen.");
+      setPuffert(false); setLaeuft(false);
+      safe(() => player.replace(null));
+    }, 45000);
+    return () => clearTimeout(t);
+  }, [puffert, info, ladeFehler, player, safe]);
 
   /* ── Untertiteltext zur aktuellen Stelle bestimmen ─────────────────── */
   useEffect(() => {
@@ -266,16 +320,15 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   }, [pos, utSucher, E.utVersatz]);
 
   /* ── Fortschritt sichern ───────────────────────────────────────────── */
+  const fortschrittSchreiben = useMemo(() => erzeugeFortschrittsSicherung((body) =>
+    api("/api/progress", { method: "POST", body })), [api]);
   const sichern = useCallback(
     (gesehen = false) => {
       const d = durRef.current, p = posRef.current;
       if (!d) return;
-      api("/api/progress", {
-        method: "POST",
-        body: { mediaType: type, refId: +id, position: p, duration: d, watched: gesehen || p >= d * 0.95 },
-      }).catch(() => {});
+      fortschrittSchreiben({ mediaType: type, refId: +id, position: p, duration: d, watched: gesehen || p >= d * 0.95 });
     },
-    [api, type, id],
+    [fortschrittSchreiben, type, id],
   );
   useEffect(() => {
     const t = setInterval(() => sichern(), 10000);
@@ -287,9 +340,10 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     setLeisteAn(true);
     if (versteckRef.current) clearTimeout(versteckRef.current);
     const nach = (E.leisteAus ?? 5) * 1000;
-    if (nach > 0) versteckRef.current = setTimeout(() => setLeisteAn(false), nach);
-  }, [E.leisteAus]);
+    if (nach > 0 && laeuft && !puffert && !dialog) versteckRef.current = setTimeout(() => setLeisteAn(false), nach);
+  }, [E.leisteAus, laeuft, puffert, dialog]);
   useEffect(() => { wecken(); }, [wecken]);
+
 
   /* ── Steuerung ─────────────────────────────────────────────────────── */
   const springeAuf = useCallback((t) => {
@@ -322,9 +376,8 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     if (!nextEp) return;
     sichern(true);
     lebtRef.current = false;
-    pop();
     push({
-      name: "play", type: "episode", id: nextEp.id, title,
+      name: "play", replace: true, type: "episode", id: nextEp.id, title,
       subtitle: (nextEp.se || "") + (nextEp.title ? " · " + nextEp.title : ""),
       nextEp: nextEp.next ?? null,
     });
@@ -343,37 +396,36 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   /* ── Tonspur wechseln ──────────────────────────────────────────────── */
   const tonWaehlen = useCallback((kennung) => {
     const spur = (info?.spuren?.audio || []).find((s) => s.id === kennung);
-    if (!spur) return;
+    if (!spur || spur.id === tonRef.current?.id) return;
+    const vorher = tonRef.current;
     tonRef.current = spur;
-    setTonSpur(spur);
-    setDialog(null);
+    setTonFehler(null);
 
     if (modeRef.current === "direct") {
       /* Bei Direktwiedergabe schaltet expo-video die eingebettete Spur
          selbst um — ohne Neuladen und ohne Aussetzer. */
-      safe(() => {
-        const verfuegbar = player.availableAudioTracks || [];
-        if (verfuegbar[spur.nr]) player.audioTrack = verfuegbar[spur.nr];
-      });
+      if (nativenTonSetzen()) setTonSpur(spur);
+      else { tonRef.current = vorher; setTonFehler("Diese Tonspur ist am Player noch nicht verfügbar. Bitte kurz warten und erneut wählen."); }
       return;
     }
     /* Beim Umwandeln entscheidet der Server, welche Spur im Strom landet.
        Also an derselben Stelle neu anfordern — die Position bleibt erhalten. */
     const stelle = posRef.current;
+    setTonSpur(spur);
+    const warAmLaufen = safe(() => player.playing, false);
     offsetRef.current = stelle;
     safe(() => {
       player.replace(quelleFuer(info, stelle));
-      player.play();
+      if (warAmLaufen) player.play();
     });
     wecken();
-  }, [info, player, quelleFuer, safe, wecken]);
+  }, [info, player, quelleFuer, safe, wecken, nativenTonSetzen]);
 
   /* ── Untertitel wechseln ───────────────────────────────────────────── */
   const utWaehlen = useCallback((kennung) => {
-    setDialog(null);
     if (kennung === "aus") { setUtSpur(null); setUtSucher(null); setUtText(null); return; }
     const spur = (info?.spuren?.sub || []).find((s) => s.id === kennung);
-    if (spur) setUtSpur(spur);
+    if (spur) setUtSpur({ ...spur });
     wecken();
   }, [info, wecken]);
 
@@ -382,6 +434,18 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     safe(() => { player.playbackRate = v; });
     setDialog(null);
   }, [player, safe]);
+
+  const dialogZurueck = () => setDialog((d) => d === "utstil" ? "spuren" : ["tempo", "bild", "info"].includes(d) ? "optionen" : null);
+
+  useFernbedienungVorher((taste) => {
+    if (dialog) return false;
+    wecken();
+    if (leisteAn) return false;
+    if (taste === "select") anHalten();
+    else if (taste === "left") springeUm(-(E.sprungZurueck || 10));
+    else if (taste === "right") springeUm(E.sprungVor || 30);
+    return true;
+  });
 
   /* ── Fernbedienung: Medientasten wirken immer ──────────────────────── */
   useFernbedienung((taste) => {
@@ -397,7 +461,14 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     }
   });
 
-  useDialog(!!dialog);
+  useEffect(() => {
+    const ab = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (dialog) { dialogZurueck(); return true; }
+      verlassen(); return true;
+    });
+    return () => ab.remove();
+  }, [dialog, verlassen]);
+  useDialog(!!dialog, dialogZurueck);
 
   /* ── Fortschrittsbalken als Fokus-Element ──────────────────────────── */
   const balkenRichtung = useCallback((r) => {
@@ -411,32 +482,44 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     onPress: anHalten,
     aufRichtung: balkenRichtung,
     id: "player:balken",
+    uebersprigen: !leisteAn || !!ladeFehler || !!videoLadeFehler || !VideoView,
   });
+
+  // Nach der Balken-Anmeldung: sie übernimmt zuerst die vorgemerkte Position.
+  useEffect(() => {
+    // OK im Player soll bei Play/Pause landen. Der erste registrierte Knopf
+    // war bisher Zurueck; nach erneutem Einblenden konnte OK dadurch den Film
+    // verlassen, statt ihn anzuhalten.
+    if (leisteAn && !ladeFehler) fokusSystem?.kern.setzen("player:pause");
+  }, [leisteAn, ladeFehler, fokusSystem]);
 
   /* ── Anzeige ───────────────────────────────────────────────────────── */
   const anteil = dauer > 0 ? Math.min(1, Math.max(0, pos / dauer)) : 0;
   const tonListe = info?.spuren?.audio || [];
-  const utListe = (info?.spuren?.sub || []).filter((s) => s.text && !s.bild);
-  const utBildNur = (info?.spuren?.sub || []).filter((s) => s.bild).length;
 
-  if (videoLadeFehler || !VideoView) {
+  if (videoLadeFehler || !VideoView || ladeFehler) {
     return (
       <View style={[st.center, { padding: 30 }]}>
         <Text style={[st.h2, { textAlign: "center", marginBottom: 10 }]}>
           Wiedergabe nicht verfügbar
         </Text>
         <Text style={[st.gedaempft, { textAlign: "center", marginBottom: 20 }]}>
-          Das Video-Modul konnte nicht geladen werden:{"\n"}{videoLadeFehler}
+          {ladeFehler || `Das Video-Modul konnte nicht geladen werden: ${videoLadeFehler}`}
         </Text>
-        <FKnopf onPress={pop} spalte={0} zeile={0} style={[st.knopf, st.knopfHaupt]} fokusStil={st.fokus}>
+        {info && <FKnopf onPress={() => {
+          setLadeFehler(null); setPuffert(true);
+          offsetRef.current = modeRef.current === "direct" ? 0 : posRef.current;
+          safe(() => { player.replace(quelleFuer(info, posRef.current)); player.play(); });
+        }} spalte={0} zeile={0} style={[st.knopf, st.knopfHaupt, { marginBottom: 12 }]} fokusStil={st.fokus}>
+          <Text style={[st.knopfText, st.knopfTextHaupt]}>Erneut versuchen</Text>
+        </FKnopf>}
+        <FKnopf onPress={pop} spalte={0} zeile={1} style={[st.knopf, st.knopfHaupt]} fokusStil={st.fokus}>
           <Text style={[st.knopfText, st.knopfTextHaupt]}>Zurück</Text>
         </FKnopf>
       </View>
     );
   }
 
-  // Knopfspalten fortlaufend vergeben, damit übersprungene Knöpfe keine Lücke lassen
-  let sp = 0;
 
   return (
     <View style={st.playerWurzel}>
@@ -445,8 +528,9 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
         player={player}
         contentFit={bildmodus}
         nativeControls={false}
-        allowsFullscreen={false}
+        fullscreenOptions={{ enable: false }}
       />
+      {!leisteAn && <Pressable accessibilityRole="button" accessibilityLabel="Bedienelemente anzeigen" onPress={wecken} style={{ position: "absolute", left: 0, top: 0, right: 0, bottom: 0 }} />}
 
       {puffert && (
         <View style={[st.center, { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, backgroundColor: "transparent" }]}>
@@ -460,9 +544,8 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
           pointerEvents="none"
           style={{
             position: "absolute", left: "6%", right: "6%",
-            bottom: leisteAn
-              ? `${Math.round((E.utPosition ?? 0.08) * 100) + (gross ? 18 : 15)}%`
-              : `${Math.round((E.utPosition ?? 0.08) * 100)}%`,
+            // Die neue zweizeilige Bedienung darf den Untertitel nicht überdecken.
+            bottom: leisteAn ? (kompakt ? 140 : 180) : `${Math.round((E.utPosition ?? 0.08) * 100)}%`,
             alignItems: "center",
           }}
         >
@@ -495,31 +578,16 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
             <FKnopf
               spalte={0}
               onPress={verlassen}
-              style={[st.rundKnopf, { minWidth: gross ? 54 : 44, height: gross ? 54 : 44 }]}
+              style={[st.rundKnopf, { minWidth: 40, height: 40 }]}
               fokusStil={st.fokus}
-              id="player:zurueck"
+              id="player:zurueck" accessibilityLabel="Wiedergabe verlassen"
             >
-              <Text style={st.rundKnopfText}>←</Text>
+              <Icon name="back" />
             </FKnopf>
           </FokusReihe>
           <View style={{ flex: 1 }}>
             <Text numberOfLines={1} style={st.playerTitel}>{title}</Text>
             {!!subtitle && <Text numberOfLines={1} style={st.playerUnter}>{subtitle}</Text>}
-          </View>
-          <View style={{ alignItems: "flex-end", gap: 4 }}>
-            {modeRef.current === "transcode" && (
-              <View style={[st.hinweis, { paddingVertical: 4, paddingHorizontal: 10 }]}>
-                <Text style={{ color: C.text, fontSize: M.klein, fontWeight: "700" }}>Umgewandelt</Text>
-              </View>
-            )}
-            {!!tonSpur && tonListe.length > 1 && (
-              <Text style={{ color: "#c9c9d6", fontSize: M.klein }}>🔊 {tonSpur.name}</Text>
-            )}
-            {!!utSpur && (
-              <Text style={{ color: "#c9c9d6", fontSize: M.klein }}>
-                💬 {utSpur.name}{utLaedt ? " (lädt …)" : ""}
-              </Text>
-            )}
           </View>
         </View>
       )}
@@ -529,13 +597,15 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
         <View pointerEvents="box-none" style={st.playerFuss}>
           <View style={[st.balkenRahmen, balkenAn && st.fokus]}>
             <Text style={st.playerZeit}>{fmtZeit(pos)}</Text>
-            <View style={st.balkenSpur} onLayout={(e) => setBalkenBreite(e.nativeEvent.layout.width)}>
+            <Pressable focusable={false} accessibilityLabel="Wiedergabeposition" hitSlop={18}
+              onPress={(e) => { if (balkenBreite > 0) springeAuf(e.nativeEvent.locationX / balkenBreite * dauer); }}
+              style={st.balkenSpur} onLayout={(e) => setBalkenBreite(e.nativeEvent.layout.width)}>
               <View style={[st.balkenVoll, { width: balkenBreite * anteil }]} />
               <View style={[st.balkenGriff, {
                 left: balkenBreite * anteil,
                 transform: [{ scale: balkenAn ? 1.35 : 1 }],
               }]} />
-            </View>
+            </Pressable>
             <Text style={[st.playerZeit, { textAlign: "right" }]}>−{fmtZeit(Math.max(0, dauer - pos))}</Text>
           </View>
 
@@ -545,64 +615,60 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
             </Text>
           )}
 
+          <View style={{ flexDirection: kompakt ? "row" : "column", justifyContent: "space-between", gap: 8, marginTop: 6 }}>
           <FokusReihe zeile={1}>
             <View style={st.playerKnopfReihe}>
-              <PKnopf spalte={sp++} text={String(E.sprungZurueck || 10)} symbol="⏪" onPress={() => springeUm(-(E.sprungZurueck || 10))} />
-              <PKnopf spalte={sp++} symbol={laeuft ? "⏸" : "▶"} haupt grossKnopf onPress={anHalten} />
-              <PKnopf spalte={sp++} text={String(E.sprungVor || 30)} symbol="⏩" onPress={() => springeUm(E.sprungVor || 30)} />
-              {!!nextEp && <PKnopf spalte={sp++} text="Nächste" symbol="⏭" onPress={naechsteFolge} />}
-              {tonListe.length > 1 && <PKnopf spalte={sp++} symbol="🔊" text="Ton" onPress={() => setDialog("ton")} />}
-              {(utListe.length > 0 || utBildNur > 0) && (
-                <PKnopf spalte={sp++} symbol="💬" text={utSpur ? "UT an" : "UT"} onPress={() => setDialog("ut")} />
-              )}
-              <PKnopf spalte={sp++} text={`${tempo}×`} onPress={() => setDialog("tempo")} />
-              <PKnopf spalte={sp++} symbol="⛶" onPress={() => setDialog("bild")} />
-              <PKnopf spalte={sp++} symbol="ℹ" onPress={() => setDialog("info")} />
+              <PKnopf spalte={0} text={`${E.sprungZurueck || 10} s`} label={`${E.sprungZurueck || 10} Sekunden zurück`} symbol="rewind" onPress={() => springeUm(-(E.sprungZurueck || 10))} />
+              <PKnopf id="player:pause" spalte={1} symbol={laeuft ? "pause" : "play"} label={laeuft ? "Pausieren" : "Abspielen"} haupt grossKnopf onPress={anHalten} aufRichtung={(r) => { if (r !== "down") return false; fokusSystem?.kern.setzen("player:spuren"); return true; }} />
+              <PKnopf spalte={2} text={`${E.sprungVor || 30} s`} label={`${E.sprungVor || 30} Sekunden vor`} symbol="forward" onPress={() => springeUm(E.sprungVor || 30)} />
+              {!!nextEp && <PKnopf spalte={3} label="Nächste Folge" symbol="next" onPress={naechsteFolge} />}
             </View>
           </FokusReihe>
+          <FokusReihe zeile={kompakt ? 1 : 2}>
+            <View style={{ flexDirection: "row", gap: 6, justifyContent: "center" }}>
+              <FKnopf id="player:spuren" accessibilityLabel="Sprache & Untertitel" hitSlop={gross ? 0 : 3} spalte={kompakt ? 4 : 1} aufRichtung={(r) => { if (r !== "up") return false; fokusSystem?.kern.setzen("player:pause"); return true; }} onPress={() => { fokusSystem?.kern.setzen("player:spuren"); setDialog("spuren"); }} style={[st.rundKnopf, { flex: kompakt ? undefined : 1, paddingHorizontal: 10, gap: 7 }]} fokusStil={st.fokus}>
+                <Icon name="subtitles" size={20} />
+                <Text style={{ color: "white", fontSize: 12, fontWeight: "600" }}>Sprache & Untertitel</Text>
+              </FKnopf>
+              <PKnopf id="player:optionen" spalte={kompakt ? 5 : 2} symbol="settings" label="Optionen" onPress={() => setDialog("optionen")} />
+            </View>
+          </FokusReihe>
+          </View>
+          {(utLaedt || utFehler) && <Text accessibilityRole="alert" style={{ color: utFehler ? "#ffca85" : "#bbc2d2", textAlign: "center", marginTop: 10, fontSize: M.klein }}>{utLaedt ? "Untertitel werden geladen …" : utFehler}</Text>}
         </View>
       )}
 
       {/* ── Dialoge ───────────────────────────────────────────────────── */}
-      {dialog === "ton" && (
-        <Dialog titel="Tonspur">
-          <DialogListe
-            aktiv={tonSpur?.id}
-            aufWahl={tonWaehlen}
-            eintraege={tonListe.map((s) => ({ wert: s.id, text: s.name }))}
-          />
-          {modeRef.current === "transcode" && (
-            <Text style={[st.gedaempft, { marginTop: 12, fontSize: M.klein }]}>
-              Beim Umwandeln wird nach dem Wechsel kurz neu geladen.
-            </Text>
-          )}
-        </Dialog>
-      )}
-
-      {dialog === "ut" && (
-        <Dialog titel="Untertitel">
-          <DialogListe
-            aktiv={utSpur?.id ?? "aus"}
-            aufWahl={utWaehlen}
-            eintraege={[
-              { wert: "aus", text: "Aus" },
-              ...utListe.map((s) => ({ wert: s.id, text: s.name })),
-            ]}
-          />
-          {utBildNur > 0 && (
-            <Text style={[st.gedaempft, { marginTop: 12, fontSize: M.klein }]}>
-              {utBildNur} weitere Spur{utBildNur > 1 ? "en" : ""} ist Bild-Untertitel (Blu-ray/DVD).
-              {"\n"}Die enthalten keinen Text und lassen sich nicht anzeigen.
-            </Text>
-          )}
-          <Text style={[st.gedaempft, { marginTop: 10, fontSize: M.klein }]}>
-            Größe, Farbe und Position stellst du unter Einstellungen ein.
-          </Text>
-        </Dialog>
-      )}
+      {dialog === "spuren" && <SpurenDialog
+        audio={tonListe} untertitel={info?.spuren?.sub || []} ton={tonSpur} ut={utSpur}
+        aufTon={tonWaehlen} aufUt={utWaehlen} aufSchliessen={() => setDialog(null)}
+        aufDarstellung={() => setDialog("utstil")} status={tonFehler || utFehler || (utLaedt ? "Untertitel werden geladen …" : null)}
+        aufMerken={() => anpassen({ tonSprache: tonSpur?.sprache || "", utAn: !!utSpur, utSprache: utSpur?.sprache || "" })}
+      />}
+      {dialog === "optionen" && <Dialog titel="Wiedergabeoptionen" aufSchliessen={() => setDialog(null)}>
+        <DialogListe aufWahl={setDialog} eintraege={[
+          { wert: "tempo", text: `Geschwindigkeit · ${tempo}×` },
+          { wert: "bild", text: `Bild · ${bildmodus === "contain" ? "Einpassen" : bildmodus === "cover" ? "Füllen" : "Strecken"}` },
+          { wert: "utstil", text: "Untertitel-Darstellung" },
+          { wert: "info", text: "Wiedergabeinformationen" },
+        ]} />
+      </Dialog>}
+      {dialog === "utstil" && <Dialog titel="Untertitel-Darstellung" aufSchliessen={() => setDialog("spuren")}>
+        <View style={{ alignItems: "center", backgroundColor: "#303b4a", borderRadius: 12, padding: 18, marginBottom: 14 }}><Text style={{ color: E.utFarbe, fontSize: (gross ? 24 : 18) * E.utGroesse, backgroundColor: `rgba(0,0,0,${E.utHintergrund})`, padding: 6, textAlign: "center" }}>So sehen deine Untertitel aus.</Text></View>
+        <DialogListe aufWahl={(key) => {
+          const werte = { utGroesse: [.8, 1, 1.25, 1.5], utHintergrund: [0, .55, .85], utFarbe: ["#ffffff", "#ffdf70"], utVersatz: [-2, -1, -.5, 0, .5, 1, 2] };
+          const optionen = werte[key]; anpassen({ [key]: optionen[(optionen.indexOf(E[key]) + 1) % optionen.length] });
+        }} eintraege={[
+          { wert: "utGroesse", text: `Schriftgröße · ${Math.round(E.utGroesse * 100)} %` },
+          { wert: "utFarbe", text: `Farbe · ${E.utFarbe === "#ffffff" ? "Weiß" : "Gelb"}` },
+          { wert: "utHintergrund", text: `Hintergrund · ${Math.round(E.utHintergrund * 100)} %` },
+          { wert: "utVersatz", text: `Zeitversatz · ${E.utVersatz > 0 ? "+" : ""}${E.utVersatz} s` },
+        ]} />
+        <Text style={{ color: "#aeb7c9", fontSize: M.klein, marginTop: 12 }}>Antippen / OK: nächster Wert. Positiver Zeitversatz zeigt den Text später.</Text>
+      </Dialog>}
 
       {dialog === "tempo" && (
-        <Dialog titel="Geschwindigkeit">
+        <Dialog titel="Geschwindigkeit" aufSchliessen={dialogZurueck}>
           <DialogListe
             aktiv={tempo}
             aufWahl={setzeTempo}
@@ -614,7 +680,7 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
       )}
 
       {dialog === "bild" && (
-        <Dialog titel="Bildanpassung">
+        <Dialog titel="Bildanpassung" aufSchliessen={dialogZurueck}>
           <DialogListe
             aktiv={bildmodus}
             aufWahl={(v) => { setBildmodus(v); setDialog(null); }}
@@ -628,7 +694,7 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
       )}
 
       {dialog === "info" && (
-        <Dialog titel={title}>
+        <Dialog titel={title} aufSchliessen={dialogZurueck}>
           {!!subtitle && <Text style={[st.fliess, { marginBottom: 10 }]}>{subtitle}</Text>}
           <Text style={st.gedaempft}>
             {[
@@ -658,19 +724,23 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
 }
 
 /** Knopf der Bedienleiste. */
-function PKnopf({ spalte, text, symbol, haupt, onPress, grossKnopf }) {
+function PKnopf({ id, spalte, text, symbol, label, haupt, onPress, grossKnopf, aufRichtung }) {
   return (
     <FKnopf
+      id={id}
+      accessibilityLabel={label || text}
+      aufRichtung={aufRichtung}
       spalte={spalte}
       onPress={onPress}
+      hitSlop={gross ? 0 : 3}
       style={[
         st.rundKnopf,
         haupt && st.rundKnopfHaupt,
-        grossKnopf && { minWidth: gross ? 84 : 66, height: gross ? 70 : 56 },
+        grossKnopf && { minWidth: 44, height: 40 },
       ]}
       fokusStil={st.fokus}
     >
-      {!!symbol && <Text style={[st.rundKnopfText, grossKnopf && { fontSize: gross ? 26 : 20 }]}>{symbol}</Text>}
+      {!!symbol && <Icon name={symbol} size={grossKnopf ? 23 : 20} />}
       {!!text && <Text style={st.rundKnopfText}>{text}</Text>}
     </FKnopf>
   );

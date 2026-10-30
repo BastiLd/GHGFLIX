@@ -229,11 +229,10 @@ fn scan_movies(conn: &Connection, root: &Path) -> Result<()> {
         if ignored.contains(&crate::ordnerwahl::norm(&path)) {
             continue;
         }
-        // Handentscheidung schlägt alles: Was der Nutzer als Folge, Bonus oder
-        // ausgeblendet festgelegt hat, wird hier NICHT zum Film gemacht.
+        // Handentscheidung schlägt alles — auch in einer reinen Film-Bibliothek
+        // kann eine Datei so zur Folge oder zum Bonus werden.
         if let Some(z) = crate::zuordnung::fuer(conn, &path)? {
-            if z.ziel != "film" {
-                db::delete_movie_by_path(conn, &path)?;
+            if handentscheidung(conn, root, entry.path(), &z)? {
                 continue;
             }
         }
@@ -353,6 +352,8 @@ fn show_source_name(root: &Path, path: &Path) -> String {
             if let Some(idx) = (1..comps.len() - 1).find(|&i| is_pure_season_dir(&comps[i])) {
                 return parser::strip_domain_suffix(&comps[idx - 1]);
             }
+            let stem = file_stem(comps.last().map(String::as_str).unwrap_or_default());
+            return parser::strip_domain_suffix(serie_aus_zwei_ordnern(&comps[0], &comps[1], &stem));
             /* Kein Staffelordner gefunden, aber die Datei liegt trotzdem
                mindestens zwei Ebenen unter der Bibliothek. Das ist so gut
                wie nie "eine Serie mit einem zufälligen Unterordner",
@@ -363,9 +364,9 @@ fn show_source_name(root: &Path, path: &Path) -> String {
                  - Sammelordner/Serie/Buch-oder-Volume-Ordner/Datei (z.B.
                    Avatar/Korra: "The Legend of Korra ...\Book One - Air\
                    datei.mkv" — "Book" ist keine erkannte Staffel-Schreibweise).
-               In beiden Fällen ist der ZWEITE Ordner die Serie, nicht der
-               erste (die Sammelablage). */
-            return parser::strip_domain_suffix(&comps[1]);
+               Meist ist dann der ZWEITE Ordner die Serie — aber nicht bei
+               „Serie/Book One - Air/Datei" direkt unter der Bibliothek. Das
+               entscheidet serie_aus_zwei_ordnern() (siehe oben). */
         }
 
         parser::strip_domain_suffix(&first)
@@ -374,6 +375,60 @@ fn show_source_name(root: &Path, path: &Path) -> String {
         // folder (has a real name), prefer it over the bare file stem
         let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         file_stem(&name)
+    }
+}
+
+fn titel_woerter(s: &str) -> Vec<String> {
+    parser::clean_show_title(s)
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// Beginnt der Ordnername mit einer Staffel-/Band-Angabe? („Staffel 1 (2019)",
+/// „Book One - Air", „Volume 2", „S01 German DL") — dann benennt er einen Teil
+/// der Serie, nicht die Serie selbst.
+fn wirkt_wie_staffel_ordner(name: &str) -> bool {
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)^\s*(?:season|staffel|saison|book|buch|band|volume|vol\.?|teil|part|disc|disk|s)\s*(?:\d|(?:one|two|three|four|five|six|seven|eight|nine|ten|eins|zwei|drei|vier|fünf|fuenf|sechs|sieben|acht|neun|zehn)\b)",
+        )
+        .unwrap()
+    });
+    RE.is_match(name)
+}
+
+/// Liegt eine Datei ZWEI Ordner tief ohne erkannten Staffelordner, ist einer
+/// der beiden die Serie: „Sammelordner/Serie/Datei" oder
+/// „Serie/Band-oder-Staffel/Datei". Bisher galt pauschal der zweite — damit
+/// hieß eine Serie bei „Korra/Book One - Air/…" direkt unter der Bibliothek
+/// „Book One - Air".
+///
+/// Der Dateiname trägt bei fast allen Releases den Serientitel: welcher Ordner
+/// teilt mehr Wörter mit ihm? Bei Gleichstand gewinnt der erste Ordner nur,
+/// wenn der zweite wie eine Staffel/ein Band aussieht. Muss mit
+/// serieAusZweiOrdnern() in server/src/scanner.js übereinstimmen.
+fn serie_aus_zwei_ordnern<'a>(erster: &'a str, zweiter: &'a str, stem: &str) -> &'a str {
+    let datei = titel_woerter(stem);
+    if !datei.is_empty() {
+        let anteil = |ordner: &str| {
+            let w: std::collections::HashSet<String> = titel_woerter(ordner).into_iter().collect();
+            datei.iter().filter(|t| w.contains(*t)).count() as f64 / datei.len() as f64
+        };
+        let (a, b) = (anteil(erster), anteil(zweiter));
+        if a > b {
+            return erster;
+        }
+        if b > a {
+            return zweiter;
+        }
+    }
+    if wirkt_wie_staffel_ordner(zweiter) {
+        erster
+    } else {
+        zweiter
     }
 }
 
@@ -398,6 +453,104 @@ fn backfill_show_keys(conn: &Connection, libs: &[crate::models::Library]) -> Res
             }
         }
     }
+    Ok(())
+}
+
+/// Eine Handentscheidung aus dem Zuordnungs-Fenster umsetzen — in JEDER
+/// Bibliotheksart. `false` = unvollständig, dann entscheidet die Automatik.
+///
+/// Vorher kannte nur scan_tv() die Ziele „Folge" und „Bonus", und „Film"
+/// hieß dort bloß „überspringen": in einer reinen Serien-Bibliothek (in der
+/// scan_movies gar nicht läuft) verschwand die Datei damit ganz — spätestens
+/// nach „Bibliothek neu aufbauen" (gefunden 23.09.2026). Muss mit
+/// handentscheidung() in server/src/scanner.js übereinstimmen.
+fn handentscheidung(conn: &Connection, root: &Path, path_buf: &Path, z: &crate::zuordnung::Ziel) -> Result<bool> {
+    let path = path_buf.to_string_lossy().to_string();
+    let name = path_buf.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let stem = file_stem(&name);
+    match z.ziel.as_str() {
+        "ignorieren" => {
+            db::delete_episode_file_by_path(conn, &path)?;
+            db::delete_movie_by_path(conn, &path)?;
+            conn.execute("DELETE FROM extras WHERE path = ?1", [&path])?;
+            Ok(true)
+        }
+        "film" => {
+            db::delete_episode_file_by_path(conn, &path)?;
+            conn.execute("DELETE FROM extras WHERE path = ?1", [&path])?;
+            let (title, year) = parser::parse_title_year(&stem);
+            db::insert_movie_if_absent(conn, &path, &title, year)?;
+            Ok(true)
+        }
+        "extra" => {
+            let (Some(tmdb), Some(art)) = (z.show_tmdb, z.extra_art.as_deref()) else {
+                return Ok(false);
+            };
+            let Some(sid) = db::find_show_by_tmdb(conn, tmdb)? else {
+                return Ok(false);
+            };
+            db::delete_episode_file_by_path(conn, &path)?;
+            db::delete_movie_by_path(conn, &path)?;
+            crate::extras::merken(conn, sid, &path, &stem, art, z.staffel)?;
+            conn.execute("UPDATE extras SET von_hand=1 WHERE path=?1", [&path])?;
+            Ok(true)
+        }
+        "folge" => {
+            let (Some(tmdb), Some(st), Some(ep)) = (z.show_tmdb, z.staffel, z.episode) else {
+                return Ok(false);
+            };
+            db::delete_movie_by_path(conn, &path)?;
+            conn.execute("DELETE FROM extras WHERE path = ?1", [&path])?;
+            let quelle = show_source_name(root, path_buf);
+            let ziel_show = db::find_or_create_show_for_tmdb(conn, tmdb, &parser::clean_show_title(&quelle))?;
+            datei_platzieren(conn, ziel_show, st, ep, &path)?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Eine Datei fest an Serie/Staffel/Folge setzen.
+///
+/// Steht sie schon richtig, passiert nichts. Ist sie die EINZIGE Datei ihrer
+/// Folge, wandert die ganze Folge mit — ID und Gesehen-Stand bleiben. Hat die
+/// Folge noch andere Dateien (zweite Sprache/Qualität), wird NUR diese eine
+/// herausgelöst. Vorher wanderten dabei alle Fassungen mit: eine falsch
+/// einsortierte französische Fassung von S6E7 nach S6E8 zu schieben, nahm die
+/// englische S6E7 gleich mit (gefunden 23.09.2026).
+pub fn datei_platzieren(conn: &Connection, show_id: i64, season: i64, episode: i64, path: &str) -> Result<()> {
+    if let Some(eid) = db::episode_id_of_file(conn, path)? {
+        let jetzt: (i64, i64, i64) = conn.query_row(
+            "SELECT show_id, season, episode FROM episodes WHERE id=?1",
+            [eid],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        if jetzt == (show_id, season, episode) {
+            return Ok(());
+        }
+        let dateien: i64 =
+            conn.query_row("SELECT COUNT(*) FROM episode_files WHERE episode_id=?1", [eid], |r| r.get(0))?;
+        if dateien <= 1 {
+            let ziel_frei: bool = conn
+                .query_row(
+                    "SELECT NOT EXISTS(SELECT 1 FROM episodes WHERE show_id=?1 AND season=?2 AND episode=?3)",
+                    rusqlite::params![show_id, season, episode],
+                    |r| r.get(0),
+                )?;
+            db::move_episode(conn, eid, show_id, season, episode)?;
+            if ziel_frei {
+                // Titel/Beschreibung der ALTEN Position passen nicht mehr —
+                // title=NULL lässt den nächsten Abgleich sie neu von TMDb holen.
+                conn.execute("UPDATE episodes SET title=NULL, overview=NULL, air_date=NULL WHERE id=?1", [eid])?;
+            }
+            return Ok(());
+        }
+        db::delete_episode_file_by_path(conn, path)?;
+        db::set_all_episode_primaries(conn)?;
+    }
+    let ep_id = db::find_or_create_episode(conn, show_id, season, episode, path)?;
+    db::add_episode_file(conn, ep_id, path)?;
+    db::set_all_episode_primaries(conn)?;
     Ok(())
 }
 
@@ -442,45 +595,8 @@ fn scan_tv(conn: &Connection, root: &Path) -> Result<()> {
            oder ganz ausblenden. Ohne diesen Block ließ sich eine falsch
            zugeordnete Sprach-/Qualitätsfassung nicht wieder loswerden. */
         if let Some(z) = crate::zuordnung::fuer(conn, &path)? {
-            // In jedem Fall zuerst aus der bisherigen Rolle lösen.
-            if z.ziel != "folge" {
-                db::delete_episode_file_by_path(conn, &path)?;
-            }
-            match z.ziel.as_str() {
-                "ignorieren" | "film" => continue,
-                "extra" => {
-                    if let (Some(tmdb), Some(art)) = (z.show_tmdb, z.extra_art.as_deref()) {
-                        if let Some(sid) = db::find_show_by_tmdb(conn, tmdb)? {
-                            let stem = file_stem(&name);
-                            crate::extras::merken(conn, sid, &path, &stem, art, z.staffel)?;
-                            conn.execute("UPDATE extras SET von_hand=1 WHERE path=?1", [&path])?;
-                        }
-                    }
-                    continue;
-                }
-                "folge" => {
-                    if let (Some(tmdb), Some(st), Some(ep)) = (z.show_tmdb, z.staffel, z.episode) {
-                        let quelle = show_source_name(root, path_buf);
-                        let ziel_show = db::find_or_create_show_for_tmdb(
-                            conn,
-                            tmdb,
-                            &parser::clean_show_title(&quelle),
-                        )?;
-                        match db::episode_id_of_file(conn, &path)? {
-                            Some(eid) => {
-                                let _ = db::move_episode(conn, eid, ziel_show, st, ep);
-                            }
-                            None => {
-                                db::delete_movie_by_path(conn, &path)?;
-                                let ep_id =
-                                    db::find_or_create_episode(conn, ziel_show, st, ep, &path)?;
-                                db::add_episode_file(conn, ep_id, &path)?;
-                            }
-                        }
-                    }
-                    continue;
-                }
-                _ => {}
+            if handentscheidung(conn, root, path_buf, &z)? {
+                continue;
             }
         }
 
@@ -1253,6 +1369,50 @@ mod tests {
         // be mistaken for the dumping folder itself.
         let book = Path::new("/lib/Avengers/The Legend of Korra (2012 - 2014) [1080p]/Book One - Air/ep.mkv");
         assert_eq!(show_source_name(root, book), "The Legend of Korra (2012 - 2014) [1080p]");
+    }
+
+    #[test]
+    fn serie_aus_zwei_ordnern_nutzt_den_dateinamen() {
+        // Serie direkt unter der Bibliothek, darunter ein Band-Ordner
+        let root = Path::new("/lib");
+        let korra = Path::new("/lib/The Legend of Korra/Book One - Air/The.Legend.of.Korra.S01E01.mkv");
+        assert_eq!(show_source_name(root, korra), "The Legend of Korra");
+        let dark = Path::new("/lib/Dark/Staffel 1 (2017)/Folge 01.mkv");
+        assert_eq!(show_source_name(root, dark), "Dark");
+        // Sammelordner/Serie: der Dateiname nennt die Serie
+        let dd = Path::new("/lib/Sammlung/Marvels Daredevil 2015 Season 3 Complete/Marvels.Daredevil.S03E01.mkv");
+        assert_eq!(show_source_name(root, dd), "Marvels Daredevil 2015 Season 3 Complete");
+        assert!(wirkt_wie_staffel_ordner("Book One - Air"));
+        assert!(wirkt_wie_staffel_ordner("S01 German DL"));
+        assert!(!wirkt_wie_staffel_ordner("Band of Brothers"));
+        assert!(!wirkt_wie_staffel_ordner("Sherlock"));
+    }
+
+    #[test]
+    fn handzuordnung_verschiebt_nur_die_eine_datei() {
+        let conn = Connection::open_in_memory().unwrap();
+        db::init_schema(&conn).unwrap();
+        let show = db::find_or_create_show_for_tmdb(&conn, 65334, "Miraculous").unwrap();
+        // S6E7 hat zwei Fassungen: englisch (richtig) und französisch (gehört zu S6E8)
+        let e7 = db::find_or_create_episode(&conn, show, 6, 7, "/m/e7-en.mkv").unwrap();
+        db::add_episode_file(&conn, e7, "/m/e7-en.mkv").unwrap();
+        db::add_episode_file(&conn, e7, "/m/e8-fr.mkv").unwrap();
+
+        datei_platzieren(&conn, show, 6, 8, "/m/e8-fr.mkv").unwrap();
+        let e7_dateien = db::file_paths_of_episode(&conn, e7).unwrap();
+        assert_eq!(e7_dateien, vec!["/m/e7-en.mkv".to_string()], "englische S6E7 bleibt, wo sie ist");
+        let e8 = db::episode_id_of_file(&conn, "/m/e8-fr.mkv").unwrap().unwrap();
+        let (s, e): (i64, i64) = conn
+            .query_row("SELECT season, episode FROM episodes WHERE id=?1", [e8], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((s, e), (6, 8));
+
+        // einzige Datei einer Folge: die Folge wandert mit, ID bleibt
+        datei_platzieren(&conn, show, 6, 9, "/m/e8-fr.mkv").unwrap();
+        assert_eq!(db::episode_id_of_file(&conn, "/m/e8-fr.mkv").unwrap(), Some(e8));
+        // schon richtig: nichts passiert
+        datei_platzieren(&conn, show, 6, 9, "/m/e8-fr.mkv").unwrap();
+        assert_eq!(db::episode_id_of_file(&conn, "/m/e8-fr.mkv").unwrap(), Some(e8));
     }
 
     #[test]

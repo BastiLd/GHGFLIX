@@ -10,7 +10,7 @@ import { IdentifyDialog, type IdentifyTarget } from "../components/IdentifyDialo
 import { EmptyState, SkeletonGrid } from "../components/ui";
 
 export default function SearchPage() {
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const q = (params.get("q") || "").toLowerCase();
   const [identify, setIdentify] = useState<IdentifyTarget | null>(null);
@@ -47,8 +47,12 @@ export default function SearchPage() {
 
   return (
     <div className="px-8 py-6">
+      <label className="mobile-search-field">
+        <Search size={21} aria-hidden="true" />
+        <input aria-label="Filme, Serien und Folgen suchen" type="search" placeholder="Filme, Serien und Folgen" value={params.get("q") || ""} onChange={e => setParams(e.target.value ? { q: e.target.value } : {}, { replace: true })} />
+      </label>
       <h1 className="text-2xl font-black mb-6 flex items-center gap-3">
-        <Search className="w-6 h-6 text-ghg-red" /> Ergebnisse für „{params.get("q")}"
+        <Search className="w-6 h-6 text-ghg-red" /> {q ? `Ergebnisse für „${params.get("q")}“` : "Entdecken"}
         <span className="text-base font-normal text-ghg-muted">({mm.length + ss.length + ee.length})</span>
       </h1>
 

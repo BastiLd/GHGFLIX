@@ -27,20 +27,21 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { BackHandler, Text, View } from "react-native";
 
 import { FokusProvider, useFokusSystem } from "./src/fokus.js";
-import { Laden, se } from "./src/bausteine.js";
-import { Seitenleiste, Unterleiste } from "./src/seitenleiste.js";
+import { Knopf, Laden, se } from "./src/bausteine.js";
 import { PlayerScreen } from "./src/player.js";
 import { VerbindungsScreen } from "./src/verbindung.js";
 import { normUrl, ping } from "./src/netzsuche.js";
 import { pruefeUpdate, starteUpdate } from "./src/update.js";
 import { laden as ladeEinstellungen } from "./src/einstellungen.js";
-import { C, M, istHandy, st } from "./src/stile.js";
+import { C, M, istTV, st } from "./src/stile.js";
+import { APP_VERSION } from "./src/produkt.js";
+import { HandyShell } from "./src/HandyShell.js";
+import { TVShell } from "../tv/src/TVShell.js";
 import {
   EinstellungenSeite, FilmSeite, ProfilSeite, RasterSeite,
   SerienSeite, StartSeite, SuchSeite,
 } from "./src/seiten.js";
 
-const APP_VERSION = "3.1.0";
 
 /* ══ Absturzfang ═════════════════════════════════════════════════════════
  * Stürzt irgendwo etwas ab, soll der Bildschirm nicht schwarz bleiben,
@@ -97,19 +98,17 @@ const sichereConn = (c) => AsyncStorage.setItem(CONN_KEY, JSON.stringify(c)).cat
 /* ══ Hauptteil ═══════════════════════════════════════════════════════════ */
 
 function AppInner() {
+  const sys = useFokusSystem();
   const [conn, setConn] = useState(null);
   const [basis, setBasis] = useState(null);
   const [serverInfo, setServerInfo] = useState(null);
   const [pruefe, setPruefe] = useState(true);
   const [seite, setSeite] = useState("home");
   const [stapel, setStapel] = useState([]);      // Detailseiten über der Hauptseite
-  const [navOffen, setNavOffen] = useState(false);
 
-  /* Wo die Navigation sitzt: unten (Handy) oder seitlich (Fernseher).
-     Vorbelegt aus der Geräteart, damit schon der allererste Aufbau richtig
-     ist und nichts sichtbar umspringt; die gespeicherte Einstellung kann das
-     unten überschreiben. */
-  const [navUnten, setNavUnten] = useState(istHandy);
+  const [datenFehler, setDatenFehler] = useState(null);
+  const [ansichtNr, setAnsichtNr] = useState(0);
+  const rueckspruenge = useRef([]);
 
   const [lib, setLib] = useState(null);
   const [weiter, setWeiter] = useState([]);
@@ -119,8 +118,16 @@ function AppInner() {
   const [appAktuell, setAppAktuell] = useState(null);
 
   const oben = stapel[stapel.length - 1] || null;
-  const push = useCallback((s) => setStapel((alt) => [...alt, s]), []);
-  const pop = useCallback(() => setStapel((alt) => alt.slice(0, -1)), []);
+  const push = useCallback((s) => {
+    const e = sys?.kern.aktivesElement;
+    if (!s.replace) rueckspruenge.current.push(e ? { bereich: e.bereich, zeile: e.zeile, spalte: e.spalte } : undefined);
+    sys?.kern.vormerken();
+    setStapel((alt) => [...(s.replace ? alt.slice(0, -1) : alt), s]);
+  }, [sys]);
+  const pop = useCallback(() => {
+    sys?.kern.vormerken(rueckspruenge.current.pop());
+    setStapel((alt) => alt.slice(0, -1));
+  }, [sys]);
 
   /* ── Zurück-Taste ─────────────────────────────────────────────────── */
   useEffect(() => {
@@ -152,25 +159,9 @@ function AppInner() {
 
   useEffect(() => {
     // Einstellungen zuerst laden — der Player greift ohne Warten darauf zu
-    ladeEinstellungen()
-      .then((E) => {
-        // "auto" richtet sich nach dem Gerät, sonst gilt die Wahl des Nutzers.
-        const w = E?.navigation || "auto";
-        setNavUnten(w === "auto" ? istHandy : w === "unten");
-      })
-      .catch(() => {});
+    ladeEinstellungen().catch(() => {});
     ladeConn().then((c) => { setConn(c); verbinden(c); });
   }, [verbinden]);
-
-  /* Beim Start nachsehen, ob auf dem Server eine neuere App-Fassung liegt.
-     Damit entfaellt das laestige Eintippen der Adresse im Downloader. */
-  useEffect(() => {
-    if (!basis) return;
-    ladeEinstellungen().then((E) => {
-      if (E.updatePruefen === false) return;
-      pruefeUpdate(api, APP_VERSION).then(setAppAktuell).catch(() => {});
-    });
-  }, [basis, api]);
 
   /* ── Serverzugriff ────────────────────────────────────────────────── */
   const api = useCallback(
@@ -179,18 +170,26 @@ function AppInner() {
       const tr = pfad.includes("?") ? "&" : "?";
       let url = `${basis}${pfad}${tr}profile=${conn?.profile || 1}`;
       if (conn?.token) url += `&token=${conn.token}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12000);
+      try {
       const res = await fetch(url, {
         method: opt.method || "GET",
+        signal: controller.signal,
         headers: opt.body ? { "Content-Type": "application/json" } : {},
         body: opt.body ? JSON.stringify(opt.body) : undefined,
       });
-      return res.json();
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || (res.status === 401 ? "Bitte erneut mit dem Server verbinden." : `Serverfehler (${res.status})`));
+      return data;
+      } finally { clearTimeout(timeout); }
     },
     [basis, conn],
   );
 
   const img = useCallback(
     (pfad, groesse = "w500") =>
+      globalThis.__GHG_PREVIEW_IMAGE__ ? globalThis.__GHG_PREVIEW_IMAGE__(pfad, groesse) :
       pfad
         ? `${basis}/api/img?path=${encodeURIComponent(pfad)}&size=${groesse}&profile=1${
             conn?.token ? `&token=${conn.token}` : ""
@@ -198,6 +197,16 @@ function AppInner() {
         : null,
     [basis, conn],
   );
+
+  useEffect(() => {
+    // Der bisherige /apk-Endpunkt verteilt ausschließlich die Handy-App.
+    // Die TV-App darf sich darüber niemals selbst durch Mobile ersetzen.
+    if (!basis || istTV) return;
+    ladeEinstellungen().then((E) => {
+      if (E.updatePruefen === false) return;
+      pruefeUpdate(api, APP_VERSION).then(setAppAktuell).catch(() => {});
+    });
+  }, [basis, api]);
 
   const aendereConn = useCallback(
     async (teil) => {
@@ -212,11 +221,14 @@ function AppInner() {
   /* ── Daten laden ──────────────────────────────────────────────────── */
   const datenLaden = useCallback(() => {
     if (!basis || !conn?.profile) return;
-    api("/api/library").then(setLib).catch(() => setLib({ shows: [], movies: [] }));
+    setDatenFehler(null);
+    api("/api/library").then(setLib).catch((e) => setDatenFehler(e.message || "Die Mediathek konnte nicht geladen werden."));
     api("/api/continue").then((c) => setWeiter(Array.isArray(c) ? c : [])).catch(() => {});
     api("/api/history").then((h) => setVerlauf(Array.isArray(h) ? h : [])).catch(() => {});
     api("/api/favorites").then((f) => setFavoriten(Array.isArray(f) ? f : [])).catch(() => {});
-    api("/api/profiles").then((p) => setProfile(Array.isArray(p) ? p : [])).catch(() => {});
+    const refreshProfiles=()=>api("/api/profiles").then(p=>setProfile(Array.isArray(p)?p:[])).catch(()=>{});
+    refreshProfiles();const profileTimer=setInterval(refreshProfiles,15000);
+    return()=>clearInterval(profileTimer);
   }, [api, basis, conn?.profile]);
 
   useEffect(datenLaden, [datenLaden]);
@@ -278,7 +290,7 @@ function AppInner() {
   }
 
   if (!conn.profile) {
-    return <ProfilSeite api={api} aufWahl={(id) => aendereConn({ profile: id })} />;
+    return <ProfilSeite base={basis} api={api} aufWahl={(id) => aendereConn({ profile: id })} />;
   }
 
   /* ── Player läuft im Vollbild, ohne Seitenleiste ──────────────────── */
@@ -292,7 +304,9 @@ function AppInner() {
     );
   }
 
-  const profilName = profile.find((p) => p.id === conn.profile)?.name;
+  const aktivesProfil = profile.find(p => p.id === conn.profile) || (profile.length===1?profile[0]:null);
+  const profilName = aktivesProfil?.name;
+  const profilAvatar = aktivesProfil?.avatar;
 
   /* ── Inhalt bestimmen ─────────────────────────────────────────────── */
   let inhalt;
@@ -349,6 +363,7 @@ function AppInner() {
   } else if (seite === "profiles") {
     inhalt = (
       <ProfilSeite
+        base={basis}
         api={api}
         aufWahl={(id) => { aendereConn({ profile: id }); setSeite("home"); }}
         aufZurueck={() => setSeite("home")}
@@ -376,68 +391,31 @@ function AppInner() {
     shows: lib?.shows?.length,
     list: favoriten?.length || undefined,
   };
-  const wechsle = (s) => { setStapel([]); setSeite(s); };
+  const wechsle = (s) => {
+    sys?.kern.vormerken();
+    rueckspruenge.current = [];
+    setAnsichtNr((n) => n + 1); setStapel([]); setSeite(s);
+  };
 
-  /* ── Handy: Navigation unten, Inhalt darüber ───────────────────────
-     Die Leiste wird bei offener Detailseite NICHT ausgeblendet — man soll
-     jederzeit umschalten können, ohne vorher zurückzugehen (so machen es
-     Netflix und Disney+ ebenfalls). */
-  if (navUnten) {
-    return (
-      <View style={st.wurzelHandy}>
-        <StatusBar style="light" />
-        <View style={st.inhalt}>{inhalt}</View>
-        <Unterleiste seite={oben ? null : seite} aufSeite={wechsle} zahlen={zahlen} />
-      </View>
-    );
-  }
-
-  /* ── Fernseher: Seitenleiste, fährt bei Fokus aus ──────────────────── */
-  return (
-    <View style={st.wurzel}>
-      <StatusBar style="light" hidden />
-      <NavBeobachter aufOffen={setNavOffen} />
-      <Seitenleiste
-        seite={oben ? null : seite}
-        aufSeite={wechsle}
-        zahlen={zahlen}
-        profilName={profilName}
-        version={APP_VERSION}
-        offen={navOffen}
-      />
-      <View style={st.inhalt}>{inhalt}</View>
+  if (datenFehler && !oben) inhalt = (
+    <View style={[st.center, { padding: M.rand, gap: 18 }]}>
+      <Text style={st.h2}>Mediathek nicht erreichbar</Text>
+      <Text style={[st.gedaempft, { textAlign: "center" }]}>{datenFehler}</Text>
+      <Knopf text="Erneut versuchen" haupt spalte={0} zeile={0} onPress={datenLaden} />
+      <Knopf text="Server wechseln" spalte={1} zeile={0} onPress={() => wechsle("verbindung")} />
     </View>
   );
-}
-
-/**
- * Fährt die Seitenleiste aus, sobald die Auswahl in ihr steht.
- *
- * Steckt in einer eigenen Komponente, weil sie den Fokus-Kontext braucht —
- * den gibt es erst unterhalb von <FokusProvider>.
- */
-function NavBeobachter({ aufOffen }) {
-  const sys = useFokusSystem();
-  const letzterRef = useRef(false);
-  useEffect(() => {
-    if (!sys) return;
-    const t = setInterval(() => {
-      const drin = sys.kern.aktivesElement?.bereich === "nav";
-      if (drin !== letzterRef.current) {
-        letzterRef.current = drin;
-        aufOffen(drin);
-      }
-    }, 120);
-    return () => clearInterval(t);
-  }, [sys, aufOffen]);
-  return null;
+  const ansicht = <View key={`${seite}:${oben?.name || "root"}:${oben?.id || ""}:${stapel.length}:${ansichtNr}`} style={{ flex: 1 }}>{inhalt}</View>;
+  const Shell = istTV ? TVShell : HandyShell;
+  return <Shell seite={seite} aufSeite={wechsle} zahlen={zahlen} profilName={profilName} profilAvatar={profilAvatar}>{ansicht}</Shell>;
 }
 
 export default function App() {
   return (
     <Absturzfang>
       <View style={{ flex: 1, backgroundColor: C.bg }}>
-        <FokusProvider>
+        <StatusBar style="light" hidden={istTV} />
+        <FokusProvider aktiv={istTV}>
           <AppInner />
         </FokusProvider>
       </View>

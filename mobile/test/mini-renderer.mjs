@@ -148,6 +148,7 @@ export function baueUmgebung(basis) {
       if (k === "StyleSheet") return { create: (o) => o, absoluteFill: {}, hairlineWidth: 1, flatten: (x) => x };
       if (k === "Platform") return { OS: "android", select: (o) => o.android ?? o.default };
       if (k === "Dimensions") return { get: () => ({ width: 1920, height: 1080 }), addEventListener: () => ({ remove() {} }) };
+      if (k === "useWindowDimensions") return () => ({ width: 1920, height: 1080, scale: 1, fontScale: 1 });
       if (k === "DeviceEventEmitter") return tastenBus;
       if (k === "findNodeHandle") return () => Math.floor(Math.random() * 1e6);
       if (k === "BackHandler") return { addEventListener: () => ({ remove() {} }) };
@@ -309,6 +310,9 @@ export function baueUmgebung(basis) {
   }
 
   function render(element) {
+    for (const inst of instanzen.values()) for (const slot of inst.zustand) {
+      try { slot?.aufraeumen?.(); } catch {}
+    }
     wurzelElement = element;
     instanzen.clear();
     lauf();
@@ -320,6 +324,13 @@ export function baueUmgebung(basis) {
     runden: () => rundenGesamt,
     erzeuge: (type, props, ...kinder) =>
       erzeugtesElement(type, { ...props, children: kinder.length <= 1 ? kinder[0] : kinder }),
-    aufraeumen: () => { Module._load = echt; },
+    aufraeumen: () => {
+      // Auch Tests müssen Intervalle und Event-Abos wie React beim Unmount
+      // beenden. Andernfalls blieb der Prozess nach dem letzten Test hängen.
+      for (const inst of instanzen.values()) for (const slot of inst.zustand) {
+        try { slot?.aufraeumen?.(); } catch {}
+      }
+      instanzen.clear(); Module._load = echt;
+    },
   };
 }

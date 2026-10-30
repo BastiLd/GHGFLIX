@@ -1,0 +1,146 @@
+/* Gemeinsame Inhalte, andere Bedienung: Touch-Ziele und Safe Areas statt einer
+   zusammengeschobenen Desktop-Seitenleiste. Desktop und TV bleiben unveraendert. */
+.mobile-header, .mobile-navigation { display: none; }
+.mobile-search-field { display: none; }
+.mobile-detail-actions { width: 100%; }
+.avatar-checker { background-color: #30313a; background-image: conic-gradient(#454650 25%, transparent 0 50%, #454650 0 75%, transparent 0); background-size: 16px 16px; }
+.avatar-cropper { display: grid; gap: 16px; }
+.avatar-crop-stage { display: flex; justify-content: center; align-items: center; gap: 18px; }
+.avatar-crop-canvas { width: min(240px, 65vw); height: auto; aspect-ratio: 1; border-radius: 50%; flex-shrink: 1; min-width: 0; touch-action: none; cursor: grab; box-shadow: 0 0 0 2px #ffffff60; }
+.avatar-crop-canvas:active { cursor: grabbing; }
+.avatar-crop-canvas:focus-visible { outline: 2px solid #ff4251; outline-offset: 4px; }
+.avatar-small-preview { display: grid; justify-items: center; gap: 8px; font-size: 11px; color: #b5b5c7; }
+.avatar-small-preview > div { width: 48px; height: 48px; border-radius: 50%; overflow: hidden; }
+.avatar-small-preview img { width: 100%; height: 100%; }
+.avatar-zoom { display: flex; align-items: center; gap: 8px; }
+.avatar-zoom button { width: 36px; height: 36px; display: grid; place-items: center; flex-shrink: 0; background: #292a35; border-radius: 8px; }
+.avatar-zoom input { min-width: 0; width: 100%; accent-color: #e50914; }
+.avatar-zoom output { min-width: 46px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+.avatar-background { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; font-size: 13px; }
+.avatar-background legend { margin-bottom: 8px; color: #b5b5c7; }
+.avatar-background label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+.avatar-background input[type=radio] { accent-color: #e50914; }
+.avatar-background input[type=color] { width: 36px; height: 32px; padding: 2px; border: 1px solid #545562; border-radius: 6px; background: transparent; cursor: pointer; }
+.avatar-crop-footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+.avatar-reset { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #b5b5c7; }
+@media (max-width: 480px) {
+  .avatar-cropper { gap: 12px; }
+  .avatar-cropper > p { font-size: 12px; line-height: 1.45; }
+  .avatar-crop-canvas { width: min(184px, 53vw); }
+  .avatar-crop-stage { gap: 12px; }
+}
+/* Installierte iPhone-WebApp: die App-Hülle darf nicht auf die kleinere
+   Safari-Layout-Höhe schrumpfen. Die Leiste gehört an den Rand dieser Hülle. */
+@media (display-mode: standalone) and (max-width: 767px) {
+  body.web-app, body.web-app #root { height: 100lvh; min-height: 100lvh; }
+  body.web-app .ghg-layout.h-screen { height: 100lvh; flex-shrink: 0; position: relative; }
+  body.web-app .ghg-layout .mobile-navigation { position: absolute; bottom: 0; }
+}
+.mobile-detail-actions summary { padding: 14px 0; color: #b5b5c7; cursor: pointer; }
+.mobile-detail-actions > div { display: flex; flex-wrap: wrap; gap: 10px; padding: 8px 0; }
+.mobile-more { max-width: 660px; margin: auto; padding: 20px 16px; }
+.mobile-more h1 { font-size: 25px; font-weight: 750; margin-bottom: 16px; }
+.mobile-eyebrow { color: #9292a3; font-size: 11px; letter-spacing: .15em; margin-bottom: 8px; }
+.mobile-profile, .mobile-link-list a { display: flex; align-items: center; gap: 12px; padding: 13px; }
+.mobile-profile { background: #20202a; border-radius: 10px; margin-bottom: 16px; }
+.mobile-profile div, .mobile-link-list span { flex: 1; }
+.mobile-profile small { display: block; color: #aaaabb; margin-top: 3px; }
+.mobile-link-list { border: 1px solid #30303b; border-radius: 10px; overflow: hidden; }
+.mobile-link-list a + a { border-top: 1px solid #30303b; }
+.mobile-install { background: #15151c; border-radius: 10px; padding: 16px; margin-top: 20px; }
+.mobile-install h2 { font-size: 18px; font-weight: 750; margin: 12px 0; }
+.mobile-install p { color: #b6b6c5; font-size: 14px; line-height: 1.6; margin-top: 12px; }
+.touch-transport { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 6px 0 8px; }
+.touch-transport button { min-width: 40px; height: 40px; display: flex; gap: 3px; align-items: center; justify-content: center; border-radius: 7px; background: #ffffff0c; }
+.touch-transport button span { font-size: 12px; }
+.touch-transport .touch-play { width: 44px; height: 40px; background: #e50914; }
+.touch-player-actions { display: flex; gap: 9px; }
+.touch-player-actions button { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 7px 10px; background: #22232be6; border-radius: 7px; font-size: 12px; }
+.touch-player-actions button:first-child { flex: 1; min-width: 0; }
+.touch-player-actions button span { min-width: 0; }
+.touch-player-actions strong { font-size: 12px; font-weight: 600; }
+.touch-player-actions small { display: none; color: #b2b2c1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; margin-top: 3px; }
+.touch-sheet-backdrop { position: fixed; z-index: 500; inset: 0; background: #0009; display: flex; align-items: end; justify-content: center; padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
+.touch-sheet { color: white; background: #17181f; width: 100%; max-width: 560px; max-height: calc(100dvh - 40px); overflow-y: auto; border-radius: 14px; border: 1px solid #393a45; padding: 16px; box-shadow: 0 -12px 70px #0008; }
+.touch-sheet header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.touch-sheet h2 { font-size: 18px; font-weight: 700; }
+.touch-sheet header button { flex-shrink: 0; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; background: #ffffff0d; }
+.touch-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.touch-tabs button { flex: 1; min-height: 40px; border-radius: 8px; background: #262831; font-weight: 700; }
+.touch-tabs [aria-selected=true] { background: #541f29; box-shadow: inset 0 0 0 2px #ff4251; }
+.touch-track-list { max-height: 42dvh; overflow-y: auto; }
+.touch-track-search { width: 100%; padding: 12px; border: 1px solid #444653; border-radius: 12px; background: #252731; font-size: 16px; margin-bottom: 12px; }
+.touch-track-list button { width: 100%; min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: left; padding: 10px; margin-bottom: 4px; border-radius: 8px; background: #252731; }
+.touch-track-list [aria-pressed=true] { background: #4b202b; }
+.touch-track-list p, .touch-options p { color: #aaaebe; font-size: 13px; line-height: 1.5; padding: 12px 0; }
+.touch-secondary { width: 100%; padding: 11px 10px; margin-top: 10px; border-radius: 12px; background: #2a2d38; font-weight: 650; }
+.touch-options label { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
+.touch-options select { background: #2a2d38; padding: 12px; border-radius: 12px; }
+@media (orientation: landscape) and (max-height: 500px) { .touch-sheet-backdrop { align-items: center; } .touch-transport { margin: 3px 0 8px; } .touch-transport .touch-play { width: 52px; height: 46px; } .touch-player-actions button { min-height: 44px; padding: 6px 12px; } }
+@media (max-width: 767px), (pointer: coarse) and (max-width: 1100px) {
+  body.web-app { -webkit-text-size-adjust: 100%; overscroll-behavior: none; }
+  body.web-app .h-screen { height: 100dvh; }
+  body.web-app button, body.web-app a, body.web-app select { touch-action: manipulation; }
+  body.web-app input, body.web-app select, body.web-app textarea { font-size: 16px; }
+  body.web-app .ghg-layout { padding-top: env(safe-area-inset-top); }
+  body.web-app .desktop-sidebar, body.web-app .desktop-header { display: none; }
+  body.web-app .mobile-search-field { display: flex; align-items: center; gap: 12px; background: #20202a; padding: 14px; border: 1px solid #393945; border-radius: 14px; margin-bottom: 22px; }
+  .mobile-search-field input { width: 100%; min-width: 0; background: transparent; outline: none; }
+  body.web-app .mobile-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; height: 48px; padding: 0 max(18px, env(safe-area-inset-right)) 0 max(18px, env(safe-area-inset-left)); background: #08080af0; }
+  .mobile-header button { height: 34px; width: 34px; display: grid; place-items: center; border-radius: 14px; background: #20202a; }
+  body.web-app .mobile-navigation { display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; bottom: 0; left: 0; right: 0; z-index: 60; padding: 4px max(8px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); background: #101014f5; backdrop-filter: blur(24px); border-top: 1px solid #ffffff15; }
+  .mobile-navigation a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 44px; color: #9696a7; font-size: 10px; font-weight: 650; }
+  .mobile-navigation a.active { color: #ff4251; }
+  body.web-app .ghg-layout main { padding-bottom: calc(68px + env(safe-area-inset-bottom)); overscroll-behavior-y: contain; }
+  body.web-app .ghg-layout main .px-8, body.web-app .ghg-layout main .px-10 { padding-left: 16px; padding-right: 16px; }
+  body.web-app .ghg-layout main .text-3xl { font-size: 23px; }
+  body.web-app .ghg-hero { height: 36dvh; min-height: 270px; max-height: 330px; }
+  body.web-app .ghg-hero-content { padding: 18px 16px; }
+  body.web-app .ghg-hero h1 { font-size: 26px; line-height: 1.12; text-wrap: balance; }
+  body.web-app .ghg-hero-content > .flex:last-child { flex-wrap: wrap; gap: 8px; }
+  body.web-app .ghg-hero-content > p { -webkit-line-clamp: 2; margin-bottom: 10px; }
+  body.web-app .ghg-media-row h2 { font-size: 16px; }
+  body.web-app .ghg-media-row .overflow-x-auto { gap: 10px; scroll-snap-type: x proximity; }
+  body.web-app .ghg-media-row .overflow-x-auto > * { scroll-snap-align: start; }
+  body.web-app .ghg-detail-banner { min-height: 174px; height: 23dvh; max-height: 210px; }
+  body.web-app .ghg-detail-heading { margin-top: -40px; flex-direction: column; gap: 12px; }
+  body.web-app .ghg-detail-heading > :first-child { display: none; }
+  body.web-app .ghg-detail-heading > :last-child { padding-top: 0; }
+  body.web-app .ghg-detail-heading h1 { font-size: 23px; line-height: 1.18; }
+  body.web-app .ghg-filterbar { flex-wrap: wrap; width: 100%; gap: 8px; }
+  body.web-app .ghg-season-heading { flex-wrap: wrap; }
+  body.web-app .ghg-episode-row { gap: 10px; padding: 10px 0; }
+  body.web-app .ghg-episode-row > .w-44 { width: 108px; height: 68px; }
+  body.web-app .ghg-episode-row > .self-start { flex-direction: column; }
+  body.web-app .ghg-episode-row .opacity-0 { opacity: 1; }
+  body.web-app .ghg-episode-row > .self-start button { min-width: 42px; }
+  body.web-app .ghg-episode-row .font-semibold { font-size: 13px; }
+  body.web-app .ghg-filterbar input { flex: 1; min-width: 130px; }
+  body.web-app .ghg-filterbar select { max-width: 100%; min-height: 44px; }
+  body.web-app .ghg-layout main button { min-height: 42px; }
+  body.web-app .ghg-player-top { padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 16px max(16px, env(safe-area-inset-left)); }
+  body.web-app .ghg-player-top h1 { font-size: 17px; }
+  body.web-app .ghg-player-bottom { padding: 10px max(16px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+}
+
+@media (max-width: 767px), (pointer: coarse) and (max-width: 1100px) {
+  body.web-app .ghg-hero-content .text-sm, body.web-app .ghg-detail-heading .text-sm { font-size: 12px; }
+  body.web-app .ghg-detail-heading > :last-child > p { font-size: 13px; line-height: 1.5; }
+  body.web-app .ghg-detail-heading .mt-6 { margin-top: 14px; }
+  body.web-app .ghg-hero-content button, body.web-app .ghg-detail-heading button { padding: 7px 11px; font-size: 12px; min-height: 38px; border-radius: 7px; }
+  body.web-app .ghg-media-row { margin-bottom: 20px; }
+  body.web-app .ghg-media-row .media-card { width: 108px; }
+  body.web-app .ghg-media-row .media-card-wide { width: 192px; }
+  body.web-app .ghg-media-row .text-sm { font-size: 12px; }
+  body.web-app .mobile-navigation svg { width: 21px; height: 21px; }
+  .mobile-detail-actions summary { padding: 10px 0; font-size: 12px; }
+  .touch-control-row { display: flex; flex-direction: column; gap: 4px; }
+}
+@media (orientation: landscape) and (max-height: 500px) {
+  .touch-control-row { flex-direction: row; align-items: center; justify-content: space-between; }
+  .touch-transport { margin: 0; }
+  .touch-transport .touch-play { width: 44px; height: 40px; }
+  .touch-player-actions button { min-height: 40px; }
+  .touch-sheet { max-width: 440px; max-height: calc(100dvh - 24px); }
+  .touch-track-list { max-height: 35dvh; }
+}

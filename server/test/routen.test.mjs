@@ -103,8 +103,27 @@ console.log("\n── Sicherheitsheader (Trailer-Einbettung) ──────�
 /* ── DER EIGENTLICHE REGRESSIONSTEST ──────────────────────────────────────
    Jede dieser Routen war durch die Verschachtelung im /api/apk-Block tot.
    Wichtig ist hier vor allem: NICHT 404/401 — das wäre das alte Verhalten. */
+// Der Desktop-WebView lädt die API von einem anderen Ursprung. Ohne PATCH
+// in der Vorabantwort blockiert der Browser das Speichern von Name und Bild.
+console.log("\n── Profilbearbeitung vom Desktop: CORS-Vorabprüfung ────────");
+{
+  const r = await hole("/api/profiles/1", {
+    method: "OPTIONS",
+    headers: {
+      Origin: "http://tauri.localhost",
+      "Access-Control-Request-Method": "PATCH",
+      "Access-Control-Request-Headers": "authorization,content-type",
+    },
+  });
+  pruefe("Profil-Vorabprüfung benötigt noch kein Zugangs-Token", r.status === 204);
+  pruefe("PATCH ist für Profiländerungen freigegeben", (r.headers.get("access-control-allow-methods") || "").split(/,\s*/).includes("PATCH"));
+  pruefe("Desktop-Ursprung wird zugelassen", ["*", "http://tauri.localhost"].includes(r.headers.get("access-control-allow-origin")));
+  const erlaubt = (r.headers.get("access-control-allow-headers") || "").toLowerCase().split(/,\s*/);
+  pruefe("Anmeldung und JSON sind bei Profiländerungen zugelassen", erlaubt.includes("authorization") && erlaubt.includes("content-type"));
+}
+
 console.log("\n── QR-Kopplung: sind die Routen überhaupt erreichbar? ──────");
-let code = null;
+let code = null, abholToken = null;
 {
   const r = await hole("/api/pair/start", {
     method: "POST",
@@ -113,12 +132,12 @@ let code = null;
   });
   pruefe("POST /api/pair/start ist erreichbar (nicht 404/401)", r.status === 200);
   const d = await r.json().catch(() => ({}));
-  code = d.code || null;
+  code = d.code || null; abholToken = d.abholToken;
   pruefe("und liefert einen Kopplungscode", typeof code === "string" && code.length === 6);
 }
 
 {
-  const r = await hole(`/api/pair/check?code=${encodeURIComponent(code || "XXXXXX")}`);
+  const r = await hole(`/api/pair/check?code=${encodeURIComponent(code || "XXXXXX")}&abholToken=${abholToken}`);
   pruefe("GET /api/pair/check ist erreichbar", r.status === 200);
   const d = await r.json().catch(() => ({}));
   pruefe("und meldet den Code als offen", d.status === "offen");
@@ -142,7 +161,7 @@ console.log("\n── Der komplette Ablauf, wie am Gerät ───────�
   const htmlFalsch = await falsch.text();
   pruefe("falsches Passwort wird abgewiesen", /Falsches Passwort/i.test(htmlFalsch));
 
-  const nochOffen = await (await hole(`/api/pair/check?code=${code}`)).json();
+  const nochOffen = await (await hole(`/api/pair/check?code=${code}&abholToken=${abholToken}`)).json();
   pruefe("und der Fernseher bekommt dadurch KEIN Token", nochOffen.status === "offen");
 
   const richtig = await hole("/koppeln", {
@@ -152,7 +171,7 @@ console.log("\n── Der komplette Ablauf, wie am Gerät ───────�
   });
   pruefe("richtiges Passwort wird angenommen", richtig.status === 200);
 
-  const fertig = await (await hole(`/api/pair/check?code=${code}`)).json();
+  const fertig = await (await hole(`/api/pair/check?code=${code}&abholToken=${abholToken}`)).json();
   pruefe("der Fernseher holt sein Token ab", fertig.status === "fertig" && !!fertig.token);
 
   // Der Beweis, dass die Kopplung wirklich etwas wert ist: mit genau diesem

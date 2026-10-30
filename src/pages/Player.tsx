@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { command, destroy, getProperty, init, observeProperties, setProperty, srtToVtt, webTogglePip } from "../lib/mpv";
+import { command, destroy, getProperty, init, observeProperties, setProperty, srtToVtt, webTogglePip, webStreamQuality } from "../lib/mpv";
 import { episodeVersions, getEpisode, getMovie, getProgress, getSetting, listShowEpisodes, mediaThumbnail, movieVersions, revealInExplorer, setEpisodeIntro, setMediaDims, setProgress, trickplayInfo, type TrickplayInfo } from "../lib/api";
 import { openCtx } from "../lib/contextmenu";
 import { formatTime, quality as computeQuality, seasonEpisodeLabel } from "../lib/format";
@@ -30,12 +30,15 @@ import { comboFromEvent } from "../lib/keys";
 import { ENGLISH, GERMAN, langName } from "../lib/lang";
 import { useStore } from "../lib/store";
 import { applyMiniMargins, playback, usePlayback } from "../lib/playback";
-import { uiPrefs } from "../lib/uiPrefs";
+import { uiPrefs, useUiPrefs } from "../lib/uiPrefs";
 import type { Episode, MediaVersion } from "../lib/types";
 import { Wordmark } from "../components/Brand";
 import { stillUrl } from "../lib/img";
 import { Scrubber } from "../components/Scrubber";
 import { Spinner } from "../components/ui";
+
+import { useMobileLayout } from "../lib/useMobileLayout";
+import { MobilePlayerControls } from "../components/MobilePlayerControls";
 
 interface Track {
   id: number;
@@ -126,6 +129,11 @@ async function buildMpvArgs(): Promise<string[]> {
 }
 
 export default function Player() {
+  const touchLayout = useMobileLayout();
+  const mobileDialogRef = useRef(false);
+  const subScale = useUiPrefs(s => s.subScale);
+  const [streamQuality, setStreamQuality] = useState(webStreamQuality);
+  useEffect(() => { void setProperty("sub-scale", subScale); }, [subScale]);
   const { type, id } = useParams();
   const mediaType = (type === "episode" ? "episode" : "movie") as "movie" | "episode";
   const mediaId = Number(id);
@@ -136,6 +144,8 @@ export default function Player() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVol] = useState(100);
@@ -376,7 +386,8 @@ export default function Player() {
   const leavePlayer = useCallback(
     async (action: "mini" | "close") => {
       saveProgress();
-      if (fullscreen) await getCurrentWindow().setFullscreen(false).catch(() => {});
+      await getCurrentWindow().setFullscreen(false).catch(() => {});
+      setFullscreen(false);
       if (pipRef.current) {
         await restoreWindow();
         pipRef.current = false;
@@ -423,6 +434,9 @@ export default function Player() {
     }
   }, [mediaType, nextEp, navigate, saveProgress, goBack]);
 
+  const endHandlerRef = useRef(handleEnd);
+  endHandlerRef.current = handleEnd;
+
   const togglePause = useCallback(() => {
     setProperty("pause", !paused).catch(() => {});
   }, [paused]);
@@ -431,7 +445,7 @@ export default function Player() {
     const w = getCurrentWindow();
     const fs = await w.isFullscreen();
     await w.setFullscreen(!fs);
-    setFullscreen(!fs);
+    setFullscreen(await w.isFullscreen());
   }, []);
 
   const togglePip = useCallback(async () => {
@@ -659,7 +673,7 @@ export default function Player() {
           } else if (name === "demuxer-cache-time") {
             setBuffered(Number(data) || 0);
           } else if (name === "eof-reached") {
-            if (data === true) handleEnd();
+            if (data === true) endHandlerRef.current();
           }
         });
         // restore the last-used volume + playback speed
@@ -805,6 +819,7 @@ export default function Player() {
     setShowUi(true);
     if (hideTimer.current) window.clearTimeout(hideTimer.current);
     hideTimer.current = window.setTimeout(() => {
+      if (mobileDialogRef.current || pausedRef.current) return;
       setShowUi(false);
       setTrackMenu(null);
     }, Math.max(1, prefsRef.current.uiTimeoutSec || 3) * 1000);
@@ -1098,6 +1113,7 @@ export default function Player() {
       className={`fixed inset-0 bg-transparent text-white select-none ${showUi ? "" : "cursor-none"}`}
       onMouseMove={wake}
       onMouseLeave={() => {
+        if (touchLayout || mobileDialogRef.current) return;
         setShowUi(false);
         setTrackMenu(null);
       }}
@@ -1112,7 +1128,7 @@ export default function Player() {
       <div
         className="absolute inset-0"
         onMouseDown={onBackgroundMouseDown}
-        onClick={() => !pip && togglePause()}
+        onClick={() => { if (touchLayout) { wake(); return; } if (!pip) togglePause(); }}
         onDoubleClick={(e) => {
           if (pip) return;
           // double-click on the left/right third seeks (configurable), middle = fullscreen
@@ -1295,7 +1311,7 @@ export default function Player() {
       )}
 
       {/* top bar */}
-      <div className={`absolute top-0 left-0 right-0 p-5 bg-gradient-to-b from-black/80 to-transparent transition-opacity duration-300 ${showUi && !pip ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+      <div className={`ghg-player-top absolute top-0 left-0 right-0 p-5 bg-gradient-to-b from-black/80 to-transparent transition-opacity duration-300 ${showUi && !pip ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
         <div className="flex items-center gap-4">
           <button onClick={goBack} title={prefsRef.current.backButtonAction === "mini" ? "Zurück (Mini-Player)" : "Zurück (Player schließen)"} className="p-2 rounded-lg bg-black/40 hover:bg-ghg-red transition">
             <ArrowLeft className="w-5 h-5" />
@@ -1329,7 +1345,7 @@ export default function Player() {
 
       {/* bottom controls */}
       <div
-        className={`absolute bottom-0 left-0 right-0 ${pip ? "p-2" : "p-6"} bg-gradient-to-t from-black/90 to-transparent transition-opacity duration-300 ${showUi ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+        className={`ghg-player-bottom absolute bottom-0 left-0 right-0 ${pip ? "p-2" : "p-6"} bg-gradient-to-t from-black/90 to-transparent transition-opacity duration-300 ${showUi ? "opacity-100" : "opacity-0 pointer-events-none"}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-3 mb-3 text-xs font-mono">
@@ -1368,7 +1384,15 @@ export default function Player() {
           </button>
         </div>
 
-        <div className="flex items-center gap-2">
+        {touchLayout ? <MobilePlayerControls
+          paused={paused} onPause={togglePause} onSeek={s => seekTo(Math.max(0, Math.min(duration, position + s)))}
+          onFullscreen={toggleFullscreen} onNext={nextEp ? () => navigate(`/play/episode/${nextEp.id}`) : undefined} onAspect={cycleAspect}
+          audio={audioTracks.map(t => ({ id: t.id, label: trackLabel(t) }))} subtitles={subTracks.map(t => ({ id: t.id, label: trackLabel(t) }))}
+          aid={aid} sid={sid} onAudio={selectAudio} onSubtitle={selectSub} speed={speed} onSpeed={changeSpeed}
+          quality={streamQuality} onQuality={v => { setStreamQuality(v); void setProperty("ghg-quality", v); }}
+          scale={subScale} onScale={v => useUiPrefs.getState().setPref("subScale", v)} delay={subDelay} onDelay={v => nudgeDelay("sub", v - subDelay)}
+          onDialog={open => { mobileDialogRef.current = open; if (open) setShowUi(true); }}
+        /> : <div className="flex items-center gap-2">
           <button onClick={togglePause} className="p-2.5 rounded-full bg-ghg-red hover:bg-ghg-red-bright transition">
             {paused ? <Play className="w-5 h-5 fill-white" /> : <Pause className="w-5 h-5 fill-white" />}
           </button>
@@ -1545,7 +1569,7 @@ export default function Player() {
           <button onClick={toggleFullscreen} className="p-2 rounded-lg hover:bg-white/10 transition" title="Vollbild">
             <Maximize className="w-5 h-5" />
           </button>
-        </div>
+        </div>}
       </div>
     </div>
   );

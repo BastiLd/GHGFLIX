@@ -52,6 +52,9 @@ export function erzeugeFokusKern(opt = {}) {
   const elemente = new Map();
   let aktiv = null;         // Schlüssel des ausgewählten Elements
   let dialogEbene = 0;      // >0 = ein Dialog liegt oben
+  let inhaltMerker = null;
+  let vorgemerkt = null;
+  const abonnenten = new Set();
 
   const beiWechsel = opt.beiWechsel || (() => {});
 
@@ -71,6 +74,11 @@ export function erzeugeFokusKern(opt = {}) {
    */
   function anmelden(schluessel, e) {
     elemente.set(schluessel, { schluessel, ...e });
+    if (aktiv === schluessel) e.melde?.(true);
+    if (vorgemerkt && e.bereich === vorgemerkt.bereich && e.zeile === vorgemerkt.zeile && e.spalte === vorgemerkt.spalte && !e.uebersprigen) {
+      vorgemerkt = null;
+      setzen(schluessel);
+    }
     // Noch nichts ausgewählt? Dann übernimmt das erste brauchbare Element.
     if (aktiv == null && !e.uebersprigen && e.bereich !== "dialog") {
       setzen(schluessel);
@@ -84,6 +92,7 @@ export function erzeugeFokusKern(opt = {}) {
 
   function abmelden(schluessel) {
     const war = aktiv === schluessel;
+    if (war) elemente.get(schluessel)?.melde?.(false);
     elemente.delete(schluessel);
     if (!war) return;
     aktiv = null;
@@ -101,7 +110,7 @@ export function erzeugeFokusKern(opt = {}) {
     const alt = letzteBekannt.get(schluessel);
     if (!alt) return null;
     const kandidaten = [...elemente.values()]
-      .filter((x) => x.bereich === alt.bereich && x.zeile === alt.zeile && !x.uebersprigen)
+      .filter((x) => x.bereich === alt.bereich && x.zeile === alt.zeile && !x.uebersprigen && istErlaubt(x))
       .sort((a, b) => Math.abs(a.spalte - alt.spalte) - Math.abs(b.spalte - alt.spalte));
     return kandidaten[0] ?? null;
   }
@@ -115,14 +124,29 @@ export function erzeugeFokusKern(opt = {}) {
     const alt = aktiv;
     const altE = alt != null ? elemente.get(alt) : null;
     const neuE = elemente.get(schluessel);
-    if (!neuE) return;
+    if (!neuE || neuE.uebersprigen || !istErlaubt(neuE)) return;
     aktiv = schluessel;
     letzteBekannt.set(schluessel, { bereich: neuE.bereich, zeile: neuE.zeile, spalte: neuE.spalte });
     // Spalte der Zeile merken, damit ↑↓ die Position hält
     spaltenGedaechtnis.set(neuE.bereich + ":" + neuE.zeile, neuE.spalte);
     altE?.melde?.(false);
     neuE.melde?.(true);
+    if (neuE.bereich === "inhalt") inhaltMerker = { schluessel, bereich: neuE.bereich, zeile: neuE.zeile, spalte: neuE.spalte };
+    if (neuE.bereich === "nav") navMerkerIndex = neuE.zeile;
     beiWechsel(neuE, altE);
+    abonnenten.forEach((fn) => fn(neuE));
+  }
+
+  /** Metadaten ändern, ohne den ausgewählten Knopf kurz abzumelden. */
+  function aktualisieren(schluessel, werte) {
+    const e = elemente.get(schluessel);
+    if (!e) return;
+    Object.assign(e, werte);
+    if (aktiv === schluessel && e.uebersprigen) {
+      e.melde?.(false); aktiv = null;
+      const ersatz = alleErlaubten()[0];
+      if (ersatz) setzen(ersatz.schluessel);
+    }
   }
 
   const spaltenGedaechtnis = new Map();
@@ -148,7 +172,7 @@ export function erzeugeFokusKern(opt = {}) {
    */
   function bewegen(richtung) {
     const jetzt = elemente.get(aktiv);
-    if (!jetzt) {
+    if (!jetzt || !istErlaubt(jetzt) || jetzt.uebersprigen) {
       const erst = alleErlaubten()[0];
       if (erst) { setzen(erst.schluessel); return true; }
       return false;
@@ -185,6 +209,9 @@ export function erzeugeFokusKern(opt = {}) {
       if (richtung === "right" && jetzt.bereich === "nav") {
         const inhalt = feld.filter((x) => x.bereich === "inhalt");
         if (inhalt.length) {
+          const gemerkt = inhalt.find((x) => x.schluessel === inhaltMerker?.schluessel)
+            ?? inhalt.find((x) => x.zeile === inhaltMerker?.zeile && x.spalte === inhaltMerker?.spalte);
+          if (gemerkt) { setzen(gemerkt.schluessel); return true; }
           const zeile = Math.min(...inhalt.map((x) => x.zeile));
           const kandidaten = inhalt.filter((x) => x.zeile === zeile).sort((a, b) => a.spalte - b.spalte);
           setzen(kandidaten[0].schluessel);
@@ -228,16 +255,15 @@ export function erzeugeFokusKern(opt = {}) {
 
   function ausloesen() {
     const e = elemente.get(aktiv);
-    if (!e) return false;
+    if (!e || e.uebersprigen || !istErlaubt(e)) return false;
     e.onPress?.();
     return true;
   }
 
   function langDruecken() {
     const e = elemente.get(aktiv);
-    if (!e?.onLang) return false;
-    e.onLang();
-    return true;
+    if (!e?.onLang || e.uebersprigen || !istErlaubt(e)) return false;
+    return e.onLang() !== false;
   }
 
   /* ── Dialoge ─────────────────────────────────────────────────────────── */
@@ -251,7 +277,7 @@ export function erzeugeFokusKern(opt = {}) {
   function dialogZu() {
     dialogEbene = Math.max(0, dialogEbene - 1);
     const zurueck = vorDialog.pop();
-    if (zurueck && elemente.has(zurueck)) setzen(zurueck);
+    if (zurueck && elemente.has(zurueck) && istErlaubt(elemente.get(zurueck))) setzen(zurueck);
     else {
       const erst = alleErlaubten()[0];
       if (erst) setzen(erst.schluessel);
@@ -263,7 +289,9 @@ export function erzeugeFokusKern(opt = {}) {
 
   return {
     anmelden, abmelden, setzen, bewegen, ausloesen, langDruecken,
-    dialogAuf, dialogZu, merkeNav,
+    dialogAuf, dialogZu, merkeNav, aktualisieren,
+    vormerken: (position = { bereich: "inhalt", zeile: 0, spalte: 0 }) => { vorgemerkt = position; inhaltMerker = null; },
+    abonnieren: (fn) => { abonnenten.add(fn); return () => abonnenten.delete(fn); },
     get aktiv() { return aktiv; },
     get aktivesElement() { return elemente.get(aktiv) ?? null; },
     get anzahl() { return elemente.size; },

@@ -6,6 +6,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, normalize, basename, dirname } from "node:path";
 import { spawn } from "node:child_process";
+import { recordFavorite } from './profile.js';
 import {
   openDb, getSetting, setSetting, listLibraries, addLibrary, removeLibrary, DATA_DIR, setPlacement,
   resolveProfile,
@@ -13,7 +14,7 @@ import {
 import {
   scanLibrary, scanState, removeLibraryContent, detectLibraries, primaryRoot, isSystemDir, BROWSE_ROOTS,
   applyPendingProgress, refreshAllMetadata, applyShowMatch, applyMovieMatch, refreshEpisodeMeta,
-  rememberShowIdentity, rememberMovieIdentity,
+  rememberShowIdentity, rememberMovieIdentity, zuordnungSofort,
 } from "./scanner.js";
 import { canDirectPlay, ffprobe } from "./stream.js";
 import * as tmdb from "./tmdb.js";
@@ -21,6 +22,8 @@ import { asLocalRef, isLocalRef } from "./artwork.js";
 import * as ordnerwahl from "./ordnerwahl.js";
 import * as serienfilme from "./serienfilme.js";
 import * as kanaele from "./kanaele.js";
+import * as extras from "./extras.js";
+import * as zuordnung from "./zuordnung.js";
 import { makeThumb, trickplayInfo, ensureTrickplay, dirSize, clearThumbCache, THUMB_DIR, TRICK_DIR } from "./thumbs.js";
 
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
@@ -154,7 +157,8 @@ function isLibraryFile(d, path) {
   return !!(
     d.prepare("SELECT 1 FROM movies WHERE path = ?").get(path) ||
     d.prepare("SELECT 1 FROM episodes WHERE path = ?").get(path) ||
-    d.prepare("SELECT 1 FROM episode_files WHERE path = ?").get(path)
+    d.prepare("SELECT 1 FROM episode_files WHERE path = ?").get(path) ||
+    d.prepare("SELECT 1 FROM extras WHERE path = ?").get(path)
   );
 }
 
@@ -191,6 +195,7 @@ function mergeShowsByTmdb(tmdbId, preferId) {
   for (const r of rows) {
     if (r.id === survivor) continue;
     db().prepare("UPDATE episodes SET show_id=? WHERE show_id=?").run(survivor, r.id);
+    db().prepare("UPDATE extras SET show_id=? WHERE show_id=?").run(survivor, r.id);
     db().prepare("UPDATE OR IGNORE favorites SET ref_id=? WHERE media_type='show' AND ref_id=?").run(survivor, r.id);
     db().prepare("DELETE FROM favorites WHERE media_type='show' AND ref_id=?").run(r.id);
     db().prepare("DELETE FROM shows WHERE id=?").run(r.id);
@@ -239,8 +244,11 @@ function toolVersion(bin) {
 
 // ── the command table ────────────────────────────────────────────────────────
 
-const kindToServer = (k) => (k === "tv" ? "show" : "movie");
-const kindToDesktop = (k) => (k === "show" ? "tv" : "movie");
+/* Desktop-Namen ↔ Server-Namen. „mixed" (Serien & Filme in EINEM Ordner)
+   heißt auf beiden Seiten gleich — vorher wurde es hier stillschweigend zu
+   „movie", und alle Folgen einer gemischten Bibliothek landeten als Filme. */
+const kindToServer = (k) => (k === "tv" || k === "show" ? "show" : k === "mixed" ? "mixed" : "movie");
+const kindToDesktop = (k) => (k === "show" ? "tv" : k === "mixed" ? "mixed" : "movie");
 const libOut = (l) => ({ id: l.id, path: l.path, kind: kindToDesktop(l.kind) });
 
 export async function handleInvoke(cmd, a = {}) {
@@ -248,6 +256,7 @@ export async function handleInvoke(cmd, a = {}) {
   switch (cmd) {
     // ===== settings =====
     case "get_setting":
+      if (['supabase_key','password','auth_tokens'].includes(String(a.key))) return null;
       return getSetting(String(a.key));
     case "set_setting":
       setSetting(String(a.key), String(a.value));
@@ -325,7 +334,7 @@ export async function handleInvoke(cmd, a = {}) {
     case "apply_folder_selection": {
       const summary = ordnerwahl.apply({
         root: String(a.root || ""),
-        kind: String(a.kind || "tv") === "movie" ? "movie" : "tv",
+        kind: ["movie", "mixed"].includes(String(a.kind)) ? String(a.kind) : "tv",
         accept: Array.isArray(a.accept) ? a.accept.map(String) : [],
         reject: Array.isArray(a.reject) ? a.reject.map(String) : [],
       });
@@ -455,7 +464,9 @@ export async function handleInvoke(cmd, a = {}) {
            position=excluded.position, duration=excluded.duration, watched=excluded.watched, updated_at=excluded.updated_at`,
       );
       for (const r of rows) up.run(r.profile_id, r.media_type, r.tmdb_id, r.season, r.episode, r.position, r.duration, r.watched, r.updated_at);
-      d.exec("DELETE FROM episodes; DELETE FROM shows; DELETE FROM movies; DELETE FROM progress;");
+      // Bonusmaterial hängt an Serien-IDs, die gleich neu vergeben werden. Die
+      // Handentscheidungen dazu (Tabelle zuordnung) bleiben — sie hängen am Pfad.
+      d.exec("DELETE FROM episodes; DELETE FROM shows; DELETE FROM movies; DELETE FROM progress; DELETE FROM extras;");
       return null;
     }
     case "detect_intros": {
@@ -837,6 +848,7 @@ export async function handleInvoke(cmd, a = {}) {
     case "toggle_favorite": {
       const args = [resolveProfile(a.profileId), a.mediaType, Number(a.refId)];
       const existing = d.prepare("SELECT 1 FROM favorites WHERE profile_id=? AND media_type=? AND ref_id=?").get(...args);
+      recordFavorite(d,...args,!!existing);
       if (existing) {
         d.prepare("DELETE FROM favorites WHERE profile_id=? AND media_type=? AND ref_id=?").run(...args);
         return false;
@@ -1028,6 +1040,46 @@ export async function handleInvoke(cmd, a = {}) {
     case "import_data":
       throw new Error("Im Browser bitte den Download/Upload-Export benutzen.");
 
+    // ===== Zusatzmaterial, Notizen, Handzuordnung (wie am Desktop) =====
+    case "show_extras":
+      return extras.fuerSerie(Number(a.showId));
+    case "get_extra": {
+      /* Für den Player: Bonusmaterial hat keinen Film-/Folgen-Eintrag, also
+         liefert das hier Titel, Serie und Pfad zum Abspielen. */
+      const x = extras.get(Number(a.id));
+      if (!x) return null;
+      const s = d.prepare("SELECT title FROM shows WHERE id=?").get(x.showId);
+      return { ...x, showTitle: s?.title ?? null, artText: zuordnung.artKlartext(x.art) };
+    }
+    case "set_extra_art":
+      extras.vonHandSetzen(Number(a.id), String(a.art || ""), a.staffel == null || a.staffel === "" ? null : Number(a.staffel));
+      return null;
+    case "set_note":
+      extras.notizSetzen(String(a.path || ""), String(a.text ?? ""));
+      return null;
+    case "all_notes":
+      return extras.alleNotizen();
+    case "assignment_list":
+      return zuordnung.liste(!!a.onlyUncertain);
+    case "assign_file": {
+      const path = String(a.path || "");
+      if (!path) throw new Error("Pfad fehlt");
+      const z = zuordnung.zielAus(a.ziel);
+      zuordnung.setzen(path, z);
+      /* Sofort umsetzen, damit die Änderung nicht erst beim nächsten Scan
+         greift. Der Scan danach macht exakt dasselbe (eine Wahrheit) und holt
+         zusätzlich Folgentitel/Bilder für die neue Position von TMDb. */
+      zuordnungSofort(path);
+      void scanLibrary();
+      return null;
+    }
+    case "clear_assignment":
+      zuordnung.loeschen(String(a.path || ""));
+      return null;
+    case "play_file":
+      // Nur am Desktop gibt es mpv — im Browser öffnet die Oberfläche den Player.
+      throw new Error("Im Browser bitte über den Player abspielen.");
+
     // ===== playback (web player) =====
     case "play_info": {
       const path = String(a.path || "");
@@ -1038,12 +1090,15 @@ export async function handleInvoke(cmd, a = {}) {
         const f = d.prepare("SELECT episode_id FROM episode_files WHERE path=?").get(path);
         if (f) row = d.prepare("SELECT 'episode' mt, * FROM episodes WHERE id=?").get(f.episode_id);
       }
+      // Bonusmaterial (Bloopers, Hinter den Kulissen …)
+      if (!row) row = d.prepare("SELECT 'extra' mt, * FROM extras WHERE path=?").get(path);
       if (!row) throw new Error("Datei nicht in der Bibliothek: " + path);
       if (!row.vcodec) {
         const info = await ffprobe(path);
         if (info) {
           Object.assign(row, info);
-          d.prepare(`UPDATE ${row.mt === "movie" ? "movies" : "episodes"} SET duration=?, vcodec=?, acodec=?, container=?, width=?, height=? WHERE id=?`)
+          const tabelle = row.mt === "movie" ? "movies" : row.mt === "extra" ? "extras" : "episodes";
+          d.prepare(`UPDATE ${tabelle} SET duration=?, vcodec=?, acodec=?, container=?, width=?, height=? WHERE id=?`)
             .run(info.duration, info.vcodec, info.acodec, info.container, info.width, info.height, row.id);
         }
       }

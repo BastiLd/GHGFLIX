@@ -40,10 +40,12 @@
 import React, {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
 } from "react";
-import { DeviceEventEmitter, Platform, Pressable, TextInput, View } from "react-native";
+import { BackHandler, DeviceEventEmitter, Platform, Pressable, TextInput, View } from "react-native";
 import { erzeugeFokusKern } from "./fokus-kern.js";
+import { erzeugeTastenSteuerung } from "./fernbedienung.js";
 
 const Ctx = createContext(null);
+const OverlayCtx = createContext(null);
 /** Zeilennummer wird von <FokusReihe> an die Kinder durchgereicht. */
 const ReiheCtx = createContext({ bereich: "inhalt", zeile: 0, scrollZuSpalte: null });
 
@@ -55,11 +57,14 @@ const neuerSchluessel = (p) => `${p}#${++laufendeNummer}`;
 /* ════════════════════════════════════════════════════════════════════════ */
 
 export function FokusProvider({ children, aktiv = true }) {
+  const [overlay, setOverlay] = useState(null);
   const kernRef = useRef(null);
   const ankerRef = useRef(null);
   const scrollRef = useRef(null);          // senkrechte Liste des Bildschirms
   const zeilenY = useRef(new Map());       // Zeile -> y-Position
   const sichtHoehe = useRef(0);
+  const scrollY = useRef(0);
+  const tastenVorher = useMemo(() => new Set(), []);
 
   if (!kernRef.current) {
     kernRef.current = erzeugeFokusKern({
@@ -68,7 +73,8 @@ export function FokusProvider({ children, aktiv = true }) {
         // waagerecht: die Reihe zur Spalte schieben
         neu.scrollZuSpalte?.(neu.spalte);
         // senkrecht: die Zeile in die Bildmitte holen
-        if (neu.bereich === "inhalt") {
+        if (neu.sichtbarMachen) neu.sichtbarMachen();
+        else if (neu.bereich === "inhalt") {
           const y = zeilenY.current.get(neu.zeile);
           if (y != null && scrollRef.current) {
             const ziel = Math.max(0, y - Math.max(120, sichtHoehe.current * 0.28));
@@ -82,52 +88,26 @@ export function FokusProvider({ children, aktiv = true }) {
 
   /* ── Anker: hält den Android-Fokus fest ───────────────────────────────── */
   const ankerHolen = useCallback(() => {
-    if (Platform.OS !== "android") return;
+    if (!aktiv || Platform.OS !== "android") return;
     try { ankerRef.current?.focus?.(); } catch {}
-  }, []);
+  }, [aktiv]);
   useEffect(() => {
     const t = setTimeout(ankerHolen, 350); // nach dem ersten Zeichnen
     return () => clearTimeout(t);
   }, [ankerHolen]);
 
   /* ── Tasten entgegennehmen ───────────────────────────────────────────── */
-  const tippsRef = useRef({ zeit: 0, taste: null });
   useEffect(() => {
     if (!aktiv) return;
     let ab;
     try {
-      ab = DeviceEventEmitter.addListener("onHWKeyEvent", (e) => {
-        const art = e?.eventType;
-        if (!art || art === "focus" || art === "blur") return;
-        // Nur beim Loslassen auswerten, sonst wiederholt Halten die Aktion.
-        if (e.eventKeyAction === 0) {
-          // Zeitpunkt merken, um langes Drücken zu erkennen
-          tippsRef.current = { zeit: Date.now(), taste: art };
-          return;
-        }
-        /* Konnte der Fokus mit der Taste nichts anfangen, bekommt sie der
-           Bildschirm selbst. Das ist zum Beispiel im Player wichtig: ist die
-           Bedienleiste ausgeblendet, gibt es gerade nichts zu fokussieren —
-           dann soll die erste Taste die Leiste einfach zurückholen, statt
-           wirkungslos zu verpuffen. */
-        const weiterreichen = () =>
-          tastenHoerer.forEach((fn) => { try { fn(art); } catch {} });
-
-        switch (art) {
-          case "up": case "down": case "left": case "right":
-            if (!kern.bewegen(art)) weiterreichen();
-            break;
-          case "select": {
-            const lang = tippsRef.current.taste === "select" &&
-                         Date.now() - tippsRef.current.zeit > 550;
-            if (lang && kern.langDruecken()) break;
-            if (!kern.ausloesen()) weiterreichen();
-            break;
-          }
-          default:
-            weiterreichen();
-        }
+      const taste = erzeugeTastenSteuerung({
+        bewegen: (r) => [...tastenVorher].some((fn) => fn(r) === true) || kern.bewegen(r),
+        ausloesen: () => [...tastenVorher].some((fn) => fn("select") === true) || kern.ausloesen(),
+        langDruecken: () => kern.langDruecken(),
+        weiter: (art) => tastenHoerer.forEach((fn) => { try { fn(art); } catch {} }),
       });
+      ab = DeviceEventEmitter.addListener("onHWKeyEvent", taste);
     } catch { /* iOS kennt das Ereignis nicht */ }
     return () => ab?.remove?.();
   }, [aktiv, kern]);
@@ -136,19 +116,36 @@ export function FokusProvider({ children, aktiv = true }) {
   const tastenHoerer = useMemo(() => new Set(), []);
 
   const wert = useMemo(() => ({
-    kern, tastenHoerer, ankerHolen,
-    setzeScrollRef: (r) => { scrollRef.current = r; },
+    kern, tastenHoerer, tastenVorher, ankerHolen, aktiv,
+    setzeScrollRef: (r) => { if (scrollRef.current !== r) scrollY.current = 0; scrollRef.current = r; },
+    merkeScrollY: (y) => { scrollY.current = y; },
+    sichtbarMachen: (ref) => {
+      const liste = scrollRef.current;
+      if (!liste || !ref?.measureInWindow) return;
+      requestAnimationFrame(() => {
+        ref.measureInWindow((_x, y, _w, h) => {
+          liste.measureInWindow?.((_sx, sy, _sw, sh) => {
+            const rand = 64;
+            if (h > sh - rand * 2 || y < sy + rand || y + h > sy + sh - rand) {
+              const ziel = Math.max(0, scrollY.current + y - sy - rand);
+              liste.scrollTo?.({ y: ziel, animated: true });
+            }
+          });
+        });
+      });
+    },
     merkeZeileY: (zeile, y) => zeilenY.current.set(zeile, y),
     merkeSichtHoehe: (h) => { sichtHoehe.current = h; },
-  }), [kern, tastenHoerer, ankerHolen]);
+  }), [kern, tastenHoerer, ankerHolen, aktiv]);
 
   return (
-    <Ctx.Provider value={wert}>
+    <OverlayCtx.Provider value={setOverlay}><Ctx.Provider value={wert}>
       {children}
+      {overlay}
       {/* Der Anker. 1×1 Pixel, unsichtbar, ohne Bildschirmtastatur.
           Muss eine echte Größe haben — Android vergibt an 0×0-Views
           keinen Fokus (PFLAG_HAS_BOUNDS). */}
-      <TextInput
+      {aktiv && Platform.OS === "android" && <TextInput
         ref={ankerRef}
         style={{ position: "absolute", left: -2, top: -2, width: 1, height: 1, opacity: 0 }}
         showSoftInputOnFocus={false}
@@ -157,9 +154,19 @@ export function FokusProvider({ children, aktiv = true }) {
         pointerEvents="none"
         accessible={false}
         importantForAccessibility="no-hide-descendants"
-      />
-    </Ctx.Provider>
+      />}
+    </Ctx.Provider></OverlayCtx.Provider>
   );
+}
+
+/** Dialoge liegen über der App, unabhängig von der Länge einer Scroll-Seite. */
+export function FokusOverlay({ children }) {
+  const setzen = useContext(OverlayCtx);
+  useEffect(() => {
+    setzen?.(children);
+    return () => setzen?.(null);
+  }, [setzen, children]);
+  return setzen ? null : children;
 }
 
 /* ════════════════════════════════════════════════════════════════════════ */
@@ -170,7 +177,7 @@ export function FokusProvider({ children, aktiv = true }) {
  * @returns {boolean} ausgewählt
  */
 export function useFokusElement({
-  bereich, zeile, spalte, onPress, onLang, uebersprigen, scrollZuSpalte, id, aufRichtung,
+  bereich, zeile, spalte = 0, onPress, onLang, onFokus, uebersprigen, scrollZuSpalte, id, aufRichtung,
 }) {
   const sys = useFokusSystem();
   const reihe = useContext(ReiheCtx);
@@ -183,23 +190,29 @@ export function useFokusElement({
   const scroll = scrollZuSpalte ?? reihe.scrollZuSpalte;
 
   // Immer die frischesten Rückrufe verwenden, ohne neu anzumelden
-  const halt = useRef({ onPress, onLang, aufRichtung });
-  halt.current = { onPress, onLang, aufRichtung };
+  const halt = useRef({ onPress, onLang, aufRichtung, onFokus });
+  halt.current = { onPress, onLang, aufRichtung, onFokus };
   const hatRichtung = !!aufRichtung;
 
   useEffect(() => {
-    if (!sys) return;
+    if (!sys || !sys.aktiv) return;
     const s = schluesselRef.current;
     sys.kern.anmelden(s, {
       bereich: b, zeile: z, spalte, uebersprigen,
-      scrollZuSpalte: scroll,
+      scrollZuSpalte: (s) => halt.current.scroll?.(s),
+      sichtbarMachen: () => halt.current.sichtbarMachen?.(),
       onPress: () => halt.current.onPress?.(),
-      onLang: halt.current.onLang ? () => halt.current.onLang?.() : undefined,
-      aufRichtung: hatRichtung ? (r) => halt.current.aufRichtung?.(r) : undefined,
-      melde: setAn,
+      onLang: () => { if (!halt.current.onLang) return false; halt.current.onLang(); return true; },
+      aufRichtung: (r) => halt.current.aufRichtung?.(r),
+      melde: (wert) => { setAn(wert); if (wert) halt.current.onFokus?.(); },
     });
     return () => { sys.kern.abmelden(s); };
-  }, [sys, b, z, spalte, uebersprigen, scroll, hatRichtung]);
+  }, [sys]);
+  halt.current.scroll = scroll;
+  halt.current.sichtbarMachen = reihe.sichtbarMachen;
+  useEffect(() => {
+    sys?.kern.aktualisieren(schluesselRef.current, { bereich: b, zeile: z, spalte, uebersprigen });
+  }, [sys, b, z, spalte, uebersprigen]);
 
   return an;
 }
@@ -213,16 +226,20 @@ export function useFokusElement({
  * focusable={false} ist Absicht — siehe Erklärung oben im Dateikopf.
  */
 export function FKnopf({
-  style, fokusStil, children, onPress, onLang,
-  bereich, zeile, spalte, uebersprigen, scrollZuSpalte, id, ...rest
+  style, fokusStil, children, onPress, onLang, onFokus, aufRichtung,
+  bereich, zeile, spalte, uebersprigen, scrollZuSpalte, id, disabled, ...rest
 }) {
   const an = useFokusElement({
-    bereich, zeile, spalte, onPress, onLang, uebersprigen, scrollZuSpalte, id,
+    bereich, zeile, spalte, onPress, onLang, onFokus, aufRichtung, uebersprigen: uebersprigen || disabled, scrollZuSpalte, id,
   });
   const basis = typeof style === "function" ? style({ pressed: false }) : style;
   return (
     <Pressable
       {...rest}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !!disabled, selected: an }}
+      testID={an ? "tv-focus" : undefined}
       focusable={false}
       onPress={onPress}
       onLongPress={onLang}
@@ -241,6 +258,7 @@ export function FKnopf({
  */
 export function FokusReihe({ zeile, bereich = "inhalt", listeRef, children, onLayoutY }) {
   const sys = useFokusSystem();
+  const ref = useRef(null);
 
   const scrollZuSpalte = useCallback((spalte) => {
     const l = listeRef?.current;
@@ -253,11 +271,14 @@ export function FokusReihe({ zeile, bereich = "inhalt", listeRef, children, onLa
     }
   }, [listeRef]);
 
-  const wert = useMemo(() => ({ bereich, zeile, scrollZuSpalte }), [bereich, zeile, scrollZuSpalte]);
+  const sichtbarMachen = useCallback(() => sys?.sichtbarMachen?.(ref.current), [sys]);
+  const wert = useMemo(() => ({ bereich, zeile, scrollZuSpalte, sichtbarMachen }), [bereich, zeile, scrollZuSpalte, sichtbarMachen]);
 
   return (
     <ReiheCtx.Provider value={wert}>
       <View
+        ref={ref}
+        collapsable={false}
         onLayout={(e) => {
           const y = e.nativeEvent.layout.y;
           sys?.merkeZeileY?.(zeile, y);
@@ -285,12 +306,27 @@ export function useFernbedienung(fn) {
   }, [sys]);
 }
 
-/** Dialog an- und abmelden, damit er die Tasten für sich behält. */
-export function useDialog(offen) {
+/** Player darf verborgene Bedienelemente wecken, bevor der Fokus navigiert. */
+export function useFernbedienungVorher(fn) {
   const sys = useFokusSystem();
+  const halt = useRef(fn); halt.current = fn;
+  useEffect(() => {
+    if (!sys) return;
+    const vorher = (taste) => halt.current(taste);
+    sys.tastenVorher.add(vorher);
+    return () => sys.tastenVorher.delete(vorher);
+  }, [sys]);
+}
+
+/** Dialog an- und abmelden, damit er die Tasten für sich behält. */
+export function useDialog(offen, schliessen) {
+  const sys = useFokusSystem();
+  const halt = useRef(schliessen);
+  halt.current = schliessen;
   useEffect(() => {
     if (!sys || !offen) return;
     sys.kern.dialogAuf();
-    return () => sys.kern.dialogZu();
+    const back = BackHandler.addEventListener("hardwareBackPress", () => { halt.current?.(); return true; });
+    return () => { back.remove(); sys.kern.dialogZu(); };
   }, [sys, offen]);
 }

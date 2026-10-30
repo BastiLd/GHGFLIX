@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { DetailActions } from "../components/DetailActions";
 import { ArrowLeft, Check, ImageIcon, Pencil, Play, Plus, Star } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -78,7 +79,7 @@ export default function MovieDetail() {
 
   return (
     <div className="relative">
-      <div className="relative h-[42vh] min-h-[300px]">
+      <div className="ghg-detail-banner relative h-[42vh] min-h-[300px]">
         {backdropUrl(m.backdropPath) ? (
           <img src={backdropUrl(m.backdropPath)!} alt="" className="absolute inset-0 w-full h-full object-cover" />
         ) : (
@@ -94,7 +95,7 @@ export default function MovieDetail() {
         </button>
       </div>
 
-      <div className="px-10 -mt-32 relative flex gap-8">
+      <div className="ghg-detail-heading px-10 -mt-32 relative flex gap-8">
         {/* Der Rahmen nimmt das echte Seitenverhaeltnis des Bildes an —
             keine schwarzen Balken, nichts abgeschnitten. */}
         <AutoPoster src={posterUrl(m.posterPath, "w500")} fallbackText={m.title}>
@@ -165,6 +166,7 @@ export default function MovieDetail() {
             <Button variant="ghost" onClick={toggleFav}>
               {isFav ? <Check className="w-4 h-4" /> : <Plus className="w-4 h-4" />} Meine Liste
             </Button>
+            <DetailActions>
             <Button variant="ghost" onClick={markWatched}>
               <Check className="w-4 h-4" /> {prog.data?.watched ? "Gesehen ✓" : "Gesehen"}
             </Button>
@@ -199,6 +201,7 @@ export default function MovieDetail() {
             <Button variant="ghost" onClick={() => setIdentify(true)}>
               <Pencil className="w-4 h-4" /> Identifizieren
             </Button>
+            </DetailActions>
           </div>
         </div>
       </div>

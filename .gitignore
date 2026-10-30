@@ -38,3 +38,15 @@ docker-compose.zimaos.yml
 # Rund 17 MB Fremdbinaerdateien - gehoeren nicht ins Repo, holt sich das
 # Skript bei Bedarf selbst von Google.
 werkzeuge/
+
+# Generierte Client-Builds und lokale Vorschau-Testausgaben
+mobile/android/
+mobile/ios/
+mobile/.expo/
+mobile/build/
+tv/build/
+preview/test-results/
+preview/playwright-report/
+preview/public/sample.mp4
+preview/runtime/
+server/webapp/

@@ -6,10 +6,11 @@
  * funktioniert weiterhin der Fingertipp; beides schließt sich nicht aus.
  */
 import React, { useCallback, useMemo, useRef } from "react";
-import { ActivityIndicator, FlatList, Image, Text, TextInput, View } from "react-native";
-import { FKnopf, FokusReihe, useFokusElement } from "./fokus.js";
+import { ActivityIndicator, FlatList, Image, ScrollView, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { FKnopf, FokusReihe, FokusOverlay, useFokusElement, useFokusSystem } from "./fokus.js";
 import { C, M, gross, st } from "./stile.js";
 import { qrErzeugen } from "./qr.js";
+import { Icon } from "./Icons.js";
 
 /* ══ Kleinkram ═══════════════════════════════════════════════════════════ */
 
@@ -49,7 +50,7 @@ export function Laden({ text }) {
  * das beim Start nicht fehlen kann (siehe BERICHT.md, Nachtrag 9).
  */
 export function Verlauf({ hoehe = 170, farbe = C.bg, von = "unten" }) {
-  const stufen = 8;
+  const stufen = 48;
   return (
     <>
       {Array.from({ length: stufen }, (_, i) => {
@@ -61,7 +62,7 @@ export function Verlauf({ hoehe = 170, farbe = C.bg, von = "unten" }) {
             key={i}
             pointerEvents="none"
             style={{
-              position: "absolute", left: 0, right: 0, height: h + 1,
+              position: "absolute", left: 0, right: 0, height: h,
               backgroundColor: farbe, opacity: Math.pow(anteil, 1.5), ...pos,
             }}
           />
@@ -80,10 +81,11 @@ export function Knopf({ text, symbol, haupt, zeile, spalte, onPress, bereich, st
       spalte={spalte}
       bereich={bereich}
       onPress={onPress}
+      hitSlop={gross ? 0 : 4}
       style={[st.knopf, haupt && st.knopfHaupt, style]}
       fokusStil={st.fokus}
     >
-      {!!symbol && <Text style={[st.knopfText, haupt && st.knopfTextHaupt]}>{symbol}</Text>}
+      {!!symbol && <Icon name={symbol} size={18} />}
       <Text style={[st.knopfText, haupt && st.knopfTextHaupt]}>{text}</Text>
     </FKnopf>
   );
@@ -97,6 +99,7 @@ export function Knopf({ text, symbol, haupt, zeile, spalte, onPress, bereich, st
  */
 export function FFeld({ zeile, spalte, bereich, wert, aufWert, platzhalter, style, ...rest }) {
   const ref = useRef(null);
+  const sys = useFokusSystem();
   const an = useFokusElement({
     zeile, spalte, bereich,
     onPress: () => { try { ref.current?.focus(); } catch {} },
@@ -108,6 +111,8 @@ export function FFeld({ zeile, spalte, bereich, wert, aufWert, platzhalter, styl
       onChangeText={aufWert}
       placeholder={platzhalter}
       placeholderTextColor={C.muted}
+      onSubmitEditing={() => { ref.current?.blur(); sys?.ankerHolen(); }}
+      onBlur={() => sys?.ankerHolen()}
       style={[st.feld, an && st.feldFokus, style]}
       {...rest}
     />
@@ -171,7 +176,7 @@ export function PosterReihe({ zeile, items, img, onPress, onLang }) {
         contentContainerStyle={{ paddingHorizontal: M.rand - 4, gap: M.luecke - 4 }}
         showsHorizontalScrollIndicator={false}
         removeClippedSubviews={false}
-        initialNumToRender={12}
+        initialNumToRender={Math.min(items.length, 20)}
         windowSize={5}
         renderItem={({ item, index }) => (
           <PosterKachel x={item} img={img} onPress={onPress} onLang={onLang} spalte={index} />
@@ -208,7 +213,7 @@ function BreitKachel({ x, img, onPress, onLang, spalte, ohneFortschritt }) {
           </View>
         )}
         <View style={st.spielPunkt}>
-          <Text style={{ color: C.weiss, fontSize: gross ? 18 : 15 }}>▶</Text>
+          <Icon name="play" size={gross ? 21 : 18} />
         </View>
         {!ohneFortschritt && anteil > 0 && (
           <View style={st.fortschrittBg}>
@@ -238,6 +243,7 @@ export function BreitReihe({ zeile, items, img, onPress, onLang, ohneFortschritt
         contentContainerStyle={{ paddingHorizontal: M.rand - 4, gap: M.luecke - 4 }}
         showsHorizontalScrollIndicator={false}
         removeClippedSubviews={false}
+        initialNumToRender={Math.min(items.length, 20)}
         renderItem={({ item, index }) => (
           <BreitKachel
             x={item} img={img} onPress={onPress} onLang={onLang}
@@ -273,7 +279,7 @@ export function Hero({ x, img, zeile, aufAnsehen, aufInfos }) {
       ) : (
         <View style={st.heroBild} />
       )}
-      <Verlauf hoehe={gross ? 260 : 170} />
+      <Verlauf hoehe={M.heroH * 0.85} />
       <View style={st.heroText}>
         <Text numberOfLines={2} style={st.heroTitel}>{x.title}</Text>
         <Text style={st.heroMeta}>{meta}</Text>
@@ -294,34 +300,40 @@ export function Hero({ x, img, zeile, aufAnsehen, aufInfos }) {
 /* ══ Kopfbereich der Detailseiten ════════════════════════════════════════ */
 
 export function BackdropKopf({ uri, hoehe }) {
-  const h = hoehe ?? (gross ? 360 : 230);
+  const h = hoehe ?? (gross ? Math.min(220, M.heroH) : 174);
   if (!uri) return <View style={{ height: gross ? 40 : 20 }} />;
   return (
     <View style={{ height: h }}>
       <Image source={{ uri }} style={{ width: "100%", height: h, opacity: 0.92 }} />
-      <Verlauf hoehe={gross ? 200 : 140} />
+      <Verlauf hoehe={gross ? 150 : 110} />
     </View>
   );
 }
 
 /* ══ Dialog ══════════════════════════════════════════════════════════════ */
 
-export function Dialog({ titel, children }) {
+export function Dialog({ titel, children, aufSchliessen }) {
   return (
-    <View style={st.dialogHinter}>
+    <FokusOverlay><View style={st.dialogHinter}>
       <View style={st.dialogKasten}>
-        {!!titel && <Text style={[st.h2, { marginBottom: 14 }]}>{titel}</Text>}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 14 }}>
+          {!!titel && <Text style={[st.h2, { flex: 1 }]}>{titel}</Text>}
+          {aufSchliessen && <FKnopf accessibilityLabel="Menü schließen" bereich="dialog" zeile={-1} spalte={1} onPress={aufSchliessen} style={st.rundKnopf} fokusStil={st.fokus}><Icon name="close" /></FKnopf>}
+        </View>
         {children}
       </View>
-    </View>
+    </View></FokusOverlay>
   );
 }
 
 /* ══ Auswahlliste im Dialog (Staffel, Tonspur, Profil …) ═════════════════ */
 
 export function DialogListe({ eintraege, aktiv, aufWahl }) {
+  const ref = useRef(null);
+  const positionen = useRef(new Map());
+  const { height } = useWindowDimensions();
   return (
-    <View style={{ gap: 6 }}>
+    <ScrollView ref={ref} style={{ maxHeight: height * .57 }} contentContainerStyle={{ gap: 6, padding: 3 }}>
       {eintraege.map((e, i) => (
         <FKnopf
           key={e.wert ?? i}
@@ -329,6 +341,8 @@ export function DialogListe({ eintraege, aktiv, aufWahl }) {
           zeile={i}
           spalte={0}
           onPress={() => aufWahl(e.wert)}
+          onLayout={(event) => positionen.current.set(i, event.nativeEvent.layout.y)}
+          onFokus={() => ref.current?.scrollTo({ y: Math.max(0, (positionen.current.get(i) || 0) - 80), animated: true })}
           style={[
             st.knopf,
             { justifyContent: "space-between", backgroundColor: C.surface },
@@ -336,11 +350,11 @@ export function DialogListe({ eintraege, aktiv, aufWahl }) {
           ]}
           fokusStil={st.fokus}
         >
-          <Text style={st.knopfText}>{e.text}</Text>
-          {aktiv === e.wert && <Text style={[st.knopfText, { color: C.red }]}>✓</Text>}
+          <Text style={[st.knopfText, { flex: 1 }]}>{e.text}</Text>
+          {aktiv === e.wert && <Icon name="check" color={C.red} />}
         </FKnopf>
       ))}
-    </View>
+    </ScrollView>
   );
 }
 

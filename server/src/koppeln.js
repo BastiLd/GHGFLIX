@@ -29,7 +29,7 @@
  * Server-Passwort kennen, um ihn einzulösen. Er ersetzt also nichts, er
  * verlagert nur die Eingabe vom Fernseher aufs Handy.
  */
-import { randomInt } from "node:crypto";
+import { randomInt, randomBytes, timingSafeEqual } from "node:crypto";
 
 /** Ohne 0/O, 1/I/L, 2/Z, 5/S, 8/B — aus zwei Metern Entfernung eindeutig. */
 const ZEICHEN = "34679ACDEFGHJKMNPQRTUVWXY";
@@ -69,8 +69,9 @@ export function starteKopplung(geraet = "Fernseher") {
   }
   const code = neuerCode();
   if (!code) return null;
-  offen.set(code, { erstellt: Date.now(), geraet: String(geraet).slice(0, 40), token: null, eingeloest: false });
-  return { code, gueltigBis: Date.now() + GUELTIG_MS };
+  const abholToken=randomBytes(32).toString("hex");
+  offen.set(code, { abholToken, erstellt: Date.now(), geraet: String(geraet).slice(0, 40), token: null, eingeloest: false });
+  return { code, abholToken, gueltigBis: Date.now() + GUELTIG_MS };
 }
 
 /**
@@ -79,10 +80,10 @@ export function starteKopplung(geraet = "Fernseher") {
  *
  * @returns {{status:"offen"|"fertig"|"unbekannt", token?:string}}
  */
-export function pruefeKopplung(code) {
+export function pruefeKopplung(code, abholToken) {
   aufraeumen();
   const e = offen.get(String(code || "").toUpperCase());
-  if (!e) return { status: "unbekannt" };
+  if (!e || typeof abholToken !== "string" || abholToken.length !== e.abholToken.length || !timingSafeEqual(Buffer.from(abholToken),Buffer.from(e.abholToken))) return { status: "unbekannt" };
   if (!e.eingeloest) return { status: "offen" };
   offen.delete(String(code).toUpperCase());
   return { status: "fertig", token: e.token };
@@ -158,7 +159,7 @@ ${fertig ? `
   ${meldung ? `<div class="fehler">${sicher(meldung)}</div>` : ""}
   <div class="code">${sicher(code)}</div>
   <form method="POST" action="/koppeln">
-    <input type="hidden" name="code" value="${sicher(code)}">
+    ${code ? `<input type="hidden" name="code" value="${sicher(code)}">` : `<label for="code">Code vom Fernseher</label><input id="code" name="code" maxlength="6" required autocomplete="off" placeholder="ABCDEF">`}
     <label for="pw">Server-Passwort</label>
     <input id="pw" name="passwort" type="password" autocomplete="current-password"
            autofocus placeholder="Passwort">

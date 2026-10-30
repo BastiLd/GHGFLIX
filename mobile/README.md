@@ -1,4 +1,15 @@
-# GHGFlix Handy-App (Expo Go)
+# GHGFlix Mobile
+
+Seit 3.4 sind Handy und TV getrennte Android-Produkte. Mobile verwendet
+`com.bastild.ghgflix`, TV verwendet `com.bastild.ghgflix.tv`. Beide lassen sich
+nebeneinander installieren. Aktueller Stand, Emulatoren und Testnachweise:
+[TV_HANDY_TRENNUNG.md](../docs/TV_HANDY_TRENNUNG.md).
+
+Lokale Handy-Test-APK: in diesem Ordner `npm run build:mobile` starten.
+Ausgabe: `build/GHGFlix-Mobile-3.4.0-local.apk`. TV: `npm run build:tv`, Ausgabe
+unter `../tv/build`. Die lokalen APKs sind mit dem lokalen Testschlüssel
+signiert; für ein Update einer bestehenden Installation ist deren bisheriger
+Signierschlüssel erforderlich.
 
 Native App für den GHGFlix-Server (ZimaOS) — Bibliothek, Staffeln, nativer
 Videoplayer, Fortschritts-Sync und automatischer Wechsel zwischen
@@ -38,7 +49,7 @@ ohne dass du etwas umstellen musst. Manuell geht über den Schalter.
   alle anderen Geräte sehen ihn beim nächsten Abruf
 - Server-Adressen dürfen ohne `http://` eingetippt werden — wird ergänzt
 
-## Eigene APK bauen (ohne Play Store, auch für Fire TV/Android TV)
+## Handy-APK mit EAS bauen
 
 Einmalig: kostenloses Konto auf https://expo.dev, dann:
 
@@ -48,10 +59,9 @@ npm install
 npx eas-cli build --platform android --profile preview
 ```
 
-Beim ersten Mal legt `eas` die Build-Konfiguration an (`eas.json`,
-Profil `preview` → APK statt AAB wählen). Der Build läuft in der
-Expo-Cloud; am Ende gibt es einen Download-Link zur fertigen `GHGFlix.apk`.
-Installation siehe `../tv/README.md` (gleiche APK läuft auf Handy und TV).
+Die Build-Konfiguration ist bereits vorhanden. Der Build läuft in der
+Expo-Cloud; am Ende gibt es einen Download-Link zur Handy-APK. Für TV ist
+ausdrücklich `--profile tv` zu verwenden; dieses Profil baut eine andere APK.
 
 ### Warum `eas.json` so aussieht — und warum dort keine Kommentare stehen
 
@@ -74,11 +84,13 @@ hineinschreiben:
   jeder neue Bau aus Android-Sicht ein Rückschritt — die Installation brach
   ohne brauchbare Meldung ab („App nicht installiert"). Mit `"local"` steht
   die Zahl sichtbar in `app.json` und ist nachvollziehbar.
-- **`build.preview.android.buildType: "apk"`** — das ist das Profil für
-  Handy und Fernseher. APK statt App-Bundle (`aab`), weil sich ein Bundle
+- **`build.preview.android.buildType: "apk"`** — das ist das Handy-Profil;
+  `build.tv` ist das TV-Profil. APK statt App-Bundle (`aab`), weil sich ein Bundle
   weder per Downloader noch per ADB installieren lässt.
-- **`build.preview.channel: "preview"`** — der OTA-Kanal. Nur Bauten aus
-  diesem Kanal bekommen `npx eas-cli update --branch preview`.
+- **`build.preview.channel: "preview"`** — der Handy-OTA-Kanal.
+  TV verwendet `tv-preview` und eine eigene Runtime. Bei OTA muss die passende
+  Produkt-Umgebungsvariable gesetzt sein; die getrennten Runtimes verhindern
+  die Auslieferung des Handy-Layouts an die neue TV-App.
 
 ## Sicherheitshinweis (MOB-033)
 

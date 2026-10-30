@@ -1,0 +1,8 @@
+{
+  "name": "ghgflix-client-preview",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "vite --host 127.0.0.1 --port 5188 --strictPort", "build": "vite build", "test": "playwright test", "sample": "node generate-sample.mjs", "capture": "node capture.mjs" },
+  "dependencies": { "react": "19.1.0", "react-dom": "19.1.0", "react-native-web": "0.21.4" },
+  "devDependencies": { "@playwright/test": "1.56.1", "vite": "7.3.5" }
+}

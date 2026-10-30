@@ -2035,9 +2035,31 @@ pub fn show_extras(state: State<AppState>, show_id: i64) -> R<Vec<crate::extras:
     crate::extras::fuer_serie(&conn, show_id).map_err(err)
 }
 
+/// Ein Bonus-Eintrag für den Player: Pfad, Serie und Art im Klartext.
+/// Bonusmaterial hat keinen Film-/Folgen-Eintrag, an dem der Player hängen
+/// könnte — deshalb dieser eigene Weg (wie get_extra auf dem Server).
+#[tauri::command]
+pub fn get_extra(state: State<AppState>, id: i64) -> R<Option<serde_json::Value>> {
+    let conn = state.conn.lock().unwrap();
+    let Some(x) = crate::extras::get(&conn, id).map_err(err)? else {
+        return Ok(None);
+    };
+    let show_title: Option<String> = conn
+        .query_row("SELECT title FROM shows WHERE id=?1", [x.show_id], |r| r.get(0))
+        .ok();
+    let art_text = crate::zuordnung::art_klartext(&x.art);
+    let mut v = serde_json::to_value(&x).map_err(err)?;
+    v["showTitle"] = serde_json::json!(show_title);
+    v["artText"] = serde_json::json!(art_text);
+    Ok(Some(v))
+}
+
 /// Art/Staffel eines Bonus-Eintrags von Hand festlegen.
 #[tauri::command]
 pub fn set_extra_art(state: State<AppState>, id: i64, art: String, staffel: Option<i64>) -> R<()> {
+    if !crate::extras::ARTEN.contains(&art.as_str()) {
+        return Err(format!("Unbekannte Art: {art}"));
+    }
     let conn = state.conn.lock().unwrap();
     crate::extras::von_hand_setzen(&conn, id, &art, staffel).map_err(err)
 }
@@ -2079,6 +2101,14 @@ pub fn assign_file(app: AppHandle, state: State<AppState>, path: String, ziel: c
             "film" => {
                 let _ = db::delete_episode_file_by_path(&conn, &path);
                 let _ = conn.execute("DELETE FROM extras WHERE path = ?1", [&path]);
+                // Sofort als Film eintragen — in einer reinen Serien-Bibliothek
+                // holt das sonst niemand nach (scan_movies läuft dort nicht).
+                let stem = std::path::Path::new(&path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let (title, year) = crate::parser::parse_title_year(&stem);
+                let _ = db::insert_movie_if_absent(&conn, &path, &title, year);
             }
             "extra" => {
                 let _ = db::delete_episode_file_by_path(&conn, &path);
@@ -2104,22 +2134,20 @@ pub fn assign_file(app: AppHandle, state: State<AppState>, path: String, ziel: c
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_default();
                     if let Ok(sid) = db::find_or_create_show_for_tmdb(&conn, tmdb, &titel) {
-                        match db::episode_id_of_file(&conn, &path) {
-                            Ok(Some(eid)) => {
-                                let _ = db::move_episode(&conn, eid, sid, st, ep);
-                            }
-                            _ => {
-                                if let Ok(ep_id) = db::find_or_create_episode(&conn, sid, st, ep, &path) {
-                                    let _ = db::add_episode_file(&conn, ep_id, &path);
-                                }
-                            }
-                        }
+                        // nur DIESE Datei verschieben — andere Fassungen der
+                        // alten Folge bleiben, wo sie sind
+                        let _ = crate::scanner::datei_platzieren(&conn, sid, st, ep, &path);
                     }
                 }
             }
             _ => {}
         }
         let _ = db::set_all_episode_primaries(&conn);
+        // Folgen, denen dabei die letzte Datei abhanden kam (wie prune_missing)
+        let _ = conn.execute(
+            "DELETE FROM episodes WHERE id NOT IN (SELECT DISTINCT episode_id FROM episode_files)",
+            [],
+        );
     }
     let _ = app.emit("library://updated", ());
     Ok(())

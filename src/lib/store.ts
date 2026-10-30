@@ -22,7 +22,8 @@ export interface LogEintrag {
 interface AppStore {
   profileId: string;
   profileName: string;
-  setProfile: (id: string, name: string) => void;
+  profileAvatar: string | null;
+  setProfile: (id: string, name: string, avatar?: string | null) => void;
 
   toasts: Toast[];
   toast: (message: string, kind?: ToastKind) => void;
@@ -70,10 +71,12 @@ export const useStore = create<AppStore>((set, get) => ({
   profileId: localStorage.getItem(LS_ID) || "local",
   profileName: localStorage.getItem(LS_NAME) || "Lokal",
 
-  setProfile: (id, name) => {
+  profileAvatar: localStorage.getItem("ghgflix.profileAvatar"),
+  setProfile: (id, name, avatar = null) => {
     localStorage.setItem(LS_ID, id);
     localStorage.setItem(LS_NAME, name);
-    set({ profileId: id, profileName: name });
+    if (avatar) localStorage.setItem("ghgflix.profileAvatar",avatar); else localStorage.removeItem("ghgflix.profileAvatar");
+    set({ profileId: id, profileName: name, profileAvatar: avatar });
   },
 
   toasts: [],

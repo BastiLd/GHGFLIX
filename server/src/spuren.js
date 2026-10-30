@@ -32,9 +32,11 @@
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
+import { erzeugeUntertitelCache } from "./untertitel-cache.js";
 
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
 const FFPROBE = process.env.FFPROBE_PATH || "ffprobe";
+const untertitelCache = erzeugeUntertitelCache(process.env.DATA_DIR ? join(process.env.DATA_DIR, "untertitel-cache") : null);
 
 /** Untertitelformate, die Text enthalten (und damit nach WebVTT wandelbar sind). */
 const TEXT_FORMATE = new Set([
@@ -264,11 +266,13 @@ export async function dateiAlsVtt(pfad) {
 
 /** Eine eingebettete Spur über ffmpeg nach WebVTT holen. */
 export function eingebettetAlsVtt(videoPfad, nr) {
-  return ffmpegNachVtt(["-i", videoPfad, "-map", `0:s:${nr}`]);
+  return untertitelCache(videoPfad, nr, () => ffmpegNachVtt(["-i", videoPfad, "-map", `0:s:${nr}`]));
 }
 
 function ffmpegNachVtt(eingabeArgs) {
   return new Promise((fertig) => {
+    let erledigt = false, timeout;
+    const beenden = (wert) => { if (erledigt) return; erledigt = true; clearTimeout(timeout); fertig(wert); };
     const ff = spawn(FFMPEG, [
       "-hide_banner", "-loglevel", "error",
       ...eingabeArgs,
@@ -278,16 +282,25 @@ function ffmpegNachVtt(eingabeArgs) {
     let fehler = "";
     ff.stdout.on("data", (d) => (aus += d));
     ff.stderr.on("data", (d) => (fehler += d));
-    ff.on("error", () => fertig(null));
+    ff.on("error", () => beenden(null));
     ff.on("close", (code) => {
       if (code !== 0 || !aus.trim()) {
         if (fehler.trim()) console.warn("[untertitel] ffmpeg:", fehler.trim().slice(-300));
-        return fertig(null);
+        return beenden(null);
       }
-      fertig(aus);
+      beenden(aus);
     });
-    // Sicherheitsnetz: hängt ffmpeg an einer kaputten Datei, nach 25 s abbrechen
-    setTimeout(() => { try { ff.kill("SIGKILL"); } catch {} }, 25000);
+    // Eine große 4K-MKV benötigt beim ersten Lesen länger als 25 Sekunden.
+    // Unter Windows startet Chocolatey einen Wrapper: nur diesen zu beenden
+    // ließ bisher FFmpeg weiterlaufen und die HTTP-Anfrage endlos warten.
+    timeout = setTimeout(() => {
+      if (process.platform === "win32" && ff.pid) {
+        const kill = spawn("taskkill", ["/PID", String(ff.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+        kill.on("error", () => { try { ff.kill(); } catch {} });
+      } else { try { ff.kill("SIGKILL"); } catch {} }
+      beenden(null);
+    }, 60000);
+    timeout.unref?.();
   });
 }
 

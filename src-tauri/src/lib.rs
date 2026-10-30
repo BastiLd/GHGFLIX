@@ -221,6 +221,7 @@ pub fn run() {
             commands::unignore_files,
             commands::link_movie_to_show,
             commands::show_extras,
+            commands::get_extra,
             commands::set_extra_art,
             commands::set_note,
             commands::all_notes,

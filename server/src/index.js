@@ -6,7 +6,8 @@ import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync
 import { createHash, randomBytes } from "node:crypto";
 import { join, normalize, extname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openDb, getSetting, setSetting, settingOr, listLibraries, addLibrary, removeLibrary } from "./db.js";
+import { openDb, getSetting, setSetting, settingOr, listLibraries, addLibrary, removeLibrary, resolveProfile } from "./db.js";
+import { listServerProfiles, saveServerProfile, recordFavorite, favoriteStates, applyFavoriteStates } from './profile.js';
 import { scanLibrary, scanState, removeLibraryContent, detectLibraries, BROWSE_ROOTS, primaryRoot, isSystemDir } from "./scanner.js";
 import { canDirectPlay, ffprobe, killAllTranscodes, serveFile, serveTranscode } from "./stream.js";
 import { alleHlsBeenden, haeppchenListe, haeppchenSenden, istAppleClient, masterPlaylist, sitzung, sitzungStarten } from "./hls.js";
@@ -115,8 +116,11 @@ const readBody = (req) =>
     });
   });
 
+// "extra" = Bonusmaterial einer Serie (Tabelle extras) — spielt über dieselben
+// Wege wie Filme und Folgen, hat aber keinen Fortschritt.
 const mediaRow = (type, id) =>
-  db.prepare(`SELECT * FROM ${type === "movie" ? "movies" : "episodes"} WHERE id = ?`).get(id);
+  db.prepare(`SELECT * FROM ${type === "movie" ? "movies" : type === "extra" ? "extras" : "episodes"} WHERE id = ?`).get(id);
+const tabelleVon = (type) => (type === "movie" ? "movies" : type === "extra" ? "extras" : "episodes");
 
 /** Rohes Bearer-/Query-Token der Anfrage (für Bild-URLs ohne Header). */
 function bearerToken(req, url) {
@@ -135,7 +139,8 @@ function isLibraryFile(path) {
   return !!(
     db.prepare("SELECT 1 FROM movies WHERE path = ?").get(path) ||
     db.prepare("SELECT 1 FROM episodes WHERE path = ?").get(path) ||
-    db.prepare("SELECT 1 FROM episode_files WHERE path = ?").get(path)
+    db.prepare("SELECT 1 FROM episode_files WHERE path = ?").get(path) ||
+    db.prepare("SELECT 1 FROM extras WHERE path = ?").get(path)
   );
 }
 
@@ -334,7 +339,7 @@ function serveStatic(res, urlPath) {
   }
   res.writeHead(200, {
     "Content-Type": STATIC_MIME[extname(file)] || "application/octet-stream",
-    "Cache-Control": rel === "/index.html" ? "no-cache" : "public, max-age=3600",
+    "Cache-Control": ["/index.html", "/sw.js", "/manifest.webmanifest"].includes(rel) ? "no-cache" : "public, max-age=3600",
   });
   createReadStream(file).pipe(res);
 }
@@ -346,7 +351,7 @@ async function handle(req, res) {
 
   res.setHeader("Access-Control-Allow-Origin", "*"); // desktop app + Expo dev
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   // SRV-034: Basis-Sicherheitsheader für die Web-Oberfläche
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
@@ -424,7 +429,7 @@ async function handle(req, res) {
   }
 
   if (p === "/api/pair/check") {
-    const ergebnis = pruefeKopplung(url.searchParams.get("code"));
+    const ergebnis = pruefeKopplung(url.searchParams.get("code"),url.searchParams.get("abholToken"));
     return json(res, ergebnis);
   }
 
@@ -441,12 +446,12 @@ async function handle(req, res) {
       if (!password()) return html({ code, meldung: "Dieser Server hat kein Passwort — der Fernseher kommt auch so hinein." });
       if (pw !== password()) return html({ code, meldung: "Falsches Passwort." });
       const t = randomBytes(24).toString("hex");
-      tokens.set(t, Date.now());
-      saveTokens();
       if (!loeseKopplungEin(code, t)) {
         return html({ code, meldung: "Dieser Code ist abgelaufen. Am Fernseher einen neuen anzeigen lassen." });
       }
-      console.log(`[koppeln] Fernseher freigeschaltet (Code ${code})`);
+      tokens.set(t, Date.now());
+      saveTokens();
+      console.log("[koppeln] Fernseher freigeschaltet");
       return html({ fertig: true });
     }
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -564,7 +569,7 @@ async function handle(req, res) {
 
   if (!authed(req, url)) return json(res, { error: "unauthorized" }, 401);
 
-  const profileId = parseInt(url.searchParams.get("profile") || "1", 10);
+  const profileId = Number(resolveProfile(url.searchParams.get("profile") || 'local'));
 
   // ── library ──
   if (p === "/api/library") {
@@ -597,17 +602,16 @@ async function handle(req, res) {
 
   // ── profiles ──
   if (p === "/api/profiles" && req.method === "GET") {
-    return json(res, db.prepare("SELECT id, name, avatar FROM profiles ORDER BY id").all());
+    return json(res, listServerProfiles());
   }
-  if (p === "/api/profiles" && req.method === "POST") {
+  if ((p === '/api/profiles' && req.method === 'POST') || (/^\/api\/profiles\/\d+$/.test(p) && req.method === 'PATCH')) {
     const body = await readBody(req);
-    const name = String(body.name || "").trim();
-    if (!name) return json(res, { error: "name fehlt" }, 400);
     try {
-      const info = db.prepare("INSERT INTO profiles (name, avatar, created_at) VALUES (?,?,?)").run(name, body.avatar ?? null, Date.now());
-      return json(res, { id: Number(info.lastInsertRowid), name });
-    } catch {
-      return json(res, { error: "Profil existiert bereits" }, 409);
+      const result = saveServerProfile(req.method === 'PATCH' ? Number(p.split('/').pop()) : null, body);
+      void supabase.syncNow().catch(() => {});
+      return json(res,result);
+    } catch (e) {
+      return json(res, { error: String(e.message) }, 400);
     }
   }
 
@@ -673,9 +677,11 @@ async function handle(req, res) {
     if (!["movie", "show"].includes(b.mediaType) || !b.refId) return json(res, { error: "bad payload" }, 400);
     const existing = db.prepare("SELECT 1 FROM favorites WHERE profile_id=? AND media_type=? AND ref_id=?").get(profileId, b.mediaType, b.refId);
     if (existing) {
+      recordFavorite(db,profileId,b.mediaType,b.refId,true);
       db.prepare("DELETE FROM favorites WHERE profile_id=? AND media_type=? AND ref_id=?").run(profileId, b.mediaType, b.refId);
       return json(res, { favorite: false });
     }
+    recordFavorite(db,profileId,b.mediaType,b.refId,false);
     db.prepare("INSERT INTO favorites (profile_id, media_type, ref_id, added_at) VALUES (?,?,?,?)").run(profileId, b.mediaType, b.refId, Date.now());
     return json(res, { favorite: true });
   }
@@ -701,16 +707,27 @@ async function handle(req, res) {
   // ── sync (desktop app + phone, TMDb-keyed) ──
   if (p === "/api/sync/progress" && req.method === "GET") {
     const since = parseInt(url.searchParams.get("since") || "0", 10);
-    return json(res, { now: Date.now(), rows: progressAsTmdb(profileId, since) });
+    const rows=new Map();
+    for(const r of [...db.prepare('SELECT * FROM pending_progress WHERE profile_id=? AND updated_at>?').all(profileId,since),...progressAsTmdb(profileId,since)]){
+      const k=[r.media_type,r.tmdb_id,r.season??-1,r.episode??-1].join(':');
+      if(!rows.has(k)||rows.get(k).updated_at<r.updated_at)rows.set(k,r);
+    }
+    return json(res, { now: Date.now(), rows: [...rows.values()] });
   }
   if (p === "/api/sync/progress" && req.method === "POST") {
     const b = await readBody(req);
     const applied = await upsertTmdbProgress(profileId, Array.isArray(b.rows) ? b.rows : []);
     return json(res, { ok: true, applied });
   }
+  if(p==='/api/sync/favorites'){
+    if(req.method==='POST'){
+      const b=await readBody(req);applyFavoriteStates(profileId,Array.isArray(b.rows)?b.rows:[]);
+    }
+    return json(res,{rows:favoriteStates(profileId)});
+  }
 
   // ── playback ──
-  if ((m = p.match(/^\/api\/play\/(movie|episode)\/(\d+)$/))) {
+  if ((m = p.match(/^\/api\/play\/(movie|episode|extra)\/(\d+)$/))) {
     const row = mediaRow(m[1], +m[2]);
     if (!row) return json(res, { error: "not found" }, 404);
     if (!row.vcodec) {
@@ -730,8 +747,7 @@ async function handle(req, res) {
     let spuren = spurenLaden(row);
     if (!spuren) {
       spuren = await alleSpuren(row.path);
-      const tabelle = m[1] === "movie" ? "movies" : "episodes";
-      spurenSpeichern(db, tabelle, row.id, spuren);
+      spurenSpeichern(db, tabelleVon(m[1]), row.id, spuren);
     }
     return json(res, {
       duration: row.duration,
@@ -768,7 +784,7 @@ async function handle(req, res) {
 
      ?track=s0  eingebettete Spur Nummer 0
      ?track=d1  Untertiteldatei Nummer 1 neben dem Video            */
-  if ((m = p.match(/^\/api\/untertitel\/(movie|episode)\/(\d+)$/))) {
+  if ((m = p.match(/^\/api\/untertitel\/(movie|episode|extra)\/(\d+)$/))) {
     const row = mediaRow(m[1], +m[2]);
     if (!row) return json(res, { error: "not found" }, 404);
     const kennung = String(url.searchParams.get("track") || "");
@@ -776,7 +792,7 @@ async function handle(req, res) {
     let spuren = spurenLaden(row);
     if (!spuren) {
       spuren = await alleSpuren(row.path);
-      spurenSpeichern(db, m[1] === "movie" ? "movies" : "episodes", row.id, spuren);
+      spurenSpeichern(db, tabelleVon(m[1]), row.id, spuren);
     }
     const spur = (spuren.sub || []).find((x) => x.id === kennung);
     if (!spur) return json(res, { error: "Diese Untertitelspur gibt es nicht" }, 404);
@@ -797,12 +813,12 @@ async function handle(req, res) {
     return res.end(vtt);
   }
 
-  if ((m = p.match(/^\/api\/stream\/(movie|episode)\/(\d+)$/))) {
+  if ((m = p.match(/^\/api\/stream\/(movie|episode|extra)\/(\d+)$/))) {
     const row = mediaRow(m[1], +m[2]);
     if (!row) return res.writeHead(404).end();
     return serveFile(req, res, row.path);
   }
-  if ((m = p.match(/^\/api\/transcode\/(movie|episode)\/(\d+)$/))) {
+  if ((m = p.match(/^\/api\/transcode\/(movie|episode|extra)\/(\d+)$/))) {
     const row = mediaRow(m[1], +m[2]);
     if (!row) return res.writeHead(404).end();
     return serveTranscode(req, res, row, {
@@ -814,7 +830,7 @@ async function handle(req, res) {
   /* ── HLS für Apple-Geräte (Punkt 2) ──────────────────────────────────
      Warum überhaupt: siehe Kopf von src/hls.js. Kurz — iOS spielt das
      fragmentierte MP4 von /api/transcode nicht ab, das Bild bleibt schwarz. */
-  if ((m = p.match(/^\/api\/hls\/(movie|episode)\/(\d+)\/master\.m3u8$/))) {
+  if ((m = p.match(/^\/api\/hls\/(movie|episode|extra)\/(\d+)\/master\.m3u8$/))) {
     const row = mediaRow(m[1], +m[2]);
     if (!row) return res.writeHead(404).end();
     if (!row.vcodec) {
@@ -865,7 +881,7 @@ async function handle(req, res) {
     return haeppchenSenden(res, s, m[2]);
   }
 
-  if ((m = p.match(/^\/api\/thumb\/(movie|episode)\/(\d+)$/))) {
+  if ((m = p.match(/^\/api\/thumb\/(movie|episode|extra)\/(\d+)$/))) {
     const row = mediaRow(m[1], +m[2]);
     if (!row) return res.writeHead(404).end();
     const at = row.duration ? Math.min(row.duration * 0.25, 420) : 300;
@@ -912,18 +928,13 @@ async function handle(req, res) {
     return createReadStream(file).pipe(res);
   }
   // embedded text subtitles → WebVTT (browsers can only render VTT)
-  if ((m = p.match(/^\/api\/subs\/(movie|episode)\/(\d+)\/(\d+)\.vtt$/))) {
+  if ((m = p.match(/^\/api\/subs\/(movie|episode|extra)\/(\d+)\/(\d+)\.vtt$/))) {
     const row = mediaRow(m[1], +m[2]);
     if (!row) return res.writeHead(404).end();
-    const ff = spawn(process.env.FFMPEG_PATH || "ffmpeg", [
-      "-hide_banner", "-loglevel", "error",
-      "-i", row.path, "-map", `0:s:${+m[3]}?`, "-f", "webvtt", "pipe:1",
-    ]);
-    res.writeHead(200, { "Content-Type": "text/vtt; charset=utf-8", "Cache-Control": "public, max-age=86400" });
-    ff.stdout.pipe(res);
-    ff.on("error", () => res.end());
-    req.on("close", () => { try { ff.kill("SIGKILL"); } catch {} });
-    return;
+    const vtt = await eingebettetAlsVtt(row.path, +m[3]);
+    if (!vtt) return json(res, { error: "Untertitel konnten nicht gelesen werden" }, 500);
+    res.writeHead(200, { "Content-Type": "text/vtt; charset=utf-8", "Cache-Control": "private, max-age=3600" });
+    return res.end(vtt);
   }
 
   // ── Bilder (TMDb-Proxy mit Cache + lokale Dateien wie bei Plex/Jellyfin) ──
@@ -950,7 +961,7 @@ async function handle(req, res) {
   if (p === "/api/libraries" && req.method === "POST") {
     const b = await readBody(req);
     const path = String(b.path || "").trim();
-    const kind = b.kind === "movie" ? "movie" : "show";
+    const kind = b.kind === "movie" || b.kind === "mixed" ? b.kind : "show";
     if (!path) return json(res, { error: "Pfad fehlt" }, 400);
     if (!existsSync(path) || !statSync(path).isDirectory()) {
       return json(res, { error: "Dieser Ordner ist im Server-Container nicht sichtbar. Ist die Festplatte im docker-compose gemountet?" }, 400);
@@ -1058,8 +1069,8 @@ const server = createServer((req, res) => {
     else res.end();
   });
 });
-server.listen(PORT, () => {
-  console.log(`GHGFlix Server v${VERSION} → http://0.0.0.0:${PORT}`);
+server.listen(PORT, process.env.HOST || "0.0.0.0", () => {
+  console.log(`GHGFlix Server v${VERSION} → http://${process.env.HOST || "0.0.0.0"}:${PORT}`);
 });
 
 // SRV-005: graceful shutdown — laufende ffmpeg-Prozesse sauber beenden, bevor
@@ -1077,9 +1088,9 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
 // initial scan + periodic rescan (default: every 30 min) + Supabase loop
-void scanLibrary();
+if (process.env.AUTO_SCAN !== "off") void scanLibrary();
 const every = Math.max(300, parseInt(process.env.SCAN_INTERVAL_SEC || "1800", 10)) * 1000;
-setInterval(() => void scanLibrary(), every).unref();
+if (process.env.AUTO_SCAN !== "off") setInterval(() => void scanLibrary(), every).unref();
 supabase.startSupabaseLoop();
 
 /* ── Kanäle & Feeds (Punkt 5) ──────────────────────────────────────────────
