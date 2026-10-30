@@ -10,7 +10,7 @@
  *   cd mobile
  *   node test/update.test.mjs
  */
-import { vergleicheVersion } from "../src/update.js";
+import { vergleicheVersion, pruefeUpdate } from "../src/update.js";
 
 let gut = 0;
 const fehler = [];
@@ -61,6 +61,12 @@ console.log("\n── Der echte Ablauf ─────────────�
     pruefe(`Server ${f.server} / App ${f.app}: ${f.was}`, anbieten === f.anbieten);
   }
 }
+
+let requests = 0;
+const serverApk = async () => { requests++; return {available:true,version:"3.6.0",url:"/apk"}; };
+pruefe("TV fragt den mobilen APK-Kanal nicht ab", await pruefeUpdate(serverApk, "3.5.0", {isTV:true}) === null && requests === 0);
+const update = await pruefeUpdate(serverApk, "3.5.0", {isTV:false});
+pruefe("Handy erhaelt das neuere mobile Paket", update.neuer && update.url === "/apk" && requests === 1);
 
 console.log("\n────────────────────────────────────────────────────────────");
 if (fehler.length) {

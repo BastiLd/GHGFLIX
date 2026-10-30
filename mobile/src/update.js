@@ -61,7 +61,9 @@ export function vergleicheVersion(a, b) {
  * @param {string}   eigene   die eigene Versionsnummer
  * @returns {Promise<{neuer:boolean, version:string|null, groesse:string|null, url:string}|null>}
  */
-export async function pruefeUpdate(api, eigene) {
+export async function pruefeUpdate(api, eigene, { isTV = false } = {}) {
+  // The legacy server endpoint supplies the mobile package only.
+  if (isTV) return null;
   try {
     const s = await api("/api/apk/status");
     if (!s?.available) return null;

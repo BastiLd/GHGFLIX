@@ -24,7 +24,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "GHGFlix verwendet das von dir gewÃ¤hlte Foto als Gruppenbild.",
+          "photosPermission": "GHGFlix verwendet das von dir gewÃƒÂ¤hlte Foto als Gruppenbild.",
           "cameraPermission": false,
           "microphonePermission": false
         }
@@ -37,7 +37,7 @@
     "ios": {
       "bundleIdentifier": "com.bastild.ghgflix",
       "supportsTablet": true,
-      "buildNumber": "18",
+      "buildNumber": "19",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
@@ -46,7 +46,7 @@
     },
     "android": {
       "package": "com.bastild.ghgflix",
-      "versionCode": 18
+      "versionCode": 19
     },
     "extra": {
       "eas": {

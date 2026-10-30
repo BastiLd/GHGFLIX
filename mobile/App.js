@@ -22,7 +22,6 @@
  * Diese Datei hält nur noch alles zusammen: Verbindung, Navigation, Daten.
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import Constants from "expo-constants";
 import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { BackHandler, Text, View } from "react-native";
@@ -190,22 +189,12 @@ function AppInner() {
         body: opt.body ? JSON.stringify(opt.body) : undefined,
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || (res.status === 401 ? "Bitte erneut mit dem Server verbinden." : `Serverfehler (${res.status})`));
+      if (!res.ok) throw new Error(data?.error || (res.status === 401 ? "Bitte erneut mit dem Server verbinden." : `Serverfehler (${res.status})`));
       return data;
       } finally { clearTimeout(timeout); }
     },
     [basis, conn],
   );
-
-  /* Beim Start nachsehen, ob auf dem Server eine neuere App-Fassung liegt.
-     Damit entfaellt das laestige Eintippen der Adresse im Downloader. */
-  useEffect(() => {
-    if (!basis) return;
-    ladeEinstellungen().then((E) => {
-      if (E.updatePruefen === false) return;
-      pruefeUpdate(api, APP_VERSION).then(setAppAktuell).catch(() => {});
-    });
-  }, [basis, api]);
 
   const kanalUngelesen = useKanalmeldungen(api, !!basis && !!conn?.profile, kanalRevision);
 
@@ -221,13 +210,15 @@ function AppInner() {
   );
 
   useEffect(() => {
-    // Der bisherige /apk-Endpunkt verteilt ausschließlich die Handy-App.
-    // Die TV-App darf sich darüber niemals selbst durch Mobile ersetzen.
+    let cancelled = false;
+    setAppAktuell(null);
     if (!basis || istTV) return;
-    ladeEinstellungen().then((E) => {
-      if (E.updatePruefen === false) return;
-      pruefeUpdate(api, APP_VERSION).then(setAppAktuell).catch(() => {});
-    });
+    ladeEinstellungen().then(async (E) => {
+      if (E.updatePruefen === false || cancelled) return;
+      const result = await pruefeUpdate(api, APP_VERSION, { isTV: istTV });
+      if (!cancelled) setAppAktuell(result);
+    }).catch(() => {});
+    return () => { cancelled = true; };
   }, [basis, api]);
 
   const aendereConn = useCallback(
