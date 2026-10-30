@@ -179,7 +179,9 @@ function AppInner() {
         headers: opt.body ? { "Content-Type": "application/json" } : {},
         body: opt.body ? JSON.stringify(opt.body) : undefined,
       });
-      return res.json();
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `Server antwortet mit HTTP ${res.status}`);
+      return data;
     },
     [basis, conn],
   );
@@ -253,6 +255,7 @@ function AppInner() {
       if (x.mediaType && x.refId != null) {
         push({
           name: "play", type: x.mediaType, id: x.refId, title: x.title,
+          showId: x.showId,
           subtitle: x.mediaType === "episode" && x.season != null ? se(x.season, x.episode) : "",
         });
         return;
@@ -294,7 +297,7 @@ function AppInner() {
       <PlayerScreen
         api={api} pop={pop} push={push} base={basis} conn={conn}
         type={oben.type} id={oben.id} title={oben.title}
-        subtitle={oben.subtitle} nextEp={oben.nextEp}
+        subtitle={oben.subtitle} nextEp={oben.nextEp} showId={oben.showId}
       />
     );
   }

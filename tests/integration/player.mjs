@@ -10,6 +10,10 @@ import {pathToFileURL} from "node:url";
 import sharp from "sharp";
 import {chromium,expect} from "@playwright/test";
 
+const cycles=Number(process.env.GHGFLIX_STRESS_CYCLES ?? 2);
+const soakSeconds=Number(process.env.GHGFLIX_PLAYBACK_SOAK_SECONDS ?? 0);
+assert.ok(Number.isInteger(cycles) && cycles>=1 && cycles<=100, "cycles must be 1..100");
+assert.ok(Number.isInteger(soakSeconds) && soakSeconds>=0 && soakSeconds<=3600, "soak seconds must be 0..3600");
 const dir=mkdtempSync(join(tmpdir(),"ghgflix-integration-"));
 process.env.DATA_DIR=dir;
 // Never import library roots or cloud credentials from the developer machine.
@@ -52,7 +56,7 @@ try {
     await expect.poll(()=>video.evaluate(v=>v.currentTime),{timeout:30000}).toBeGreaterThan(0);
     await expect.poll(()=>video.evaluate(v=>v.getVideoPlaybackQuality().totalVideoFrames)).toBeGreaterThan(0);
     await expect.poll(async()=>Number(await bar.getAttribute("aria-valuemax"))).toBeGreaterThanOrEqual(90);
-    for(let i=0;i<2;i++) {
+    for(let i=0;i<cycles;i++) {
       await page.mouse.move(100,100);
       await page.getByTitle("Vollbild",{exact:true}).click();
       await expect.poll(()=>page.evaluate(()=>!!document.fullscreenElement)).toBe(true);
@@ -70,6 +74,25 @@ try {
     await page.getByRole("button",{name:"Abspielen",exact:true}).click();
     const before=Number(await bar.getAttribute("aria-valuenow"));
     await expect.poll(async()=>Number(await bar.getAttribute("aria-valuenow")),{timeout:15000}).toBeGreaterThan(before+1);
+    const soakStart=Date.now();
+    let soakChecks=0;
+    while(Date.now()-soakStart<soakSeconds*1000) {
+      await page.mouse.move(100,100);
+      await page.getByRole("button",{name:"Pause",exact:true}).click();
+      await bar.focus();
+      const position=Number(await bar.getAttribute("aria-valuenow"));
+      await bar.press(position>50 ? "Home" : "ArrowRight");
+      await expect.poll(()=>video.evaluate(v=>v.paused)).toBe(true);
+      const target=Number(await bar.getAttribute("aria-valuenow"));
+      await page.getByRole("button",{name:"Abspielen",exact:true}).click();
+      await expect.poll(async()=>Number(await bar.getAttribute("aria-valuenow")),{timeout:20000}).toBeGreaterThan(target+2);
+      await page.waitForTimeout(5000);
+      const measured=Number(await bar.getAttribute("aria-valuenow"));
+      assert.ok(Number.isFinite(measured) && measured>=0 && measured<=91);
+      assert.ok(Number(await bar.getAttribute("aria-valuemax"))>=90);
+      soakChecks++;
+      console.log(`SOAK ${mode}: ${soakChecks} pause/seek/resume rounds, ${Math.round((Date.now()-soakStart)/1000)}s`);
+    }
     // Validate a thumbnail from the real ffmpeg endpoint, not an image placeholder.
     const thumb=await page.request.post(`${base}/api/invoke/media_thumbnail`,{data:{path:join(dir,id===1?"Direct.mp4":"Transcode.mkv"),timeSec:20,width:176}});
     assert.equal(thumb.status(),200);
@@ -79,7 +102,7 @@ try {
     assert.equal(frame.status(),200);
     const metadata=await sharp(await frame.body()).metadata();
     assert.equal(metadata.width,176);assert.ok(metadata.height > 0);
-    results.push({id,mode,transport,duration:Number(await bar.getAttribute("aria-valuemax")),thumbnail:{width:metadata.width,height:metadata.height}});
+    results.push({id,mode,transport,cycles,soakChecks,soakElapsedSeconds:Math.round((Date.now()-soakStart)/1000),duration:Number(await bar.getAttribute("aria-valuemax")),thumbnail:{width:metadata.width,height:metadata.height}});
     await page.mouse.move(100,100);await page.getByTitle("Player schließen",{exact:true}).click();
     await expect(video).toHaveCount(0);
     await page.close();

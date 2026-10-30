@@ -15,6 +15,7 @@
  * die gerade leer sind (z. B. „Weiterschauen“ bei einem frischen Profil),
  * werden gar nicht gezeichnet und dürfen dann auch keine Zeile verbrauchen.
  */
+import { folgenNach } from "./folgen.js";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Image, ScrollView, Text, View } from "react-native";
 import { FKnopf, FokusReihe, useDialog, useFokusSystem } from "./fokus.js";
@@ -330,16 +331,11 @@ export function SerienSeite({ api, img, id, startStaffel, aufAbspielen, aufZurue
   const alleFolgen = seasons.flatMap((s) => s.episodes);
   const naechste = alleFolgen.find((e) => !fMap.get(e.id)?.watched) ?? alleFolgen[0];
 
-  const naechsteNach = (epId) => {
-    const i = alleFolgen.findIndex((e) => e.id === epId);
-    const n = alleFolgen[i + 1];
-    return n ? { id: n.id, se: se(n.season, n.episode), title: n.title } : null;
-  };
   const spiele = (e) =>
     aufAbspielen({
-      type: "episode", id: e.id, title: show.title,
+      type: "episode", id: e.id, title: show.title, showId: id,
       subtitle: `${se(e.season, e.episode)}${e.title ? " · " + e.title : ""}`,
-      nextEp: naechsteNach(e.id),
+      nextEp: folgenNach(alleFolgen, e.id),
     });
 
   const favUm = () =>

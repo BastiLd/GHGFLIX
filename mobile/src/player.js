@@ -44,6 +44,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ActivityIndicator, Dimensions, Platform, Pressable, Text, View } from "react-native";
 import { FKnopf, FokusReihe, useDialog, useFernbedienung, useFokusElement } from "./fokus.js";
 import { PlayerKnopfleiste } from "./playerleiste.js";
+import { folgenNach } from "./folgen.js";
 import { C, M, gross, st } from "./stile.js";
 import { Dialog, DialogListe, fmtZeit } from "./bausteine.js";
 import { untertitelHolen } from "./untertitel.js";
@@ -68,12 +69,22 @@ try { useKeepAwake = require("expo-keep-awake").useKeepAwake; } catch {}
 
 /* ════════════════════════════════════════════════════════════════════════ */
 
-export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subtitle, nextEp }) {
+export function PlayerScreen(props) {
+  const [attempt, setAttempt] = useState(0);
+  const identity = JSON.stringify([props.base, props.conn?.profile, props.type, props.id, attempt]);
+  return <PlayerSession key={identity} {...props} retry={() => setAttempt((n) => n + 1)} />;
+}
+
+function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, showId, nextEp: initialNextEp, retry }) {
   useKeepAwake();
   const E = einstellungenJetzt();
 
   const [info, setInfo] = useState(null);
   const [resume, setResume] = useState(0);
+  const [fehler, setFehler] = useState(null);
+  const [nextEp, setNextEp] = useState(initialNextEp);
+  const [folgenFehler, setFolgenFehler] = useState(false);
+  const [folgenVersuch, setFolgenVersuch] = useState(0);
   const [leisteAn, setLeisteAn] = useState(true);
   const [laeuft, setLaeuft] = useState(true);
   const [puffert, setPuffert] = useState(true);
@@ -83,6 +94,8 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   const [bedienBreite, setBedienBreite] = useState(Dimensions.get("window").width - 2 * M.rand);
   const [dialog, setDialog] = useState(null);   // null | "ton" | "ut" | "tempo" | "bild" | "info"
   const [tempo, setTempo] = useState(E.tempo);
+  const tempoRef = useRef(tempo);
+  tempoRef.current = tempo;
   const [bildmodus, setBildmodus] = useState(E.bildmodus);
 
   // Spuren
@@ -99,6 +112,10 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   const lebtRef = useRef(true);
   const versteckRef = useRef(null);
   const tonRef = useRef(null);   // aktuelle Tonspur für den Umwandel-Neustart
+  const quelleRef = useRef(null);
+  const ladeKette = useRef(Promise.resolve());
+  const laufWunsch = useRef(true);
+  const fortschrittRef = useRef(null); // only confirmed positions, never stale/loading events
   const hlsNeustartRef = useRef(0); // letzter HLS-Neustart (gegen Endlosschleifen)
 
   /** Jeder Zugriff auf das native Player-Objekt — niemals ungeschützt. */
@@ -117,12 +134,17 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
 
   /* ── Infos und gespeicherten Fortschritt holen ─────────────────────── */
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       const [i, fortschritt] = await Promise.all([
         api(`/api/play/${type}/${id}`),
         api("/api/progress"),
       ]);
-      const gemerkt = fortschritt.find?.((x) => x.mediaType === type && x.refId === +id);
+      if (cancelled || !lebtRef.current) return;
+      if (!i || i.error || typeof i.directUrl !== "string" || typeof i.transcodeUrl !== "string") {
+        throw new Error(i?.error || "Der Server hat keine gültigen Medieninformationen geliefert.");
+      }
+      const gemerkt = (Array.isArray(fortschritt) ? fortschritt : []).find((x) => x.mediaType === type && x.refId === +id);
       const bei =
         gemerkt && !gemerkt.watched && gemerkt.position > (E.fortsetzenAb || 30) &&
         gemerkt.position < (gemerkt.duration || 1e9) * 0.95
@@ -130,7 +152,7 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
       modeRef.current = i.direct ? "direct" : "transcode";
       offsetRef.current = i.direct ? 0 : bei;
       posRef.current = bei;
-      durRef.current = i.duration || 0;
+      durRef.current = Number.isFinite(i.duration) && i.duration > 0 ? i.duration : 0;
 
       // Spuren nach den Vorlieben vorbelegen
       const ton = waehleTon(i.spuren?.audio, E.tonSprache);
@@ -140,12 +162,26 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
       setUtSpur(ut);
 
       setResume(bei);
-      setDauer(i.duration || 0);
+      setDauer(durRef.current);
       setPos(bei);
       setInfo(i);
-    })().catch(() => {});
+    })().catch((e) => {
+      if (!cancelled && lebtRef.current) { setFehler(e.message || "Medien konnten nicht geladen werden."); setPuffert(false); }
+    });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, type, id]);
+
+  // Continue/history entries carry the show ID, but no prebuilt episode queue.
+  useEffect(() => {
+    if (type !== "episode" || !showId || initialNextEp !== undefined) return;
+    let cancelled = false;
+    setFolgenFehler(false);
+    api(`/api/shows/${showId}`).then((data) => {
+      if (!cancelled && lebtRef.current) setNextEp(folgenNach(data.seasons.flatMap((s) => s.episodes), +id));
+    }).catch(() => { if (!cancelled && lebtRef.current) setFolgenFehler(true); });
+    return () => { cancelled = true; };
+  }, [api, type, id, showId, initialNextEp, folgenVersuch]);
 
   const quelleFuer = useCallback(
     (i, t) => {
@@ -155,36 +191,50 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
          Text "ABC?token=ABC". Mit gesetztem Server-Passwort endete deshalb
          jede Wiedergabe am Handy in einem 401. */
       const dran = (url, zusatz) => `${base}${url}${url.includes("?") ? "&" : "?"}${zusatz}`;
-      if (modeRef.current === "direct") return dran(i.directUrl, "profile=1");
+      const profil = encodeURIComponent(conn?.profile ?? 1);
+      if (modeRef.current === "direct") return dran(i.directUrl, `profile=${profil}`);
       const a = tonRef.current?.nr ?? 0;
       /* Punkt 2 der Übergabe: Auf iPhone und iPad spielt AVFoundation den
          endlosen fragmentierten MP4-Strom von /api/transcode NICHT ab — das
          Bild bleibt schwarz. Für Apple liefert der Server denselben Inhalt
          als HLS (siehe server/src/hls.js). */
       const weg = Platform.OS === "ios" && i.hlsUrl ? i.hlsUrl : i.transcodeUrl;
-      return dran(weg, `profile=1&a=${a}&t=${Math.floor(t)}`);
+      return dran(weg, `profile=${profil}&a=${a}&t=${Math.floor(t)}`);
     },
-    [base],
+    [base, conn?.profile],
   );
 
   const player = useVideoPlayer(null, (p) => {
     if (p) p.timeUpdateEventInterval = 0.25;   // flüssige Untertitel
   });
 
-  /* ── Quelle laden ──────────────────────────────────────────────────── */
-  useEffect(() => {
-    if (!info || !player) return;
-    safe(() => {
-      player.replace(quelleFuer(info, resume));
-      player.play();
-      if (tempo !== 1) player.playbackRate = tempo;
-    });
-    if (modeRef.current === "direct" && resume > 0) {
-      const t = setTimeout(() => safe(() => { player.currentTime = resume; }), 700);
-      return () => clearTimeout(t);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [info, player, resume]);
+  // A replacement has its own identity. No old stream may update the new
+  // offset, and iOS asset loading must not block the UI thread.
+  const ladeQuelle = useCallback((i, target) => {
+    if (!lebtRef.current || !i) return;
+    const offset = modeRef.current === "direct" ? 0 : Math.floor(target);
+    const raw = quelleFuer(i, target);
+    const source = { uri: `${raw}${raw.includes("?") ? "&" : "?"}ghg_session=${(quelleRef.current?.generation ?? 0) + 1}`,
+      generation: (quelleRef.current?.generation ?? 0) + 1, pending: true,
+      seek: modeRef.current === "direct" ? target : 0, offset };
+    quelleRef.current = source;
+    offsetRef.current = offset;
+    setPuffert(true); setFehler(null);
+    safe(() => player.pause());
+    const replace = async () => {
+      if (!lebtRef.current || quelleRef.current !== source) return;
+      try {
+        if (player.replaceAsync) await player.replaceAsync(source.uri);
+        else player.replace(source.uri);
+        if (!lebtRef.current || quelleRef.current !== source) return;
+        player.playbackRate = tempoRef.current;
+        if (laufWunsch.current) player.play(); else player.pause();
+      } catch (e) {
+        if (lebtRef.current && quelleRef.current === source) { setFehler(e.message || "Wiedergabe konnte nicht geladen werden."); setPuffert(false); }
+      }
+    };
+    ladeKette.current = ladeKette.current.then(replace, replace);
+  }, [player, quelleFuer, safe]);
 
   /* ── Untertitel holen, sobald eine Spur gewählt ist ────────────────── */
   useEffect(() => {
@@ -207,58 +257,73 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     if (!player?.addListener) return;
     const abos = [];
     try {
-      abos.push(player.addListener("timeUpdate", (e) => {
-        if (!lebtRef.current) return;
-        const p = offsetRef.current + (e?.currentTime || 0);
-        posRef.current = p;
-        setPos(p);
-        if (!durRef.current) {
-          const d = safe(() => player.duration, 0) || 0;
-          if (d) { durRef.current = d; setDauer(d); }
+      abos.push(player.addListener("sourceLoad", (e) => {
+        const source = quelleRef.current;
+        const uri = typeof e?.videoSource === "string" ? e.videoSource : e?.videoSource?.uri;
+        if (!lebtRef.current || !source || uri !== source.uri) return;
+        source.pending = false;
+        if (!durRef.current && Number.isFinite(e.duration) && e.duration > 0) {
+          durRef.current = source.offset + e.duration; setDauer(durRef.current);
         }
+        safe(() => { player.currentTime = source.seek; player.playbackRate = tempoRef.current; });
+        if (source.seek === 0) source.seek = null;
+        safe(() => laufWunsch.current ? player.play() : player.pause());
+        setLaeuft(laufWunsch.current);
+        setPuffert(safe(() => player.status) !== "readyToPlay");
+      }));
+      abos.push(player.addListener("timeUpdate", () => {
+        const source = quelleRef.current;
+        if (!lebtRef.current || !source || source.pending) return;
+        // Read current native state rather than a queued event from an old seek.
+        const nativeTime = safe(() => player.currentTime);
+        if (!Number.isFinite(nativeTime) || nativeTime < 0) return;
+        if (source.seek != null) {
+          if (Math.abs(nativeTime - source.seek) > 2) return;
+          source.seek = null;
+        }
+        const p = source.offset + nativeTime;
+        posRef.current = durRef.current ? Math.min(p, durRef.current) : p;
+        setPos(posRef.current);
+        if (durRef.current > 0) fortschrittRef.current = { position: posRef.current, duration: durRef.current };
       }));
       abos.push(player.addListener("playingChange", (e) => {
-        if (!lebtRef.current) return;
-        setLaeuft(!!(typeof e === "object" ? e?.isPlaying : e));
+        if (!lebtRef.current || quelleRef.current?.pending) return;
+        const playing = !!(typeof e === "object" ? e?.isPlaying : e);
+        // isPlaying also becomes false while buffering. It is not a pause command.
+        setLaeuft(safe(() => player.status) === "loading" ? laufWunsch.current : playing);
+      }));
+      abos.push(player.addListener("playToEnd", () => {
+        if (!lebtRef.current || quelleRef.current?.pending) return;
+        laufWunsch.current = false; setLaeuft(false);
       }));
       abos.push(player.addListener("statusChange", (e) => {
         if (!lebtRef.current) return;
         const s = typeof e === "object" ? e?.status : e;
-        setPuffert(s === "loading");
-
-        /* WICHTIG — nicht entfernen:
-           Nicht jedes Video läuft auf jedem Gerät direkt (etwa DTS-Ton oder
-           HEVC auf schwächeren Fernsehern). Scheitert die Direktwiedergabe,
-           wird hier auf den umgewandelten Datenstrom umgeschaltet und an
-           derselben Stelle weitergespielt. Ohne diesen Rückfall bliebe für
-           solche Titel nur ein schwarzes Bild. */
-        if (s === "error" && modeRef.current === "direct" && info) {
+        if (s === "loading") setPuffert(true);
+        if (s === "readyToPlay" && !quelleRef.current?.pending) setPuffert(false);
+        if (s !== "error" || !info) return;
+        if (modeRef.current === "direct") {
           modeRef.current = "transcode";
-          offsetRef.current = posRef.current;
-          safe(() => {
-            player.replace(quelleFuer(info, posRef.current));
-            player.play();
-          });
-        } else if (s === "error" && modeRef.current === "transcode" && info && Platform.OS === "ios") {
-          /* iOS/HLS: Der Server räumt eine Sitzung ab, die 5 Minuten lang
-             niemand abgerufen hat (langes Pausieren). Danach bliebe die
-             Wiedergabe einfach stehen. Also an derselben Stelle eine frische
-             Sitzung starten — der Abstand verhindert eine Endlosschleife,
-             falls die Datei wirklich kaputt ist. */
-          const jetzt = Date.now();
-          if (jetzt - hlsNeustartRef.current > 5000) {
-            hlsNeustartRef.current = jetzt;
-            offsetRef.current = posRef.current;
-            safe(() => {
-              player.replace(quelleFuer(info, posRef.current));
-              player.play();
-            });
-          }
+          ladeQuelle(info, posRef.current);
+        } else if (Platform.OS === "ios" && hlsNeustartRef.current === 0) {
+          // One recovery attempt for an expired HLS session; never an endless loop.
+          hlsNeustartRef.current = 1;
+          ladeQuelle(info, posRef.current);
+        } else {
+          setPuffert(false);
+          setFehler("Dieses Medium konnte nicht abgespielt werden. Bitte erneut versuchen.");
         }
       }));
     } catch {}
     return () => abos.forEach((a) => { try { a?.remove?.(); } catch {} });
-  }, [player, info, quelleFuer, safe]);
+  }, [player, info, ladeQuelle, safe]);
+
+  // Subscribe before replacing: very fast/native cached loads can emit immediately.
+  useEffect(() => {
+    if (info) ladeQuelle(info, resume);
+    // Loading is tied to the selected media, not to playback-rate changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info, player, resume]);
 
   /* ── Untertiteltext zur aktuellen Stelle bestimmen ─────────────────── */
   useEffect(() => {
@@ -269,12 +334,13 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
 
   /* ── Fortschritt sichern ───────────────────────────────────────────── */
   const sichern = useCallback(
-    (gesehen = false) => {
-      const d = durRef.current, p = posRef.current;
-      if (!d) return;
+    () => {
+      const confirmed = fortschrittRef.current;
+      if (!confirmed) return;
+      const { duration: d, position: p } = confirmed;
       api("/api/progress", {
         method: "POST",
-        body: { mediaType: type, refId: +id, position: p, duration: d, watched: gesehen || p >= d * 0.95 },
+        body: { mediaType: type, refId: +id, position: p, duration: d, watched: p >= d * 0.95 },
       }).catch(() => {});
     },
     [api, type, id],
@@ -295,22 +361,26 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
 
   /* ── Steuerung ─────────────────────────────────────────────────────── */
   const springeAuf = useCallback((t) => {
+    if (!info || !Number.isFinite(t)) return;
     const ziel = Math.max(0, Math.min(t, durRef.current || t));
     posRef.current = ziel;
     setPos(ziel);
     if (modeRef.current === "direct") {
-      safe(() => { player.currentTime = ziel - offsetRef.current; });
+      if (quelleRef.current) quelleRef.current.seek = ziel;
+      if (!quelleRef.current?.pending) safe(() => { player.currentTime = ziel; });
     } else {
-      offsetRef.current = ziel;
-      safe(() => { player.replace(quelleFuer(info, ziel)); player.play(); });
+      ladeQuelle(info, ziel);
     }
     wecken();
-  }, [player, info, quelleFuer, safe, wecken]);
+  }, [player, info, ladeQuelle, safe, wecken]);
 
   const springeUm = useCallback((d) => springeAuf(posRef.current + d), [springeAuf]);
 
   const anHalten = useCallback(() => {
-    safe(() => (player.playing ? player.pause() : player.play()));
+    const waiting = quelleRef.current?.pending || safe(() => player.status) === "loading";
+    laufWunsch.current = !(waiting ? laufWunsch.current : safe(() => player.playing, laufWunsch.current));
+    setLaeuft(laufWunsch.current);
+    safe(() => laufWunsch.current ? player.play() : player.pause());
     wecken();
   }, [player, safe, wecken]);
 
@@ -321,16 +391,16 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   }, [sichern, pop]);
 
   const naechsteFolge = useCallback(() => {
-    if (!nextEp) return;
-    sichern(true);
+    if (!nextEp || !lebtRef.current) return;
+    sichern();
     lebtRef.current = false;
     pop();
     push({
-      name: "play", type: "episode", id: nextEp.id, title,
+      name: "play", type: "episode", id: nextEp.id, title, showId,
       subtitle: (nextEp.se || "") + (nextEp.title ? " · " + nextEp.title : ""),
       nextEp: nextEp.next ?? null,
     });
-  }, [nextEp, sichern, pop, push, title]);
+  }, [nextEp, sichern, pop, push, title, showId]);
 
   /* Nächste Folge von selbst starten, wenn eingestellt. */
   const autoRef = useRef(false);
@@ -361,14 +431,9 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     }
     /* Beim Umwandeln entscheidet der Server, welche Spur im Strom landet.
        Also an derselben Stelle neu anfordern — die Position bleibt erhalten. */
-    const stelle = posRef.current;
-    offsetRef.current = stelle;
-    safe(() => {
-      player.replace(quelleFuer(info, stelle));
-      player.play();
-    });
+    ladeQuelle(info, posRef.current);
     wecken();
-  }, [info, player, quelleFuer, safe, wecken]);
+  }, [info, player, ladeQuelle, safe, wecken]);
 
   /* ── Untertitel wechseln ───────────────────────────────────────────── */
   const utWaehlen = useCallback((kennung) => {
@@ -421,6 +486,12 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
   const utListe = (info?.spuren?.sub || []).filter((s) => s.text && !s.bild);
   const utBildNur = (info?.spuren?.sub || []).filter((s) => s.bild).length;
 
+  if (fehler) return <View style={[st.center, { padding: 30 }]}>
+    <Text accessibilityRole="alert" style={st.fliess}>{fehler}</Text>
+    <FKnopf zeile={0} spalte={0} onPress={retry} style={st.knopf} fokusStil={st.fokus}><Text style={st.knopfText}>Erneut versuchen</Text></FKnopf>
+    <FKnopf zeile={1} spalte={0} onPress={verlassen} style={st.knopf} fokusStil={st.fokus}><Text style={st.knopfText}>Zurück</Text></FKnopf>
+  </View>;
+
   if (videoLadeFehler || !VideoView) {
     return (
       <View style={[st.center, { padding: 30 }]}>
@@ -442,6 +513,7 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
     { id: "pause", label: laeuft ? "Pausieren" : "Abspielen", symbol: laeuft ? "⏸" : "▶", haupt: true, onPress: anHalten },
     { id: "vor", label: "Vorspulen", text: String(E.sprungVor || 30), symbol: "⏩", onPress: () => springeUm(E.sprungVor || 30) },
     nextEp && { id: "naechste", label: "Nächste Folge", text: "Nächste", symbol: "⏭", onPress: naechsteFolge },
+    folgenFehler && { id: "folgen", label: "Folgenliste erneut laden", text: "Folgen laden", onPress: () => setFolgenVersuch((n) => n + 1) },
     tonListe.length > 1 && { id: "ton", label: "Tonspur", symbol: "🔊", text: "Ton", onPress: () => setDialog("ton") },
     (utListe.length > 0 || utBildNur > 0) && { id: "ut", label: "Untertitel", symbol: "💬", text: utSpur ? "UT an" : "UT", onPress: () => setDialog("ut") },
     { id: "tempo", label: "Geschwindigkeit", text: `${tempo}×`, onPress: () => setDialog("tempo") },
@@ -542,6 +614,7 @@ export function PlayerScreen({ api, pop, push, base, conn, type, id, title, subt
       {/* ── Bedienleiste ──────────────────────────────────────────────── */}
       {leisteAn && (
         <View pointerEvents="box-none" style={st.playerFuss}>
+          {folgenFehler && <Text style={st.gedaempft}>Folgenliste konnte nicht geladen werden.</Text>}
           <View style={[st.balkenRahmen, balkenAn && st.fokus]}>
             <Text style={st.playerZeit}>{fmtZeit(pos)}</Text>
             <View style={st.balkenSpur} onLayout={(e) => setBalkenBreite(e.nativeEvent.layout.width)}>

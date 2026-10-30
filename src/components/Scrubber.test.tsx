@@ -20,6 +20,10 @@ it("supports remote keyboard seeking and clamps to the media duration", () => {
   const { getByRole } = render(<Scrubber position={115} duration={120} onSeek={seek} getThumb={async () => null} />);
   fireEvent.keyDown(getByRole("slider"), { key: "ArrowRight" });
   expect(seek).toHaveBeenCalledWith(120);
+  fireEvent.keyDown(getByRole("slider"), { key: "Home" });
+  expect(seek).toHaveBeenLastCalledWith(0);
+  fireEvent.keyDown(getByRole("slider"), { key: "End" });
+  expect(seek).toHaveBeenLastCalledWith(120);
 });
 it("does not seek for an unknown duration or cancelled gesture", () => {
   const seek = vi.fn();

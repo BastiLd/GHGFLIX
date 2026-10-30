@@ -231,9 +231,10 @@ export function Scrubber({
         style={{ touchAction: "none" }}
         onKeyDown={(e) => {
           const delta = e.key === "ArrowRight" ? 10 : e.key === "ArrowLeft" ? -10 : null;
-          if (delta == null || duration <= 0) return;
+            const target = e.key === "Home" ? 0 : e.key === "End" ? duration : delta == null ? null : position + delta;
+            if (target == null || !Number.isFinite(duration) || duration <= 0) return;
           e.preventDefault(); e.stopPropagation();
-          onSeek(Math.min(duration, Math.max(0, position + delta)));
+            onSeek(Math.min(duration, Math.max(0, target)));
         }}
         className="group relative h-5 flex items-center cursor-pointer"
         onPointerMove={(e) => onMove(e.clientX)}

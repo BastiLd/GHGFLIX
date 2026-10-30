@@ -1,6 +1,6 @@
 // Disposable local server for a separately created Android emulator.
 // Never point this script at an existing DATA_DIR or a user's media library.
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
@@ -25,6 +25,15 @@ const { openDb, setSetting } = await import("../../server/src/db.js");
 const db = openDb();
 db.prepare("UPDATE profiles SET name='Testprofil'").run();
 db.prepare("INSERT INTO movies (id,title,path,added_at) VALUES (1,'Testfilm',?,?)").run(movie, Date.now());
+const converted = join(dir, "Umwandlung.mkv");
+execFileSync("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", "-i", movie, "-c:v", "ffv1", "-c:a", "copy", converted], { stdio: "pipe", windowsHide: true });
+db.prepare("INSERT INTO movies (id,title,path,added_at) VALUES (2,'Umwandlung',?,?)").run(converted, Date.now());
+db.prepare("INSERT INTO shows (id,title,added_at) VALUES (1,'Testserie',?)").run(Date.now());
+for (let id = 1; id <= 3; id++) {
+  const episode = join(dir, `Testserie-S01E0${id}.mp4`);
+  copyFileSync(movie, episode);
+  db.prepare("INSERT INTO episodes (id,show_id,season,episode,title,path,added_at) VALUES (?,1,1,?,?,?,?)").run(id, id, `Folge ${id}`, episode, Date.now());
+}
 setSetting("feed_gruppen", JSON.stringify([{ id: "science", name: "Science", emoji: "S", sortierung: 0 }, { id: "space", name: "Space", emoji: "S", sortierung: 1 }]));
 setSetting("feeds", JSON.stringify([{ id: "lab", titel: "Testkanal", art: "blog", feedUrl: "http://127.0.0.1:19845/feed", gruppeIds: ["science", "space"], benachrichtigen: true, zuletzt: Date.now() }]));
 setSetting("feed_items", JSON.stringify([{ id: "lab:one", feedId: "lab", art: "blog", titel: "Mars-Testbeitrag", url: "http://10.0.2.2:19845/article", gelesen: false, gemerkt: false, gesehen: false, istShort: null, veroeffentlicht: Date.now() }]));
