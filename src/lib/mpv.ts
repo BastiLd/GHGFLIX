@@ -82,6 +82,10 @@ const emit = (name: string, data: unknown) => {
   }
 };
 
+let loadRevision = 0;
+let streamRevision = 0;
+let cancelMetadataSeek: (() => void) | null = null;
+
 const mediaPos = () => (S.video ? S.offset + S.video.currentTime : 0);
 const mediaDuration = () => {
   if (!S.video) return 0;
@@ -211,11 +215,13 @@ function streamUrl(t: number): string {
   return withToken(`${info.transcodeUrl}&t=${sek}&a=${a}`);
 }
 
-async function startStream(at: number, forceTranscode = false) {
+async function startStream(at: number, forceTranscode = false, paused = S.video?.paused ?? true) {
   const v = S.video;
   const info = S.info;
   if (!v || !info) return;
-  const wasPaused = v.paused && v.currentTime > 0;
+  const revision = ++streamRevision;
+  cancelMetadataSeek?.();
+  cancelMetadataSeek = null;
   S.transcoding = forceTranscode || !info.direct;
   // AV-03/AV-12: assumes the transcode stream starts EXACTLY at `at`. That is
   // guaranteed since the accurate-seek fix in server/src/stream.js (video is
@@ -228,14 +234,17 @@ async function startStream(at: number, forceTranscode = false) {
   if (!S.transcoding && at > 0) {
     // native seek once metadata is there
     const onMeta = () => {
-      v.currentTime = at;
+      if (revision === streamRevision) v.currentTime = at;
       v.removeEventListener("loadedmetadata", onMeta);
+      cancelMetadataSeek = null;
     };
     v.addEventListener("loadedmetadata", onMeta);
+    cancelMetadataSeek = () => v.removeEventListener("loadedmetadata", onMeta);
   }
   applySubTrack();
-  if (!wasPaused) await v.play().catch(() => {});
-  emit("duration", mediaDuration());
+  if (!paused) await v.play().catch(() => {});
+  else v.pause();
+  if (revision === streamRevision) emit("duration", mediaDuration());
 }
 
 async function webSeekAbs(t: number) {
@@ -245,9 +254,10 @@ async function webSeekAbs(t: number) {
   if (!S.transcoding) {
     v.currentTime = target;
   } else {
-    const paused = v.paused;
-    await startStream(target, true);
-    if (paused) v.pause();
+    const pending = startStream(target, true, v.paused);
+    const revision = streamRevision;
+    await pending;
+    if (revision !== streamRevision) return;
   }
   emit("time-pos", target);
 }
@@ -285,8 +295,15 @@ export async function init(opts?: { path?: string; args?: string[]; observedProp
   if (!S.video) S.video = createVideo();
 }
 
+/** Invalidate pending browser probes without stopping the current media. */
+export function cancelPendingLoad(): void {
+  if (!IS_TAURI) ++loadRevision;
+}
+
 export async function destroy(): Promise<void> {
   if (IS_TAURI) return native.destroy();
+  ++loadRevision; ++streamRevision;
+  cancelMetadataSeek?.(); cancelMetadataSeek = null;
   if (S.video) {
     S.video.pause();
     S.video.removeAttribute("src");
@@ -319,13 +336,16 @@ export async function command(name: string, args: unknown[] = []): Promise<void>
   switch (name) {
     case "loadfile": {
       const path = String(args[0] ?? "");
+      const revision = ++loadRevision;
+      const info = await invoke<WebPlayInfo>("play_info", { path });
+      if (revision !== loadRevision) return;
       S.path = path;
       S.aid = 1;
       S.sid = "no";
-      S.info = await invoke<WebPlayInfo>("play_info", { path });
+      S.info = info;
       if (!S.video) S.video = createVideo();
-      await startStream(0);
-      emit("duration", mediaDuration());
+      await startStream(0, false, false);
+      if (revision === loadRevision) emit("duration", mediaDuration());
       break;
     }
     case "seek": {

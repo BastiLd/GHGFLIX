@@ -588,14 +588,14 @@ export async function abholen(nurId = null) {
   if (ziele.length === 0) return [];
 
   const vorhanden = beitraegeLaden();
-  const bekannt = new Set(vorhanden.map((b) => b.id));
+  const initialIds = new Set(vorhanden.map((b) => b.id));
+  const bekannt = new Set(initialIds);
   const neue = [];
 
   for (const feed of ziele) {
     try {
       const xml = await holen(feed.feedUrl);
-      const feedTitel = tagInhalt(xml, "title");
-      if (feedTitel) feed.titel = feedTitel;
+      // The subscription name belongs to the user; refresh must not rename it.
       let genommen = 0;
       for (const block of eintraege(xml)) {
         if (genommen >= MAX_PRO_FEED) break;
@@ -631,10 +631,35 @@ export async function abholen(nurId = null) {
     if (dauerSek != null) b.dauerSek = dauerSek;
   }
 
-  vorhanden.sort((a, b) => b.veroeffentlicht - a.veroeffentlicht);
-  beitraegeSpeichern(vorhanden);
-  feedsSpeichern(feeds);
-  return neue;
+  // No awaits in this commit section: always merge into the latest user data.
+  const currentFeeds = feedsLaden();
+  const activeIds = new Set(currentFeeds.map((f) => f.id));
+  for (const current of currentFeeds) {
+    const result = ziele.find((f) => f.id === current.id);
+    if (result && result.zuletzt >= current.zuletzt) {
+      current.zuletzt = result.zuletzt;
+      current.fehler = result.fehler;
+    }
+  }
+  const currentItems = beitraegeLaden().filter((b) => activeIds.has(b.feedId));
+  const byId = new Map(currentItems.map((b) => [b.id, b]));
+  const inserted = new Set();
+  for (const result of vorhanden) {
+    if (!activeIds.has(result.feedId)) continue;
+    const current = byId.get(result.id);
+    if (current) {
+      if (current.istShort == null && result.istShort != null) current.istShort = result.istShort;
+      if (current.dauerSek == null && result.dauerSek != null) current.dauerSek = result.dauerSek;
+    } else if (!initialIds.has(result.id)) {
+      currentItems.push(result);
+      byId.set(result.id, result);
+      inserted.add(result.id);
+    }
+  }
+  currentItems.sort((a, b) => b.veroeffentlicht - a.veroeffentlicht);
+  beitraegeSpeichern(currentItems);
+  feedsSpeichern(currentFeeds);
+  return neue.filter((b) => inserted.has(b.id));
 }
 
 /* ── Lesen ──────────────────────────────────────────────────────────────── */
@@ -642,9 +667,8 @@ export async function abholen(nurId = null) {
 /**
  * Beiträge lesen — mit allen Filtern der Oberfläche.
  *
- * `format`: "shorts" nur Kurzvideos, "videos" alles außer Kurzvideos.
- *   Beiträge ohne geprüfte Marke (istShort === null) gelten als normales
- *   Video: lieber einmal zu viel zeigen als etwas verschwinden lassen.
+ * `format`: nur gesicherte oder manuell gewählte Formate. Ungeprüfte Beiträge
+ * bleiben "unknown" und erscheinen weiter in der ungefilterten Ansicht.
  */
 export function beitraege({
   art = null,

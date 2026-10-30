@@ -34,3 +34,48 @@ test("group to channel to formats and back", async ({page}, info) => {
   await expect(page.getByText("Avatar",{exact:true})).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+ test("custom group images and multiple memberships survive saving and reload", async ({page}) => {
+  const sharp = (await import("sharp")).default;
+  const png = await sharp({create:{width:1600,height:900,channels:4,background:"#9944cc"}}).png().toBuffer();
+  const settings: Record<string,string> = {};
+  const groups = ["Avatar","Weitere Gruppe"].map((name,i)=>({id:`g${i+1}`,name,emoji:"📺",abos:1,kanaele:1,blogs:0,beitraege:0,ungelesen:0,bilder:[],standardOffen:false,sortierung:i}));
+  const feed = {id:"f1",art:"youtube",titel:"Avatar Kanal",gruppeId:"g1",gruppeIds:["g1"],benachrichtigen:true};
+  await page.route("**/api/**", async route => {
+    if(route.request().url().endsWith("/api/ping")) return route.fulfill({json:{auth:false}});
+    const cmd=route.request().url().split("/").pop(); const args=route.request().postDataJSON() ?? {};
+    let result:unknown=null;
+    if(cmd==="feed_groups") result=groups;
+    if(cmd==="feeds_list") result=[feed];
+    if(cmd==="feed_update") { Object.assign(feed,Object.fromEntries(Object.entries(args).filter(([,v])=>v != null))); result=feed; }
+    if(cmd==="get_setting") result=settings[args.key] ?? null;
+    if(cmd==="set_setting") settings[args.key]=args.value;
+    if(cmd==="feed_group_update") {const group=groups.find(g=>g.id===args.id)!;Object.assign(group,args);result=group;}
+    if(["feed_items","list_movies","list_shows"].includes(cmd!)) result=[];
+    if(cmd==="feed_unread") result=0;
+    if(cmd==="scan_status") result={running:false};
+    await route.fulfill({json:{result}});
+  });
+  await page.goto("/#/kanaele");
+  await page.getByText("Weitere Gruppe",{exact:true}).click();
+  await page.getByRole("button",{name:"Einstellen",exact:true}).click();
+  await page.getByRole("checkbox",{name:"Avatar Kanal"}).click();
+  await expect.poll(()=>feed.gruppeIds).toEqual(["g1","g2"]);
+  await page.getByLabel("Name",{exact:true}).fill("Meine Gruppe");
+  await page.locator('input[type="file"]').setInputFiles({name:"test.png",mimeType:"image/png",buffer:png});
+  const preview=page.getByAltText("Gruppenbild",{exact:true});
+  await expect(preview).toBeVisible();
+  await expect.poll(()=>preview.evaluate((img:HTMLImageElement)=>[img.naturalWidth,img.naturalHeight])).toEqual([960,540]);
+  await page.getByRole("button",{name:"Speichern",exact:true}).click();
+  await expect.poll(()=>groups[1].name).toBe("Meine Gruppe");
+  expect(settings.feed_group_image_g2).toMatch(/^data:image\/webp;base64,/);
+  await page.reload();
+  await page.getByText("Meine Gruppe",{exact:true}).click();
+  await page.getByRole("button",{name:"Einstellen",exact:true}).click();
+  await expect(page.getByAltText("Gruppenbild",{exact:true})).toBeVisible();
+  await expect(page.getByRole("checkbox",{name:"Avatar Kanal"})).toBeChecked();
+  await page.getByRole("button",{name:"Bild entfernen",exact:true}).click();
+  await page.getByRole("button",{name:"Speichern",exact:true}).click();
+  await expect.poll(()=>settings.feed_group_image_g2).toBe("");
+  expect(feed.gruppeIds).toEqual(["g1","g2"]);
+ });

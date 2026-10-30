@@ -22,8 +22,8 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { command, destroy, getProperty, init, observeProperties, setProperty, srtToVtt, webTogglePip } from "../lib/mpv";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { cancelPendingLoad, command, destroy, getProperty, init, observeProperties, setProperty, srtToVtt, webTogglePip } from "../lib/mpv";
 import { episodeVersions, getEpisode, getMovie, getProgress, getSetting, listShowEpisodes, mediaThumbnail, movieVersions, revealInExplorer, setEpisodeIntro, setMediaDims, setProgress, trickplayInfo, type TrickplayInfo } from "../lib/api";
 import { openCtx } from "../lib/contextmenu";
 import { formatTime, quality as computeQuality, seasonEpisodeLabel } from "../lib/format";
@@ -132,7 +132,12 @@ export default function Player() {
   const { type, id } = useParams();
   const mediaType = (type === "episode" ? "episode" : "movie") as "movie" | "episode";
   const mediaId = Number(id);
+  const [continuation] = useState(() => {
+    const e = playback().expandTo;
+    return e?.mediaType === mediaType && e.mediaId === mediaId ? e : null;
+  });
   const navigate = useNavigate();
+  const location = useLocation();
   const profileId = useStore((s) => s.profileId);
   const toast = useStore((s) => s.toast);
 
@@ -173,10 +178,10 @@ export default function Player() {
   const [nextCancelled, setNextCancelled] = useState(false);
 
   const [episodes, setEpisodes] = useState<Episode[]>([]);
-  const [title, setTitle] = useState("");
-  const [subtitle, setSubtitle] = useState<string | null>(null);
+  const [title, setTitle] = useState(continuation?.title ?? "");
+  const [subtitle, setSubtitle] = useState<string | null>(continuation?.subtitle ?? null);
   const [quality, setQuality] = useState<string | null>(null);
-  const [videoReady, setVideoReady] = useState(false);
+  const [videoReady, setVideoReady] = useState(!!continuation);
   const [buffering, setBuffering] = useState(false);
   const [buffered, setBuffered] = useState(0);
   const [showRemaining, setShowRemaining] = useState(false);
@@ -188,10 +193,9 @@ export default function Player() {
   const introMarkRef = useRef<number | null>(null); // pending "Intro: Start hier"
   const prefsRef = useRef(uiPrefs());
   // live mirrors for callbacks that must not go stale (mini-player handoff)
-  const videoReadyRef = useRef(false);
   const errorRef = useRef(false);
-  const titleRef = useRef("");
-  const subtitleRef = useRef<string | null>(null);
+  const titleRef = useRef(continuation?.title ?? "");
+  const subtitleRef = useRef<string | null>(continuation?.subtitle ?? null);
   const [versions, setVersions] = useState<MediaVersion[]>([]);
   const [versionPath, setVersionPath] = useState<string | null>(null);
   const [thumbInterval, setThumbInterval] = useState(5);
@@ -204,13 +208,13 @@ export default function Player() {
 
   const posRef = useRef(0);
   const durRef = useRef(0);
-  const pathRef = useRef<string | null>(null);
+  const pathRef = useRef<string | null>(continuation?.path ?? null);
   const tracksRef = useRef<Track[]>([]);
   const resumeRef = useRef<number | null>(null);
   const tracksLoadedRef = useRef(false);
   const lastSaveRef = useRef(0);
   const itemRef = useRef<{ type: "movie" | "episode"; id: number }>({ type: mediaType, id: mediaId });
-  const backTargetRef = useRef<string>("/");
+  const backTargetRef = useRef<string>(continuation?.backTarget ?? "/");
   const hideTimer = useRef<number | null>(null);
   const markerKeyRef = useRef<string>("k");
   const markerRef = useRef<number | null>(null);
@@ -259,9 +263,6 @@ export default function Player() {
   }, []);
 
   useEffect(() => {
-    videoReadyRef.current = videoReady;
-  }, [videoReady]);
-  useEffect(() => {
     errorRef.current = error != null;
   }, [error]);
   useEffect(() => {
@@ -269,12 +270,14 @@ export default function Player() {
     subtitleRef.current = subtitle;
   }, [title, subtitle]);
 
+  const loadingItemRef = useRef(!continuation);
+
   const saveProgress = useCallback(
     (watched = false) => {
       const { type: t, id: i } = itemRef.current;
       const dur = durRef.current;
       const pos = posRef.current;
-      if (dur <= 0) return;
+      if (loadingItemRef.current || dur <= 0) return;
       // "watched" threshold is user-configurable (Einstellungen → Wiedergabe)
       const thr = Math.min(0.99, Math.max(0.5, (prefsRef.current.watchedThreshold || 95) / 100));
       const done = watched || pos >= dur * thr;
@@ -403,7 +406,8 @@ export default function Player() {
         pipRef.current = false;
       }
       const { type: t, id: i } = itemRef.current;
-      if (action === "mini" && prefsRef.current.miniPlayer && videoReadyRef.current && !errorRef.current && pathRef.current) {
+      playback().setExpandTo(null);
+      if (action === "mini" && prefsRef.current.miniPlayer && !loadingItemRef.current && !errorRef.current && pathRef.current) {
         playback().setHandoff(true);
         playback().setMini({
           mediaType: t,
@@ -411,6 +415,7 @@ export default function Player() {
           title: titleRef.current,
           subtitle: subtitleRef.current,
           path: pathRef.current,
+          backTarget: backTargetRef.current,
         });
       }
       // Replace the /play entry so a later "back" on the detail page goes to the
@@ -427,12 +432,10 @@ export default function Player() {
     saveProgress(true);
     const p = prefsRef.current;
     // explicit queue entries win over the implicit "next episode"
-    if (playback().peekNext()) {
-      const n = playback().popNext();
-      if (n) {
-        navigate(`/play/${n.mediaType}/${n.id}`);
-        return;
-      }
+    const queued = playback().peekNext();
+    if (queued) {
+      navigate(`/play/${queued.mediaType}/${queued.ids[0]}`, { state: { queueKey: queued.key } });
+      return;
     }
     if (mediaType === "episode" && nextEp && p.autoplayNext) {
       navigate(`/play/episode/${nextEp.id}`);
@@ -634,6 +637,7 @@ export default function Player() {
                 : 176,
         );
         const mpvPath = (await getSetting("mpv_path"))?.trim();
+        const args = playback().mpvInited ? [] : await buildMpvArgs();
         if (cancelled) return;
         attached = true;
         if (playback().mpvInited) {
@@ -642,7 +646,7 @@ export default function Player() {
         } else {
           await init({
             path: mpvPath || undefined,
-            args: await buildMpvArgs(),
+            args,
             observedProperties: OBSERVED,
           });
           playback().setInited(true);
@@ -657,6 +661,7 @@ export default function Player() {
           } else if (name === "time-pos") {
             const p = Number(data) || 0;
             posRef.current = p;
+            if (loadingItemRef.current) return;
             if (p > 0) setVideoReady(true); // first frame shown → hide the loading screen
             setPosition((prev) => (Math.floor(prev) === Math.floor(p) ? prev : p));
             if (introModeRef.current === "off") {
@@ -696,7 +701,7 @@ export default function Player() {
           } else if (name === "demuxer-cache-time") {
             setBuffered(Number(data) || 0);
           } else if (name === "eof-reached") {
-            if (data === true) handleEndRef.current();
+            if (data === true && !loadingItemRef.current) handleEndRef.current();
           }
         });
         if (cancelled) { unobserve(); return; }
@@ -716,7 +721,10 @@ export default function Player() {
     })();
     return () => {
       cancelled = true;
-      if (!attached) return;
+      if (!attached) {
+        if (playback().handoff) playback().setHandoff(false);
+        return;
+      }
       saveProgress();
       if (unobserve) unobserve();
       if (playback().handoff) {
@@ -735,7 +743,12 @@ export default function Player() {
   useEffect(() => {
     if (!ready) return;
     let cancelled = false;
-    itemRef.current = { type: mediaType, id: mediaId };
+    saveProgress();
+    const expand = playback().expandTo;
+    const fromMini = expand && expand.mediaType === mediaType && expand.mediaId === mediaId;
+    loadingItemRef.current = !fromMini;
+    resumeRef.current = null;
+    setError(null);
     tracksLoadedRef.current = false;
     markerRef.current = null;
     introWindowRef.current = null;
@@ -743,7 +756,7 @@ export default function Player() {
     introSkippedRef.current = false;
     setIntroSkipVisible(false);
     setNextCancelled(false);
-    setVideoReady(false);
+    setVideoReady(!!fromMini);
     setVersions([]);
     setEpisodes([]);
     setVersionPath(null);
@@ -757,6 +770,7 @@ export default function Player() {
         let path: string | null = null;
         if (mediaType === "episode") {
           const ep = await getEpisode(mediaId);
+          if (cancelled) return;
           if (!ep) throw new Error("Folge nicht gefunden");
           path = ep.path;
           setTitle(ep.showTitle || "Folge");
@@ -775,7 +789,8 @@ export default function Player() {
           } catch {
             /* ignore */
           }
-          if (!cancelled) setVersions(files);
+          if (cancelled) return;
+          setVersions(files);
           const chosen = pickVersion(files, autoQualityRef.current) ?? files[0];
           path = chosen.path;
           setVersionPath(chosen.path);
@@ -784,6 +799,7 @@ export default function Player() {
           if (!cancelled) setEpisodes(list);
         } else {
           const m = await getMovie(mediaId);
+          if (cancelled) return;
           if (!m) throw new Error("Film nicht gefunden");
           setTitle(m.title);
           setSubtitle(m.year ? String(m.year) : null);
@@ -796,7 +812,8 @@ export default function Player() {
           } catch {
             /* ignore */
           }
-          if (!cancelled) setVersions(files);
+          if (cancelled) return;
+          setVersions(files);
           const chosen = pickVersion(files, autoQualityRef.current) ?? files[0];
           path = chosen.path;
           setVersionPath(chosen.path);
@@ -805,8 +822,6 @@ export default function Player() {
         if (cancelled) return;
         // Expanding from the mini player? The SAME file is already playing —
         // skip loadfile + resume so the video continues without a hiccup.
-        const expand = playback().expandTo;
-        const fromMini = expand && expand.mediaType === mediaType && expand.mediaId === mediaId;
         // Starting something NEW while a mini is still running (user clicked
         // "Abspielen" in the library): tear the stale mini down, otherwise its
         // observers would keep saving the OLD item's progress against the NEW
@@ -815,6 +830,8 @@ export default function Player() {
           playback().setMini(null);
         }
         if (fromMini) {
+          itemRef.current = { type: mediaType, id: mediaId };
+          loadingItemRef.current = false;
           playback().setExpandTo(null);
           if (expand.path) {
             path = expand.path;
@@ -829,23 +846,31 @@ export default function Player() {
           }
           return;
         }
-        pathRef.current = path;
         const prog = await getProgress(profileId, mediaType, mediaId);
+        if (cancelled) return;
+        pathRef.current = path;
+        itemRef.current = { type: mediaType, id: mediaId };
         resumeRef.current = prog && !prog.watched && prog.positionSec > 30 ? prog.positionSec : null;
         if (path && !cancelled) {
           durRef.current = 0; posRef.current = 0;
           setDuration(0); setPosition(0);
           await command("loadfile", [path]);
+          if (cancelled) return;
+          loadingItemRef.current = false;
+          const key = location.state?.queueKey;
+          const queued = playback().queue.find((q) => q.key === key);
+          if (queued?.mediaType === mediaType && queued.ids[0] === mediaId) playback().takeQueued(key);
         }
       } catch (e) {
-        setError(String(e));
+        if (!cancelled) setError(String(e));
       }
     })();
     return () => {
       cancelled = true;
+      cancelPendingLoad();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, mediaType, mediaId]);
+  }, [ready, mediaType, mediaId, location.key]);
 
   const wake = useCallback(() => {
     setShowUi(true);
@@ -1312,8 +1337,10 @@ export default function Player() {
                   <div key={q.key} className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs hover:bg-ghg-surface2">
                     <button className="min-w-0 flex-1 text-left" title="Jetzt abspielen" onClick={() => {
                       saveProgress();
-                      const next = playback().takeQueued(q.key);
-                      if (next) { setEpPanel(false); navigate(`/play/${next.mediaType}/${next.id}`); }
+                      if (q.ids.length) {
+                        setEpPanel(false);
+                        navigate(`/play/${q.mediaType}/${q.ids[0]}`, { state: { queueKey: q.key } });
+                      }
                     }}>
                       <span className="block truncate font-semibold">{q.label}</span>
                       {q.sub && <span className="block truncate text-ghg-muted">{q.sub}</span>}
@@ -1420,7 +1447,7 @@ export default function Player() {
         </div>
 
         <div className="player-toolbar flex flex-wrap items-center gap-2">
-          <button onClick={togglePause} className="p-2.5 rounded-full bg-ghg-red hover:bg-ghg-red-bright transition">
+          <button aria-label={paused ? "Abspielen" : "Pause"} onClick={togglePause} className="p-2.5 rounded-full bg-ghg-red hover:bg-ghg-red-bright transition">
             {paused ? <Play className="w-5 h-5 fill-white" /> : <Pause className="w-5 h-5 fill-white" />}
           </button>
 
@@ -1436,7 +1463,7 @@ export default function Player() {
           )}
 
           <div className="flex items-center gap-2 ml-1">
-            <button onClick={toggleMute} className="p-2 rounded-lg hover:bg-white/10 transition">
+            <button aria-label={muted || volume === 0 ? "Ton einschalten" : "Stummschalten"} onClick={toggleMute} className="p-2 rounded-lg hover:bg-white/10 transition">
               {muted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
             </button>
             {!pip && (

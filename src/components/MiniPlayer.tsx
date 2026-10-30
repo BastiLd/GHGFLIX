@@ -26,6 +26,9 @@ export function MiniPlayer() {
   const [hover, setHover] = useState(false);
   const [, geometryTick] = useState(0);
   const [showQueue, setShowQueue] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const loadingRef = useRef(false);
+  const requestRef = useRef(0);
   const posRef = useRef(0);
   const durRef = useRef(0);
   const lastSaveRef = useRef(0);
@@ -36,7 +39,7 @@ export function MiniPlayer() {
   const saveNow = useCallback(
     (watched = false) => {
       const m = miniRef.current;
-      if (!m || durRef.current <= 0) return;
+      if (!m || loadingRef.current || durRef.current <= 0) return;
       // same user-configurable watched threshold as the full player
       const thr = Math.min(0.99, Math.max(0.5, (uiPrefs().watchedThreshold || 95) / 100));
       const done = watched || posRef.current >= durRef.current * thr;
@@ -45,51 +48,69 @@ export function MiniPlayer() {
     [profileId],
   );
 
-  /** Load another item INTO the running mini player (queue advance). */
+  /** Consume a queue entry only after its media has loaded successfully. */
   const playInMini = useCallback(
-    async (mediaType: "movie" | "episode", id: number) => {
+    async (key: string) => {
+      const entry = playback().queue.find((q) => q.key === key);
+      const previous = playback().mini;
+      if (!entry?.ids.length || !previous || loadingRef.current) return;
+      const mediaType = entry.mediaType;
+      const id = entry.ids[0];
+      saveNow();
+      const request = ++requestRef.current;
+      loadingRef.current = true;
+      setLoading(true);
+      const current = () => request === requestRef.current && playback().mini === previous;
       try {
+        let next;
         if (mediaType === "episode") {
           const ep = await getEpisode(id);
-          if (!ep) return;
-          durRef.current = 0; posRef.current = 0; setDur(0); setPos(0);
-          playback().setMini({
-            mediaType,
-            mediaId: id,
-            title: ep.showTitle || "Folge",
-            subtitle: `${seasonEpisodeLabel(ep.season, ep.episode)}${ep.title ? " · " + ep.title : ""}`,
-            path: ep.path,
-          });
-          await command("loadfile", [ep.path]);
+          if (!current()) return;
+          if (!ep) throw new Error("Folge nicht gefunden; Eintrag bleibt in der Warteschlange.");
+          next = { mediaType, mediaId: id, title: ep.showTitle || "Folge",
+            subtitle: `${seasonEpisodeLabel(ep.season, ep.episode)}${ep.title ? " · " + ep.title : ""}`, path: ep.path, backTarget: `/show/${ep.showId}?season=${ep.season}` };
         } else {
           const m = await getMovie(id);
-          if (!m) return;
-          durRef.current = 0; posRef.current = 0; setDur(0); setPos(0);
-          playback().setMini({ mediaType, mediaId: id, title: m.title, subtitle: m.year ? String(m.year) : null, path: m.path });
-          await command("loadfile", [m.path]);
+          if (!current()) return;
+          if (!m) throw new Error("Film nicht gefunden; Eintrag bleibt in der Warteschlange.");
+          next = { mediaType, mediaId: id, title: m.title, subtitle: m.year ? String(m.year) : null, path: m.path, backTarget: `/movie/${id}` };
         }
+        durRef.current = 0; posRef.current = 0; setDur(0); setPos(0);
+        await command("loadfile", [next.path]);
+        if (!current()) return;
+        // A removed/reordered entry must never cause a different ID to be consumed.
+        if (playback().queue.find((q) => q.key === key)?.ids[0] === id) playback().takeQueued(key);
+        miniRef.current = next;
+        playback().setMini(next);
+        void setProperty("pause", false).catch(() => {});
         endedRef.current = false;
-        setProperty("pause", false).catch(() => {});
       } catch (e) {
-        toast(String(e), "error");
+        if (current()) toast(String(e), "error");
+      } finally {
+        if (request === requestRef.current) {
+          loadingRef.current = false;
+          setLoading(false);
+        }
       }
     },
-    [toast],
+    [saveNow, toast],
   );
 
   const advanceQueue = useCallback(() => {
-    saveNow();
-    const next = playback().popNext();
+    if (loadingRef.current) return;
+    const next = playback().peekNext();
     if (next) {
-      void playInMini(next.mediaType, next.id);
+      void playInMini(next.key);
     } else {
-      // nothing queued → stop the mini player
       saveNow(true);
+      ++requestRef.current;
       void destroy().catch(() => {});
       playback().setInited(false);
       playback().setMini(null);
     }
   }, [playInMini, saveNow]);
+
+  useEffect(() => () => { ++requestRef.current; }, []);
 
   const saveRef = useRef(saveNow);
   saveRef.current = saveNow;
@@ -124,7 +145,7 @@ export function MiniPlayer() {
           saveRef.current();
         }
       } else if (name === "eof-reached" && data === true) {
-        if (!endedRef.current) {
+        if (!endedRef.current && !loadingRef.current) {
           endedRef.current = true;
           saveRef.current(true);
           advanceRef.current();
@@ -149,14 +170,20 @@ export function MiniPlayer() {
   const { w, h, right, bottom } = miniRect(size);
 
   const expand = () => {
+    if (loadingRef.current) return;
+    ++requestRef.current;
     saveNow();
-    playback().setExpandTo({ mediaType: mini.mediaType, mediaId: mini.mediaId, path: mini.path });
+    playback().setExpandTo({ mediaType: mini.mediaType, mediaId: mini.mediaId, path: mini.path, title: mini.title, subtitle: mini.subtitle, backTarget: mini.backTarget });
     playback().setMini(null);
     navigate(`/play/${mini.mediaType}/${mini.mediaId}`);
   };
 
   const close = () => {
     saveNow();
+    ++requestRef.current;
+    loadingRef.current = false;
+    setLoading(false);
+    playback().setExpandTo(null);
     void destroy().catch(() => {});
     playback().setInited(false);
     playback().setMini(null);
@@ -174,6 +201,7 @@ export function MiniPlayer() {
         setShowQueue(false);
       }}
       onDoubleClick={expand}
+      aria-busy={loading}
     >
       {/* transparent center: the video shows through the Layout's clip-path hole */}
       <div className="absolute inset-0" onClick={() => setProperty("pause", !paused).catch(() => {})} />
@@ -185,6 +213,7 @@ export function MiniPlayer() {
         <div className="flex items-start justify-between p-2 bg-gradient-to-b from-black/80 to-transparent">
           <button
             onClick={expand}
+            disabled={loading}
             className="min-w-0 text-left"
             title="Im großen Player öffnen"
           >
@@ -192,7 +221,7 @@ export function MiniPlayer() {
             {mini.subtitle && <p className="text-[10px] text-white/70 truncate">{mini.subtitle}</p>}
           </button>
           <div className="flex gap-1 shrink-0">
-            <button onClick={expand} className="p-1.5 rounded-md bg-black/50 hover:bg-ghg-red transition" title="Vergrößern">
+            <button disabled={loading} onClick={expand} className="p-1.5 rounded-md bg-black/50 hover:bg-ghg-red transition" title="Vergrößern">
               <Maximize2 className="w-3.5 h-3.5" />
             </button>
             <button onClick={close} className="p-1.5 rounded-md bg-black/50 hover:bg-ghg-red transition" title="Schließen">
@@ -204,6 +233,7 @@ export function MiniPlayer() {
         <div className="bg-gradient-to-t from-black/85 to-transparent p-2 pt-4">
           <div className="flex items-center gap-2 mb-1.5">
             <button
+              aria-label={paused ? "Abspielen" : "Pause"}
               onClick={() => setProperty("pause", !paused).catch(() => {})}
               className="p-1.5 rounded-full bg-ghg-red hover:bg-ghg-red-bright transition"
             >
@@ -211,7 +241,7 @@ export function MiniPlayer() {
             </button>
             {queue.length > 0 && (
               <>
-                <button onClick={advanceQueue} className="p-1.5 rounded-md hover:bg-white/15 transition" title="Nächstes aus der Warteschlange">
+                <button disabled={loading} onClick={advanceQueue} className="p-1.5 rounded-md hover:bg-white/15 transition" title="Nächstes aus der Warteschlange">
                   <SkipForward className="w-4 h-4" />
                 </button>
                 <button
@@ -224,7 +254,7 @@ export function MiniPlayer() {
               </>
             )}
             <span className="ml-auto text-[10px] font-mono tabular-nums text-white/80">
-              {formatTime(pos)} / {formatTime(dur)}
+              {loading ? "Wird geladen…" : `${formatTime(pos)} / ${formatTime(dur)}`}
             </span>
           </div>
           <div
@@ -245,10 +275,8 @@ export function MiniPlayer() {
         <div className="absolute bottom-14 right-1 left-1 max-h-40 overflow-y-auto bg-ghg-elevated/95 border border-ghg-line rounded-lg p-1.5 space-y-1">
           {queue.map((q) => (
             <div key={q.key} className="flex items-center gap-2 text-[11px] px-1.5 py-1 rounded hover:bg-ghg-surface2">
-              <button className="min-w-0 flex-1 truncate text-left" title="Jetzt abspielen" onClick={() => {
-                saveNow();
-                const next = playback().takeQueued(q.key);
-                if (next) void playInMini(next.mediaType, next.id);
+              <button className="min-w-0 flex-1 truncate text-left" title="Jetzt abspielen" disabled={loading} onClick={() => {
+                void playInMini(q.key);
               }}>{q.label}{q.sub ? ` · ${q.sub}` : ""}</button>
               <button onClick={() => playback().removeFromQueue(q.key)} className="text-ghg-muted hover:text-ghg-red shrink-0">
                 <X className="w-3 h-3" />

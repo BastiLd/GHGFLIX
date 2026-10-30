@@ -675,18 +675,15 @@ pub async fn abholen(
         let conn = sperre.lock().unwrap();
         beitraege_laden(&conn)
     };
-    let mut bekannt: HashSet<String> = vorhanden.iter().map(|b| b.id.clone()).collect();
+    let initial_ids: HashSet<String> = vorhanden.iter().map(|b| b.id.clone()).collect();
+    let mut bekannt = initial_ids.clone();
     let mut neue = Vec::new();
 
-    for i in ziele {
+    for &i in &ziele {
         let feed = feeds[i].clone();
         match holen(http, &feed.feed_url).await {
             Ok(xml) => {
-                if let Some(t) = tag_inhalt(&xml, "title") {
-                    if !t.is_empty() {
-                        feeds[i].titel = t;
-                    }
-                }
+                // Keep the subscription name, including names edited before this refresh.
                 for block in eintraege(&xml).into_iter().take(MAX_PRO_FEED) {
                     let Some(mut b) = beitrag_aus(&block, &feed) else { continue };
                     if bekannt.contains(&b.id) {
@@ -734,13 +731,46 @@ pub async fn abholen(
         }
     }
 
-    vorhanden.sort_by(|a, b| b.veroeffentlicht.cmp(&a.veroeffentlicht));
-    {
-        let conn = sperre.lock().unwrap();
-        beitraege_speichern(&conn, &vorhanden)?;
-        feeds_speichern(&conn, &feeds)?;
+    let results: Vec<Feed> = ziele.iter().map(|&i| feeds[i].clone()).collect();
+    let conn = sperre.lock().unwrap();
+    refresh_speichern(&conn, &results, vorhanden, &initial_ids, neue)
+}
+
+/// Called under the database mutex, after all network work has finished.
+fn refresh_speichern(
+    conn: &Connection,
+    results: &[Feed],
+    items: Vec<Beitrag>,
+    initial_ids: &HashSet<String>,
+    neue: Vec<Beitrag>,
+) -> Result<Vec<Beitrag>> {
+    let mut feeds = feeds_laden(conn);
+    let active: HashSet<String> = feeds.iter().map(|f| f.id.clone()).collect();
+    for current in &mut feeds {
+        if let Some(result) = results.iter().find(|f| f.id == current.id) {
+            if result.zuletzt >= current.zuletzt {
+                current.zuletzt = result.zuletzt;
+                current.fehler = result.fehler.clone();
+            }
+        }
     }
-    Ok(neue)
+    let mut current_items: Vec<Beitrag> = beitraege_laden(conn).into_iter()
+        .filter(|b| active.contains(&b.feed_id)).collect();
+    let mut inserted = HashSet::new();
+    for result in items {
+        if !active.contains(&result.feed_id) { continue; }
+        if let Some(current) = current_items.iter_mut().find(|b| b.id == result.id) {
+            if current.ist_short.is_none() { current.ist_short = result.ist_short; }
+            if current.dauer_sek.is_none() { current.dauer_sek = result.dauer_sek; }
+        } else if !initial_ids.contains(&result.id) {
+            inserted.insert(result.id.clone());
+            current_items.push(result);
+        }
+    }
+    current_items.sort_by(|a, b| b.veroeffentlicht.cmp(&a.veroeffentlicht));
+    beitraege_speichern(conn, &current_items)?;
+    feeds_speichern(conn, &feeds)?;
+    Ok(neue.into_iter().filter(|b| inserted.contains(&b.id)).collect())
 }
 
 /* ── Lesen ─────────────────────────────────────────────────────────────── */
@@ -1166,6 +1196,44 @@ mod tests {
         assert_eq!(restored.gruppen_ids(), vec!["avatar", "alles"]);
         f.gruppe_ids = Some(vec![]);
         assert!(f.gruppen_ids().is_empty());
+    }
+
+    #[test]
+    fn refresh_preserves_edits_deletions_and_deduplicates_notifications() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);").unwrap();
+        let original = feed("blog");
+        let old = beitrag_aus(&eintraege(RSS)[0], &original).unwrap();
+        let mut incoming = old.clone();
+        incoming.id = "f1:new".into();
+        let initial = HashSet::from([old.id.clone()]);
+        let mut edited_feed = original.clone();
+        edited_feed.titel = "Mein Name".into();
+        edited_feed.gruppe_ids = Some(vec!["eins".into(), "zwei".into()]);
+        edited_feed.benachrichtigen = false;
+        feeds_speichern(&conn, &[edited_feed]).unwrap();
+        let mut edited_item = old.clone();
+        edited_item.gemerkt = true;
+        edited_item.gesehen = true;
+        edited_item.gelesen = true;
+        edited_item.format_override = Some("podcasts".into());
+        beitraege_speichern(&conn, &[edited_item]).unwrap();
+        let commit = || refresh_speichern(&conn, &[original.clone()], vec![old.clone(), incoming.clone()], &initial, vec![incoming.clone()]).unwrap();
+        assert_eq!(commit().len(), 1);
+        assert!(commit().is_empty());
+        let f = &feeds_laden(&conn)[0];
+        assert_eq!(f.titel, "Mein Name");
+        assert_eq!(f.gruppen_ids(), vec!["eins", "zwei"]);
+        assert!(!f.benachrichtigen);
+        let items = beitraege_laden(&conn);
+        assert_eq!(items.len(), 2);
+        let b = items.iter().find(|b| b.id == old.id).unwrap();
+        assert!(b.gemerkt && b.gesehen && b.gelesen);
+        assert_eq!(b.format_override.as_deref(), Some("podcasts"));
+        abbestellen(&conn, &original.id).unwrap();
+        assert!(commit().is_empty());
+        assert!(feeds_laden(&conn).is_empty());
+        assert!(beitraege_laden(&conn).is_empty());
     }
 
     #[test]

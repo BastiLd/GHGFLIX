@@ -20,6 +20,7 @@ export interface MiniInfo {
   title: string;
   subtitle?: string | null;
   path: string;
+  backTarget?: string;
 }
 
 /** One visual entry in the queue. A whole (rest of a) season is ONE entry whose
@@ -37,7 +38,7 @@ interface PlaybackStore {
   mpvInited: boolean;
   handoff: boolean;
   mini: MiniInfo | null;
-  expandTo: { mediaType: "movie" | "episode"; mediaId: number; path?: string } | null;
+  expandTo: { mediaType: "movie" | "episode"; mediaId: number; path?: string; title?: string; subtitle?: string | null; backTarget?: string } | null;
   queue: QueueItem[];
 
   setInited: (v: boolean) => void;
