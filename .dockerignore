@@ -1,0 +1,15 @@
+**/node_modules
+.git
+**/target
+**/test-results
+**/playwright-report
+**/.expo
+**/android
+**/ios
+release-artifacts
+preview/runtime
+**/.env
+**/.env.*
+**/*.keystore
+**/credentials.json
+**/google-services.json

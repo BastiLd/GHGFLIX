@@ -152,3 +152,9 @@ Die offene Geräteabnahme ist kompakt in [DEVICE_ACCEPTANCE.md](DEVICE_ACCEPTANC
 - Tatsächliche neue APK im eigenen fensterlosen Android-Emulator: App-Start und Kanäle ohne unaufgeforderten Berechtigungsdialog; unkonfigurierter Testserver zeigt fehlende Einrichtung. Danach nur isolierte Testserver-Projektkennung aktiviert, ohne Providerzugangsdaten. Einschalt-Klick öffnet Android-Berechtigungsdialog. Ablehnen zeigt Geräteeinstellungs-Hinweis; erneut erlauben zeigt erwarteten Fehler wegen fehlender FCM-/APNs-Einrichtung, keinen falschen Einschalt-Erfolg. Screenshots `emulator-round8-push-unconfigured.png`, `emulator-round8-push-denied.png`, `emulator-round8-push-no-provider.png`. Keine echte Expo-/FCM-/APNs-Zustellung behauptet. Emulator-HTTP-Proxy blockiert externe HTTP-/CONNECT-Anfragen.
 
 #30 bleibt für Providerkonfiguration und tatsächliche Zustellung offen. #1/#2/#5 benötigen weiterhin die beschriebene native Geräteabnahme; #3 verfolgt den Restumfang. Die Implementierung ist nicht veröffentlicht und der VLC-Modus bleibt bis zur normalen Abnahme zurückgestellt.
+
+## Neunter Umsetzungsstand: integrierter Release 3.5.0 (31.10.2026)
+
+Stabilitätsbranch und zusätzlicher Hauptordnerstand im separaten Release-Worktree zusammengeführt. Alle 116 übernommenen Ursprungsdateien bleiben im Hauptordner unverändert. Versionsnummern auf 3.5.0 vereinheitlicht; getrennte Mobile-/TV-Builds mit versionCode 19. Zusätzliche Integrationsfehler #31–#34 nachvollziehbar geprüft und geschlossen.
+
+Vollständiger aktueller Prüfbericht, Paket-Herkunft und Grenzen: [RELEASE_3.5.0.md](RELEASE_3.5.0.md). Die älteren Abschnitte dokumentieren frühere Zwischenstände; deren Aussage »noch nicht veröffentlicht« gilt nur für den jeweiligen damaligen Stand. Maßgeblich für die Veröffentlichung ist der GitHub-Release samt Build-Manifest. Offene Geräteabnahme und Push-/Cloud-Einrichtung sind ausdrücklich getrennt aufgeführt.

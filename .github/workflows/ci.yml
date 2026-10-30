@@ -28,6 +28,7 @@ jobs:
           node server/test/mobile-channels.test.mjs
           node server/test/native-push.test.mjs
           python3 tests/integration/test_emulator_ui.py
+          node --test tests/integration/emulator-proxy.test.mjs
       - name: TypeScript (Frontend + Desktop-Shell)
         run: npx tsc --noEmit
       - name: Web-Build (identisch zum Docker-Build)
