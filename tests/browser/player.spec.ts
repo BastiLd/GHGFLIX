@@ -25,8 +25,8 @@ test("fullscreen return and mini-player expansion retain a usable timeline", asy
   await expect.poll(()=>video.evaluate((v:HTMLVideoElement)=>v.currentTime)).toBeGreaterThan(0);
   for(let i=0;i<3;i++) {
     await page.mouse.move(100,100);
-    if (i === 1) await page.getByRole("button", {name:"Pause",exact:true}).click();
-    await page.getByTitle("Vollbild",{exact:true}).click();
+    if (i === 1) await page.getByRole("button", {name:/^Paus(e|ieren)$/,exact:true}).click();
+    await page.getByRole("button",{name:"Vollbild",exact:true}).click();
     await expect.poll(()=>page.evaluate(()=>!!document.fullscreenElement)).toBe(true);
     await page.getByTitle("Zurück (Mini-Player)",{exact:true}).click();
     await expect.poll(()=>page.evaluate(()=>!!document.fullscreenElement)).toBe(false);
@@ -39,19 +39,19 @@ test("fullscreen return and mini-player expansion retain a usable timeline", asy
       await page.getByRole("button", {name:"Abspielen",exact:true}).click();
     }
   }
-  await page.getByRole("button", {name:"Pause",exact:true}).click();
+  await page.getByRole("button", {name:/^Paus(e|ieren)$/,exact:true}).click();
   const bar=page.getByRole("slider",{name:"Wiedergabeposition"});
   await bar.focus(); await bar.press("ArrowRight");
   await expect.poll(()=>video.evaluate((v:HTMLVideoElement)=>v.currentTime)).toBeGreaterThan(10);
   await expect.poll(()=>video.evaluate((v:HTMLVideoElement)=>v.paused)).toBe(true);
   await page.mouse.move(100,100);
-  await page.getByTitle("Vollbild",{exact:true}).click();
+  await page.getByRole("button",{name:"Vollbild",exact:true}).click();
   await page.getByTitle("Player schließen",{exact:true}).click();
   await expect.poll(()=>page.evaluate(()=>!!document.fullscreenElement)).toBe(false);
   await page.evaluate(()=>{ location.hash="/play/episode/1"; });
   await expect.poll(()=>video.evaluate((v:HTMLVideoElement)=>v.currentTime)).toBeGreaterThan(0);
   await page.mouse.move(100,100);
-  await page.getByTitle("Vollbild",{exact:true}).click();
+  await page.getByRole("button",{name:"Vollbild",exact:true}).click();
   await expect.poll(()=>page.evaluate(()=>!!document.fullscreenElement)).toBe(true);
   expect(errors).toEqual([]);
 });

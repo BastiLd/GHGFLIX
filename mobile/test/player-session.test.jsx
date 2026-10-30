@@ -174,3 +174,18 @@ it("loads the remaining series for continue/history playback and retries a faile
   await flush(() => fireEvent.click(screen.getByRole("button", { name: "Nächste Folge" })));
   expect(push).toHaveBeenCalledWith(expect.objectContaining({ id: 2, showId: 9, nextEp: expect.objectContaining({ id: 3 }) }));
 });
+
+it("timed out streams cannot revive from late events and retry gets a fresh player", async () => {
+  await flush(() => render(draw()));
+  const old = players[0];
+  await flush(() => vi.advanceTimersByTime(45001));
+  expect(screen.getByRole("alert").textContent).toContain("45 Sekunden");
+  const calls = old.play.mock.calls.length;
+  act(() => { old.ready(); old.time(50); old.emit("statusChange", {status:"error"}); });
+  expect(old.play).toHaveBeenCalledTimes(calls);
+  expect(screen.getByRole("alert").textContent).toContain("45 Sekunden");
+  await flush(() => fireEvent.click(screen.getByRole("button", {name:"Erneut versuchen"})));
+  expect(players).toHaveLength(2);
+  act(() => players[1].ready());
+  expect(screen.queryByRole("alert")).toBeNull();
+});

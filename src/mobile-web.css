@@ -50,7 +50,7 @@
 .mobile-install { background: #15151c; border-radius: 10px; padding: 16px; margin-top: 20px; }
 .mobile-install h2 { font-size: 18px; font-weight: 750; margin: 12px 0; }
 .mobile-install p { color: #b6b6c5; font-size: 14px; line-height: 1.6; margin-top: 12px; }
-.touch-transport { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 6px 0 8px; }
+.touch-transport { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; margin: 6px 0 8px; }
 .touch-transport button { min-width: 40px; height: 40px; display: flex; gap: 3px; align-items: center; justify-content: center; border-radius: 7px; background: #ffffff0c; }
 .touch-transport button span { font-size: 12px; }
 .touch-transport .touch-play { width: 44px; height: 40px; background: #e50914; }
@@ -137,7 +137,7 @@
   .touch-control-row { display: flex; flex-direction: column; gap: 4px; }
 }
 @media (orientation: landscape) and (max-height: 500px) {
-  .touch-control-row { flex-direction: row; align-items: center; justify-content: space-between; }
+  .touch-control-row { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
   .touch-transport { margin: 0; }
   .touch-transport .touch-play { width: 44px; height: 40px; }
   .touch-player-actions button { min-height: 40px; }

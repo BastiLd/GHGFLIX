@@ -1,11 +1,10 @@
 import {test,expect} from '@playwright/test';
-import {DatabaseSync} from 'node:sqlite';
 import path from 'node:path';
 
 test('Profilname und privates Bild erscheinen in zweitem Browser',async({page,browser},info)=>{
   const name='Profilpruefung '+info.project.name;
   const renamed=name+' Neu';
-  try{
+  {
     await page.goto('/#/profiles');
     await page.getByRole('button',{name:'Profil hinzufügen'}).click();
     await page.getByPlaceholder('Dein Name').fill(name);
@@ -33,7 +32,7 @@ test('Profilname und privates Bild erscheinen in zweitem Browser',async({page,br
     await page.getByRole('button',{name:'Speichern',exact:true}).click();
     const other=await browser.newContext({viewport:{width:390,height:844}});
     const second=await other.newPage();
-    await second.goto('http://127.0.0.1:1420/#/profiles');
+    await second.goto(new URL('/#/profiles', page.url()).href);
     await expect(second.getByRole('button',{name:'Profil '+renamed+' auswählen'}).locator('img')).toBeVisible();
     await second.getByRole('button',{name:renamed+' bearbeiten',exact:true}).click();
     await expect(second.getByPlaceholder('Dein Name')).toHaveValue(renamed);
@@ -41,8 +40,5 @@ test('Profilname und privates Bild erscheinen in zweitem Browser',async({page,br
     expect(await second.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     await second.screenshot({path:`preview/evidence/profile-editor-${info.project.name}.png`});
     await other.close();
-  }finally{
-    const d=new DatabaseSync('preview/runtime/server/ghgflix.db');
-    d.prepare('DELETE FROM profiles WHERE name IN (?,?)').run(name,renamed);d.close();
   }
 });

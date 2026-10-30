@@ -1460,7 +1460,9 @@ export default function Player() {
 
         {touchLayout ? <MobilePlayerControls
           paused={paused} onPause={togglePause} onSeek={s => seekTo(Math.max(0, Math.min(duration, position + s)))}
-          onFullscreen={toggleFullscreen} onNext={nextEp ? () => navigate(`/play/episode/${nextEp.id}`) : undefined} onAspect={cycleAspect}
+          fullscreen={fullscreen} onFullscreen={toggleFullscreen} onPip={togglePip}
+            onQueue={mediaType === "episode" || queueItems.length ? () => setEpPanel(o => !o) : undefined}
+            onNext={nextEp ? () => navigate(`/play/episode/${nextEp.id}`) : undefined} onAspect={cycleAspect}
           audio={audioTracks.map(t => ({ id: t.id, label: trackLabel(t) }))} subtitles={subTracks.map(t => ({ id: t.id, label: trackLabel(t) }))}
           aid={aid} sid={sid} onAudio={selectAudio} onSubtitle={selectSub} speed={speed} onSpeed={changeSpeed}
           quality={streamQuality} onQuality={v => { setStreamQuality(v); void setProperty("ghg-quality", v); }}

@@ -61,7 +61,7 @@ try {
     await expect.poll(async()=>Number(await bar.getAttribute("aria-valuemax"))).toBeGreaterThanOrEqual(90);
     for(let i=0;i<cycles;i++) {
       await page.mouse.move(100,100);
-      await page.getByTitle("Vollbild",{exact:true}).click();
+      await page.getByRole("button",{name:"Vollbild",exact:true}).click();
       await expect.poll(()=>page.evaluate(()=>!!document.fullscreenElement)).toBe(true);
       await page.getByTitle("Zurück (Mini-Player)",{exact:true}).click();
       await expect.poll(()=>page.evaluate(()=>!!document.fullscreenElement)).toBe(false);
@@ -70,7 +70,7 @@ try {
       await expect.poll(async()=>Number(await bar.getAttribute("aria-valuemax"))).toBeGreaterThanOrEqual(90);
     }
     await page.mouse.move(100,100);
-    await page.getByRole("button",{name:"Pause",exact:true}).click();
+    await page.getByRole("button",{name:/^Paus(e|ieren)$/,exact:true}).click();
     await bar.focus();await bar.press("ArrowRight");
     await expect.poll(async()=>Number(await bar.getAttribute("aria-valuenow"))).toBeGreaterThan(10);
     await expect.poll(()=>video.evaluate(v=>v.paused)).toBe(true);
@@ -81,7 +81,7 @@ try {
     let soakChecks=0;
     while(Date.now()-soakStart<soakSeconds*1000) {
       await page.mouse.move(100,100);
-      await page.getByRole("button",{name:"Pause",exact:true}).click();
+      await page.getByRole("button",{name:/^Paus(e|ieren)$/,exact:true}).click();
       await bar.focus();
       const position=Number(await bar.getAttribute("aria-valuenow"));
       await bar.press(position>50 ? "Home" : "ArrowRight");

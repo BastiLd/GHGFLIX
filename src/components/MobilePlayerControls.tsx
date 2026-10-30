@@ -1,10 +1,10 @@
-import { Captions, Check, Maximize, Pause, Play, RotateCcw, RotateCw, Settings2, SkipForward, X } from "lucide-react";
+import { Captions, Check, ListVideo, PictureInPicture2, Maximize, Pause, Play, RotateCcw, RotateCw, Settings2, SkipForward, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 type Choice = { id: number; label: string };
 type Props = {
   paused: boolean; onPause: () => void; onSeek: (seconds: number) => void;
-  onFullscreen: () => void; onNext?: () => void; onAspect: () => void;
+  fullscreen: boolean; onFullscreen: () => void; onQueue?: () => void; onPip: () => void; onNext?: () => void; onAspect: () => void;
   audio: Choice[]; subtitles: Choice[]; aid: number | "no"; sid: number | "no";
   onAudio: (id: number) => void; onSubtitle: (id: number | "no") => void;
   speed: number; onSpeed: (v: number) => void;
@@ -36,7 +36,9 @@ export function MobilePlayerControls(p: Props) {
       <button className="touch-play" aria-label={p.paused ? "Abspielen" : "Pausieren"} onClick={p.onPause}>{p.paused ? <Play size={24}/> : <Pause size={24}/>}</button>
       <button aria-label="30 Sekunden vor" onClick={() => p.onSeek(30)}><RotateCw size={20}/><span>30</span></button>
       {p.onNext && <button aria-label="Nächste Folge" onClick={p.onNext}><SkipForward size={20}/></button>}
-      <button aria-label="Vollbild" onClick={p.onFullscreen}><Maximize size={20}/></button>
+      <button aria-label={p.fullscreen ? "Vollbild beenden" : "Vollbild"} aria-pressed={p.fullscreen} onClick={p.onFullscreen}><Maximize size={20}/></button>
+      {p.onQueue && <button aria-label="Wiedergabeliste" title="Wiedergabeliste" onClick={p.onQueue}><ListVideo size={20}/></button>}
+      <button aria-label="Bild-im-Bild" onClick={p.onPip}><PictureInPicture2 size={20}/></button>
     </div>
     <div className="touch-player-actions"><button onClick={() => setPanel("language")}><Captions size={20}/><span><strong>Sprache & Untertitel</strong><small>{audioName} · UT: {subName}</small></span></button><button aria-label="Wiedergabeoptionen" onClick={() => setPanel("options")}><Settings2 size={20}/><span>Optionen</span></button></div></div>
     {panel && createPortal(<div className="touch-sheet-backdrop" onClick={close}><section role="dialog" aria-modal="true" aria-label={panel === "language" ? "Sprache & Untertitel" : "Wiedergabeoptionen"} className="touch-sheet" onClick={e => e.stopPropagation()}>
