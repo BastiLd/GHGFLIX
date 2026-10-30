@@ -3,6 +3,7 @@ import subprocess
 import sys
 import re
 import os
+import uuid
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -16,8 +17,16 @@ def call(*args):
 assert call("emu", "avd", "name").decode().splitlines()[0].strip() == "GHGFlixStability", "Wrong emulator; refusing input"
 
 def nodes():
-    call("shell", "uiautomator", "dump", "/sdcard/ghgflix-ui.xml")
-    xml = call("exec-out", "cat", "/sdcard/ghgflix-ui.xml")
+    # Android can exit successfully despite failing to reach idle. Never read
+    # a previous dump in that case, particularly before a coordinate action.
+    remote = "/sdcard/ghgflix-ui-" + uuid.uuid4().hex + ".xml"
+    try:
+        result = call("shell", "uiautomator", "dump", remote).decode()
+        if "dumped to:" not in result:
+            raise RuntimeError("No fresh UI snapshot; use a current screenshot: " + result)
+        xml = call("exec-out", "cat", remote)
+    finally:
+        call("shell", "rm", "-f", remote)
     Path("test-results/emulator-ui.xml").write_bytes(xml)
     return list(ET.fromstring(xml).iter("node"))
 

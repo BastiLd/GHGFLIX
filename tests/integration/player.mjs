@@ -12,6 +12,7 @@ import {chromium,expect} from "@playwright/test";
 
 const cycles=Number(process.env.GHGFLIX_STRESS_CYCLES ?? 2);
 const soakSeconds=Number(process.env.GHGFLIX_PLAYBACK_SOAK_SECONDS ?? 0);
+const parallel=process.env.GHGFLIX_PARALLEL_PLAYBACK === "1";
 assert.ok(Number.isInteger(cycles) && cycles>=1 && cycles<=100, "cycles must be 1..100");
 assert.ok(Number.isInteger(soakSeconds) && soakSeconds>=0 && soakSeconds<=3600, "soak seconds must be 0..3600");
 const dir=mkdtempSync(join(tmpdir(),"ghgflix-integration-"));
@@ -30,6 +31,7 @@ try {
     execFileSync("ffmpeg",["-y","-hide_banner","-loglevel","error","-f","lavfi","-i","testsrc2=size=320x180:rate=10","-f","lavfi","-i","anullsrc=r=48000:cl=stereo","-t","90","-c:v",codec,"-pix_fmt","yuv420p","-c:a","aac",file],{stdio:"pipe"});
     db.prepare("INSERT INTO movies (id,title,path,added_at) VALUES (?,?,?,?)").run(id,name,file,Date.now());
   }
+  for (const id of [2,3]) db.prepare("INSERT INTO profiles (id,name,created_at) VALUES (?,?,?)").run(id,`Testprofil ${id}`,Date.now());
   db.close();
   const moduleUrl=pathToFileURL(resolve("server/src/index.js")).href;
   server=spawn(process.execPath,["--input-type=module","-e",`process.on('message',m=>{if(m==='shutdown')process.emit('SIGTERM')});await import(${JSON.stringify(moduleUrl)});`],{
@@ -40,9 +42,10 @@ try {
   await expect.poll(async()=>{try{return (await fetch(base+"/api/ping")).ok;}catch{return false;}},{timeout:15000}).toBe(true);
   browser=await chromium.launch({headless:true,args:["--autoplay-policy=no-user-gesture-required"]});
   const errors=[];
-  for(const [id,mode] of [[1,"direct"],[2,"automatic"],[2,"fragmented-mp4"]]) {
+  async function playbackCase([id,mode,profileId]) {
     const page=await browser.newPage({viewport:{width:1440,height:900}});
     page.on("pageerror",e=>errors.push(e.message));
+    await page.addInitScript((id)=>localStorage.setItem("ghgflix.profileId",String(id)),profileId);
     if(mode==="fragmented-mp4") await page.addInitScript(()=>{
       const native=HTMLMediaElement.prototype.canPlayType;
       HTMLMediaElement.prototype.canPlayType=function(type){return type.includes("mpegurl")?"":native.call(this,type);};
@@ -102,15 +105,31 @@ try {
     assert.equal(frame.status(),200);
     const metadata=await sharp(await frame.body()).metadata();
     assert.equal(metadata.width,176);assert.ok(metadata.height > 0);
-    results.push({id,mode,transport,cycles,soakChecks,soakElapsedSeconds:Math.round((Date.now()-soakStart)/1000),duration:Number(await bar.getAttribute("aria-valuemax")),thumbnail:{width:metadata.width,height:metadata.height}});
+    const lastPosition=Number(await bar.getAttribute("aria-valuenow"));
+    const result={id,mode,profileId,transport,cycles,soakChecks,soakElapsedSeconds:Math.round((Date.now()-soakStart)/1000),duration:Number(await bar.getAttribute("aria-valuemax")),thumbnail:{width:metadata.width,height:metadata.height}};
     await page.mouse.move(100,100);await page.getByTitle("Player schließen",{exact:true}).click();
     await expect(video).toHaveCount(0);
+    let saved;
+    await expect.poll(async()=>{
+      const rows=await fetch(`${base}/api/progress?profile=${profileId}`).then(r=>r.json());
+      assert.equal(rows.length,1,"another profile's playback must not leak into this profile");
+      saved=rows[0];
+      assert.equal(saved.refId,id);assert.equal(saved.mediaType,"movie");
+      return Math.abs(saved.position-lastPosition);
+    }).toBeLessThan(3);
+    assert.equal(saved.watched,0);assert.ok(saved.duration>=90);
+    results.push({...result,savedPosition:saved.position});
     await page.close();
     console.log(`PASS ${mode}: ${transport}, decoded frames, timeline and thumbnail`);
   }
+  const cases=[[1,"direct",1],[2,"automatic",2],[2,"fragmented-mp4",3]];
+  if(parallel) {
+    const completed=await Promise.allSettled(cases.map(playbackCase));
+    for(const result of completed) if(result.status==="rejected") throw result.reason;
+  } else for(const entry of cases) await playbackCase(entry);
   assert.deepEqual(errors,[]);
   mkdirSync("test-results",{recursive:true});
-  writeFileSync("test-results/real-player.json",JSON.stringify({environment:"headless Chromium with real local server and generated media",results},null,2));
+  writeFileSync(`test-results/real-player${parallel?"-parallel":""}.json`,JSON.stringify({environment:"headless Chromium with real local server and generated media",parallel,results},null,2));
   console.log("PASS real HTTP/SQLite/ffmpeg: direct MP4 and transcoded MKV, decoded frames, repeated fullscreen/mini, pause/seek/resume and thumbnail response");
 } catch(e) {console.error(e);console.error(logs.slice(-10000));throw e;}
 finally {

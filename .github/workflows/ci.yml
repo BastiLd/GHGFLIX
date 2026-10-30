@@ -26,6 +26,7 @@ jobs:
           npm test --prefix mobile
           node server/test/feed-races.test.mjs
           node server/test/mobile-channels.test.mjs
+          python3 tests/integration/test_emulator_ui.py
       - name: TypeScript (Frontend + Desktop-Shell)
         run: npx tsc --noEmit
       - name: Web-Build (identisch zum Docker-Build)
