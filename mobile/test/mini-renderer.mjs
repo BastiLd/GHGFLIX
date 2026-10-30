@@ -308,7 +308,17 @@ export function baueUmgebung(basis) {
     laeuft = false;
   }
 
+  function cleanup() {
+    for (const inst of instanzen.values()) {
+      for (const slot of inst.zustand) {
+        if (typeof slot?.aufraeumen === "function") slot.aufraeumen();
+      }
+    }
+    instanzen.clear();
+  }
+
   function render(element) {
+    cleanup();
     wurzelElement = element;
     instanzen.clear();
     lauf();
@@ -320,6 +330,6 @@ export function baueUmgebung(basis) {
     runden: () => rundenGesamt,
     erzeuge: (type, props, ...kinder) =>
       erzeugtesElement(type, { ...props, children: kinder.length <= 1 ? kinder[0] : kinder }),
-    aufraeumen: () => { Module._load = echt; },
+    aufraeumen: () => { cleanup(); Module._load = echt; },
   };
 }

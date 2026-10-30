@@ -49,6 +49,7 @@ interface PlaybackStore {
   removeFromQueue: (key: string) => void;
   moveInQueue: (key: string, dir: -1 | 1) => void;
   clearQueue: () => void;
+  takeQueued: (key: string) => { mediaType: "movie" | "episode"; id: number } | null;
   /** Pop the next playable id off the queue (consumes one id; drops empty items). */
   popNext: () => { mediaType: "movie" | "episode"; id: number } | null;
   /** Peek without consuming (for "als Nächstes" preview). */
@@ -113,6 +114,14 @@ export const usePlayback = create<PlaybackStore>((set, get) => ({
   clearQueue: () => {
     persist([]);
     set({ queue: [] });
+  },
+  takeQueued: (key) => {
+    const q = get().queue;
+    const entry = q.find((x) => x.key === key);
+    if (!entry?.ids.length) return null;
+    const updated = q.flatMap((x) => x.key !== key ? [x] : x.ids.length > 1 ? [{ ...x, ids: x.ids.slice(1) }] : []);
+    persist(updated); set({ queue: updated });
+    return { mediaType: entry.mediaType, id: entry.ids[0] };
   },
   popNext: () => {
     const q = [...get().queue];

@@ -52,6 +52,14 @@ pub struct Feed {
     /// Zu welcher Gruppe (Film/Serie) gehoert dieses Abo? None = keine.
     #[serde(default)]
     pub gruppe_id: Option<String>,
+    #[serde(default)]
+    pub gruppe_ids: Option<Vec<String>>,
+}
+
+impl Feed {
+    fn gruppen_ids(&self) -> Vec<String> {
+        self.gruppe_ids.clone().unwrap_or_else(|| self.gruppe_id.iter().cloned().collect())
+    }
 }
 
 /* ══ Gruppen ══════════════════════════════════════════════════════════════
@@ -459,6 +467,7 @@ pub async fn abonnieren(
             zuletzt: 0,
             fehler: None,
             gruppe_id: None,
+            gruppe_ids: None,
         }
     } else {
         let kanal_id = kanal_id_ermitteln(http, eingabe).await?;
@@ -483,6 +492,7 @@ pub async fn abonnieren(
             zuletzt: 0,
             fehler: None,
             gruppe_id: None,
+            gruppe_ids: None,
         }
     };
 
@@ -514,6 +524,7 @@ pub fn feed_aendern(
     benachrichtigen: Option<bool>,
     titel: Option<String>,
     gruppe_id: Option<Option<String>>,
+    gruppe_ids: Option<Vec<String>>,
 ) -> Result<Feed> {
     let mut feeds = feeds_laden(conn);
     let f = feeds
@@ -529,7 +540,14 @@ pub fn feed_aendern(
         }
     }
     if let Some(g) = gruppe_id {
+        f.gruppe_ids = Some(g.iter().cloned().collect());
         f.gruppe_id = g;
+    }
+    if let Some(ids) = gruppe_ids {
+        let mut unique = Vec::new();
+        for id in ids { if !id.is_empty() && !unique.contains(&id) { unique.push(id); } }
+        f.gruppe_id = unique.first().cloned();
+        f.gruppe_ids = Some(unique);
     }
     let kopie = f.clone();
     feeds_speichern(conn, &feeds)?;
@@ -759,8 +777,8 @@ pub fn beitraege(conn: &Connection, f: &Filter) -> Vec<Beitrag> {
         feeds
             .iter()
             .filter(|x| match g {
-                Some(id) => x.gruppe_id.as_deref() == Some(id.as_str()),
-                None => x.gruppe_id.is_none(),
+                Some(id) => x.gruppen_ids().contains(id),
+                None => x.gruppen_ids().is_empty(),
             })
             .map(|x| x.id.clone())
             .collect()
@@ -923,8 +941,10 @@ pub fn gruppe_loeschen(conn: &Connection, id: &str) -> Result<i64> {
     let mut feeds = feeds_laden(conn);
     let mut n = 0;
     for f in feeds.iter_mut() {
-        if f.gruppe_id.as_deref() == Some(id) {
-            f.gruppe_id = None;
+        if f.gruppen_ids().iter().any(|g| g == id) {
+            let ids: Vec<String> = f.gruppen_ids().into_iter().filter(|g| g != id).collect();
+            f.gruppe_id = ids.first().cloned();
+            f.gruppe_ids = Some(ids);
             n += 1;
         }
     }
@@ -942,8 +962,8 @@ pub fn gruppen_uebersicht(conn: &Connection) -> Vec<GruppenKachel> {
         let abos: Vec<&Feed> = feeds
             .iter()
             .filter(|f| match g {
-                Some(g) => f.gruppe_id.as_deref() == Some(g.id.as_str()),
-                None => f.gruppe_id.is_none(),
+                Some(g) => f.gruppen_ids().contains(&g.id),
+                None => f.gruppen_ids().is_empty(),
             })
             .collect();
         let ids: HashSet<&str> = abos.iter().map(|f| f.id.as_str()).collect();
@@ -1116,7 +1136,23 @@ mod tests {
             zuletzt: 1,
             fehler: None,
             gruppe_id: None,
+            gruppe_ids: None,
         }
+    }
+
+    #[test]
+    fn legacy_and_multiple_groups_survive_serialization() {
+        let mut f = feed("youtube");
+        f.gruppe_id = Some("avatar".into());
+        let mut old = serde_json::to_value(&f).unwrap();
+        old.as_object_mut().unwrap().remove("gruppeIds");
+        let restored: Feed = serde_json::from_value(old).unwrap();
+        assert_eq!(restored.gruppen_ids(), vec!["avatar"]);
+        f.gruppe_ids = Some(vec!["avatar".into(), "alles".into()]);
+        let restored: Feed = serde_json::from_str(&serde_json::to_string(&f).unwrap()).unwrap();
+        assert_eq!(restored.gruppen_ids(), vec!["avatar", "alles"]);
+        f.gruppe_ids = Some(vec![]);
+        assert!(f.gruppen_ids().is_empty());
     }
 
     #[test]

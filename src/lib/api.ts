@@ -63,11 +63,12 @@ export const feedsList = () => invoke<Feed[]>("feeds_list");
 export const feedAdd = (url: string, art: "youtube" | "blog") => invoke<Feed>("feed_add", { url, art });
 export const feedRemove = (id: string) => invoke<boolean>("feed_remove", { id });
 /** `gruppeId`: undefined = nicht anfassen, "" = aus der Gruppe nehmen. */
-export const feedUpdate = (id: string, teil: { benachrichtigen?: boolean; titel?: string; gruppeId?: string | null }) =>
+export const feedUpdate = (id: string, teil: { benachrichtigen?: boolean; titel?: string; gruppeIds?: string[]; gruppeId?: string | null }) =>
   invoke<Feed>("feed_update", {
     id,
     benachrichtigen: teil.benachrichtigen ?? null,
     titel: teil.titel ?? null,
+    gruppeIds: teil.gruppeIds,
     gruppeId: teil.gruppeId === undefined ? undefined : (teil.gruppeId ?? ""),
   });
 /** Beiträge mit allen Filtern der Oberfläche. */
@@ -78,14 +79,18 @@ export const feedSaved = (id: string, on: boolean) => invoke<boolean>("feed_save
 export const feedWatched = (id: string, on: boolean) => invoke<boolean>("feed_watched", { id, on });
 
 // ── Gruppen (ein Film / eine Serie und die Abos dazu) ──
-export const feedGroups = () => invoke<FeedGruppe[]>("feed_groups");
+export const feedGroups = async () => {
+  const groups = await invoke<FeedGruppe[]>("feed_groups");
+  return Promise.all(groups.map(async (g) => ({ ...g, bild: g.id ? await getSetting(`feed_group_image_${g.id}`) : null })));
+};
 export const feedGroupAdd = (name: string, emoji?: string, farbe?: string | null) =>
   invoke<{ id: string }>("feed_group_add", { name, emoji: emoji ?? null, farbe: farbe ?? null });
-export const feedGroupUpdate = (
+export const feedGroupUpdate = async (
   id: string,
-  teil: { name?: string; emoji?: string; farbe?: string | null; standardOffen?: boolean; sortierung?: number },
-) =>
-  invoke<{ id: string }>("feed_group_update", {
+  teil: { bild?: string | null; name?: string; emoji?: string; farbe?: string | null; standardOffen?: boolean; sortierung?: number },
+) => {
+  if (teil.bild !== undefined) await setSetting(`feed_group_image_${id}`, teil.bild ?? "");
+  return invoke<{ id: string }>("feed_group_update", {
     id,
     name: teil.name ?? null,
     emoji: teil.emoji ?? null,
@@ -94,6 +99,7 @@ export const feedGroupUpdate = (
     standardOffen: teil.standardOffen ?? null,
     sortierung: teil.sortierung ?? null,
   });
+};
 export const feedGroupRemove = (id: string) => invoke<number>("feed_group_remove", { id });
 export const feedRefresh = (id?: string | null) =>
   invoke<{ neu: number; beitraege: FeedBeitrag[] }>("feed_refresh", { id: id ?? null });

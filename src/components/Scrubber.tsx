@@ -61,7 +61,8 @@ export function Scrubber({
   const wantRef = useRef<number | null>(null);
   const timerRef = useRef<number | null>(null);
   const busyRef = useRef(false);
-  const lastSeekRef = useRef(0);
+  const requestedRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
 
   // Single-flight extractor: only one thumbnail request runs at a time; the latest
   // requested bucket always wins, so fast scrubbing never piles up ffmpeg calls.
@@ -76,14 +77,14 @@ export function Scrubber({
       const url = await getThumb(bucket);
       if (url) {
         cacheRef.current.set(bucket, url);
-        setThumb(url);
+        if (mountedRef.current && requestedRef.current === bucket) setThumb(url);
       }
     } catch {
       /* ignore extraction failures */
     } finally {
       busyRef.current = false;
     }
-    if (wantRef.current != null && timerRef.current == null) {
+    if (mountedRef.current && wantRef.current != null && timerRef.current == null) {
       timerRef.current = window.setTimeout(runThumb, 30);
     }
   }, [getThumb]);
@@ -93,12 +94,14 @@ export function Scrubber({
       if (duration <= 0) return;
       if (sprite) return; // Sprite-Blatt deckt alles ab — kein Nachladen nötig
       const bucket = Math.min(duration, Math.max(0, Math.round(t / BUCKET) * BUCKET));
+      requestedRef.current = bucket;
       const cached = cacheRef.current.get(bucket);
       if (cached) {
         setThumb(cached);
         wantRef.current = null;
         return;
       }
+      setThumb(null);
       wantRef.current = bucket;
       if (timerRef.current == null && !busyRef.current) timerRef.current = window.setTimeout(runThumb, 110);
     },
@@ -133,13 +136,6 @@ export function Scrubber({
     const mv = (e: PointerEvent) => {
       e.preventDefault();
       onMove(e.clientX);
-      // throttle the actual seek (~10/s) so dragging stays smooth; the thumbnail
-      // preview and knob still follow the cursor every frame.
-      const now = performance.now();
-      if (now - lastSeekRef.current > 90) {
-        lastSeekRef.current = now;
-        onSeek(timeFromEvent(e.clientX).t);
-      }
     };
     const up = (e: PointerEvent) => {
       const { t } = timeFromEvent(e.clientX);
@@ -147,16 +143,23 @@ export function Scrubber({
       setDragging(false);
     };
     window.addEventListener("pointermove", mv);
+    const cancel = () => setDragging(false);
+    window.addEventListener("pointercancel", cancel);
     window.addEventListener("pointerup", up);
     return () => {
       window.removeEventListener("pointermove", mv);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
     };
   }, [dragging, onMove, onSeek, timeFromEvent]);
 
   useEffect(
-    () => () => {
-      if (timerRef.current) window.clearTimeout(timerRef.current);
+    () => {
+      mountedRef.current = true;
+      return () => {
+        mountedRef.current = false;
+        if (timerRef.current) window.clearTimeout(timerRef.current);
+      };
     },
     [],
   );
@@ -219,16 +222,29 @@ export function Scrubber({
       {/* hit area (tall, for easy grabbing) */}
       <div
         ref={trackRef}
+        role="slider"
+        aria-label="Wiedergabeposition"
+        aria-valuemin={0}
+        aria-valuemax={duration || 0}
+        aria-valuenow={Math.min(duration || 0, Math.max(0, shownT))}
+        tabIndex={0}
+        style={{ touchAction: "none" }}
+        onKeyDown={(e) => {
+          const delta = e.key === "ArrowRight" ? 10 : e.key === "ArrowLeft" ? -10 : null;
+          if (delta == null || duration <= 0) return;
+          e.preventDefault(); e.stopPropagation();
+          onSeek(Math.min(duration, Math.max(0, position + delta)));
+        }}
         className="group relative h-5 flex items-center cursor-pointer"
         onPointerMove={(e) => onMove(e.clientX)}
         onPointerLeave={() => !dragging && setHover(null)}
         onPointerDown={(e) => {
+          if (duration <= 0 || e.button !== 0) return;
           e.preventDefault();
           (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
           const { t } = timeFromEvent(e.clientX);
           setDragT(t);
           setDragging(true);
-          onSeek(t);
         }}
       >
         <div className="relative w-full h-1.5 rounded-full bg-white/25 overflow-visible">

@@ -51,6 +51,7 @@ export function MiniPlayer() {
         if (mediaType === "episode") {
           const ep = await getEpisode(id);
           if (!ep) return;
+          durRef.current = 0; posRef.current = 0; setDur(0); setPos(0);
           playback().setMini({
             mediaType,
             mediaId: id,
@@ -62,6 +63,7 @@ export function MiniPlayer() {
         } else {
           const m = await getMovie(id);
           if (!m) return;
+          durRef.current = 0; posRef.current = 0; setDur(0); setPos(0);
           playback().setMini({ mediaType, mediaId: id, title: m.title, subtitle: m.year ? String(m.year) : null, path: m.path });
           await command("loadfile", [m.path]);
         }
@@ -75,6 +77,7 @@ export function MiniPlayer() {
   );
 
   const advanceQueue = useCallback(() => {
+    saveNow();
     const next = playback().popNext();
     if (next) {
       void playInMini(next.mediaType, next.id);
@@ -86,6 +89,11 @@ export function MiniPlayer() {
       playback().setMini(null);
     }
   }, [playInMini, saveNow]);
+
+  const saveRef = useRef(saveNow);
+  saveRef.current = saveNow;
+  const advanceRef = useRef(advanceQueue);
+  advanceRef.current = advanceQueue;
 
   // own observers while the mini player is alive
   useEffect(() => {
@@ -112,13 +120,13 @@ export function MiniPlayer() {
         const now = Date.now();
         if (now - lastSaveRef.current > 5000) {
           lastSaveRef.current = now;
-          saveNow();
+          saveRef.current();
         }
       } else if (name === "eof-reached" && data === true) {
         if (!endedRef.current) {
           endedRef.current = true;
-          saveNow(true);
-          advanceQueue();
+          saveRef.current(true);
+          advanceRef.current();
         }
       }
     }).then((u) => {
@@ -236,7 +244,11 @@ export function MiniPlayer() {
         <div className="absolute bottom-14 right-1 left-1 max-h-40 overflow-y-auto bg-ghg-elevated/95 border border-ghg-line rounded-lg p-1.5 space-y-1">
           {queue.map((q) => (
             <div key={q.key} className="flex items-center gap-2 text-[11px] px-1.5 py-1 rounded hover:bg-ghg-surface2">
-              <span className="min-w-0 flex-1 truncate">{q.label}{q.sub ? ` · ${q.sub}` : ""}</span>
+              <button className="min-w-0 flex-1 truncate text-left" title="Jetzt abspielen" onClick={() => {
+                saveNow();
+                const next = playback().takeQueued(q.key);
+                if (next) void playInMini(next.mediaType, next.id);
+              }}>{q.label}{q.sub ? ` · ${q.sub}` : ""}</button>
               <button onClick={() => playback().removeFromQueue(q.key)} className="text-ghg-muted hover:text-ghg-red shrink-0">
                 <X className="w-3 h-3" />
               </button>

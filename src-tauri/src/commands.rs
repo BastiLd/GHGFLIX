@@ -1752,11 +1752,12 @@ pub fn feed_update(
     benachrichtigen: Option<bool>,
     titel: Option<String>,
     gruppe_id: Option<String>,
+    gruppe_ids: Option<Vec<String>>,
 ) -> R<crate::kanaele::Feed> {
     let conn = state.conn.lock().unwrap();
     // Leerer Text = "aus der Gruppe nehmen", fehlend = "nicht anfassen".
     let gruppe = gruppe_id.map(|g| if g.trim().is_empty() { None } else { Some(g) });
-    crate::kanaele::feed_aendern(&conn, &id, benachrichtigen, titel, gruppe).map_err(err)
+    crate::kanaele::feed_aendern(&conn, &id, benachrichtigen, titel, gruppe, gruppe_ids).map_err(err)
 }
 
 #[tauri::command]

@@ -354,9 +354,10 @@ export default function Player() {
     // (Browser/Handy/TV); die Windows-App bleibt beim Einzelbild-Verfahren,
     // das lokal ohnehin sofort aus dem Plattencache kommt.
     if (IS_WEB && pathRef.current) {
-      trickplayInfo(pathRef.current)
-        .then((info) => setSprite(info ?? null))
-        .catch(() => setSprite(null));
+      const requestedPath = pathRef.current;
+      trickplayInfo(requestedPath)
+        .then((info) => { if (pathRef.current === requestedPath) setSprite(info ?? null); })
+        .catch(() => { if (pathRef.current === requestedPath) setSprite(null); });
     }
   }, [applyAudioPreference, applySubtitlePreference]);
 
@@ -423,6 +424,9 @@ export default function Player() {
     }
   }, [mediaType, nextEp, navigate, saveProgress, goBack]);
 
+  const handleEndRef = useRef(handleEnd);
+  handleEndRef.current = handleEnd;
+
   const togglePause = useCallback(() => {
     setProperty("pause", !paused).catch(() => {});
   }, [paused]);
@@ -432,6 +436,20 @@ export default function Player() {
     const fs = await w.isFullscreen();
     await w.setFullscreen(!fs);
     setFullscreen(!fs);
+  }, []);
+
+  useEffect(() => {
+    if (!IS_WEB) return;
+    const sync = () => {
+      const on = !!document.pictureInPictureElement;
+      pipRef.current = on; setPip(on);
+    };
+    document.addEventListener("enterpictureinpicture", sync, true);
+    document.addEventListener("leavepictureinpicture", sync, true);
+    return () => {
+      document.removeEventListener("enterpictureinpicture", sync, true);
+      document.removeEventListener("leavepictureinpicture", sync, true);
+    };
   }, []);
 
   const togglePip = useCallback(async () => {
@@ -659,9 +677,10 @@ export default function Player() {
           } else if (name === "demuxer-cache-time") {
             setBuffered(Number(data) || 0);
           } else if (name === "eof-reached") {
-            if (data === true) handleEnd();
+            if (data === true) handleEndRef.current();
           }
         });
+        if (cancelled) { unobserve(); return; }
         // restore the last-used volume + playback speed
         const savedVol = Math.min(100, Math.max(0, parseInt(localStorage.getItem("ghgflix.volume") || "100", 10) || 100));
         setVol(savedVol);
@@ -706,9 +725,11 @@ export default function Player() {
     setNextCancelled(false);
     setVideoReady(false);
     setVersions([]);
+    setEpisodes([]);
     setVersionPath(null);
     setEndScreen(false);
     setChapters([]);
+    setSprite(null);
     setEpPanel(false);
     introMarkRef.current = null;
     (async () => {
@@ -761,6 +782,7 @@ export default function Player() {
           setVersionPath(chosen.path);
           setQuality(computeQuality(chosen));
         }
+        if (cancelled) return;
         // Expanding from the mini player? The SAME file is already playing —
         // skip loadfile + resume so the video continues without a hiccup.
         const expand = playback().expandTo;
@@ -790,7 +812,11 @@ export default function Player() {
         pathRef.current = path;
         const prog = await getProgress(profileId, mediaType, mediaId);
         resumeRef.current = prog && !prog.watched && prog.positionSec > 30 ? prog.positionSec : null;
-        if (path && !cancelled) await command("loadfile", [path]);
+        if (path && !cancelled) {
+          durRef.current = 0; posRef.current = 0;
+          setDuration(0); setPosition(0);
+          await command("loadfile", [path]);
+        }
       } catch (e) {
         setError(String(e));
       }
@@ -941,7 +967,7 @@ export default function Player() {
         return null;
       }
     },
-    [thumbWidth],
+    [thumbWidth, versionPath],
   );
   const selectAudio = (v: number | "no") => {
     setAid(v);
@@ -1245,10 +1271,10 @@ export default function Player() {
       )}
 
       {/* episode quick-list panel */}
-      {epPanel && mediaType === "episode" && (
+      {epPanel && (
         <div className="absolute top-0 right-0 bottom-0 w-96 max-w-[85vw] bg-ghg-bg/95 border-l border-ghg-line flex flex-col fade-in z-20" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between px-4 py-3 border-b border-ghg-line">
-            <p className="font-bold text-sm">Episoden</p>
+            <p className="font-bold text-sm">Wiedergabeliste</p>
             <button onClick={() => setEpPanel(false)} className="p-1.5 rounded-lg hover:bg-ghg-surface2">
               <X className="w-4 h-4" />
             </button>
@@ -1264,10 +1290,14 @@ export default function Player() {
                 </div>
                 {queueItems.map((q, qi) => (
                   <div key={q.key} className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs hover:bg-ghg-surface2">
-                    <span className="min-w-0 flex-1">
+                    <button className="min-w-0 flex-1 text-left" title="Jetzt abspielen" onClick={() => {
+                      saveProgress();
+                      const next = playback().takeQueued(q.key);
+                      if (next) { setEpPanel(false); navigate(`/play/${next.mediaType}/${next.id}`); }
+                    }}>
                       <span className="block truncate font-semibold">{q.label}</span>
                       {q.sub && <span className="block truncate text-ghg-muted">{q.sub}</span>}
-                    </span>
+                    </button>
                     <button onClick={() => playback().moveInQueue(q.key, -1)} disabled={qi === 0} className="px-1 text-ghg-muted hover:text-ghg-text disabled:opacity-30">↑</button>
                     <button onClick={() => playback().moveInQueue(q.key, 1)} disabled={qi === queueItems.length - 1} className="px-1 text-ghg-muted hover:text-ghg-text disabled:opacity-30">↓</button>
                     <button onClick={() => playback().removeFromQueue(q.key)} className="px-1 text-ghg-muted hover:text-ghg-red">✕</button>
@@ -1347,6 +1377,7 @@ export default function Player() {
           ) : (
             <Scrubber
               position={position}
+              key={`${mediaType}:${mediaId}:${versionPath}`}
               duration={duration}
               buffered={buffered}
               onSeek={seekTo}
@@ -1529,8 +1560,8 @@ export default function Player() {
             {trackMenu === "sub" && <TrackMenu tracks={subTracks} current={sid} onSelect={selectSub} label={trackLabel} allowOff onAddExternal={addExternalSub} />}
           </div>
 
-          {mediaType === "episode" && (
-            <button onClick={() => setEpPanel((o) => !o)} className={`p-2 rounded-lg hover:bg-white/10 transition ${epPanel ? "text-ghg-red" : ""}`} title="Episodenliste">
+          {(mediaType === "episode" || queueItems.length > 0) && (
+            <button onClick={() => setEpPanel((o) => !o)} className={`p-2 rounded-lg hover:bg-white/10 transition ${epPanel ? "text-ghg-red" : ""}`} title="Wiedergabeliste">
               <ListVideo className="w-5 h-5" />
             </button>
           )}

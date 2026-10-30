@@ -253,7 +253,7 @@ body {
    Aktiviert per body.tv-mode (User-Agent-Erkennung, Schalter in den
    Einstellungen oder Link ?tv=1 — siehe src/lib/tvMode.ts). */
 body.tv-mode {
-  font-size: 115%; /* TV-008: größere Schrift für 3–4 m Sitzabstand */
+  font-size: 100%; /* Focus rings and safe area retain TV usability without global enlargement. */
 }
 body.tv-mode #root {
   padding: 2.5vh 3vw; /* TV-009: Safe-Area gegen TV-Overscan */

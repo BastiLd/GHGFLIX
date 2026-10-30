@@ -344,6 +344,7 @@ export async function handleInvoke(cmd, a = {}) {
         benachrichtigen: a.benachrichtigen,
         titel: a.titel,
         // undefined = nicht anfassen, null = aus der Gruppe nehmen
+        gruppeIds: a.gruppeIds,
         gruppeId: a.gruppeId === undefined ? undefined : a.gruppeId,
       });
     case "feed_items":

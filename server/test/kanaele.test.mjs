@@ -272,6 +272,22 @@ let gruppeId = null;
   pruefe("Loeschen entfernt nur die Gruppe", k.feedsLaden().length === vorherAbos && r.geloescht);
 }
 
+// Multiple memberships preserve legacy assignments and survive group deletion.
+{
+  const feed = k.feedsLaden()[0];
+  const a = k.gruppeAnlegen({ name: "Multi A" });
+  const b = k.gruppeAnlegen({ name: "Multi B" });
+  k.feedAendern(feed.id, { gruppeId: a.id });
+  pruefe("alte Gruppenzuordnung bleibt lesbar", k.gruppenIds(k.feedsLaden()[0]).includes(a.id));
+  k.feedAendern(feed.id, { gruppeIds: [a.id, b.id, a.id] });
+  pruefe("Mehrfachzuordnung dedupliziert", k.gruppenIds(k.feedsLaden()[0]).length === 2);
+  pruefe("Beiträge in beiden Gruppen", k.beitraege({ gruppeId: a.id }).length === k.beitraege({ gruppeId: b.id }).length);
+  k.gruppeLoeschen(a.id);
+  pruefe("Löschen erhält andere Zuordnung", k.gruppenIds(k.feedsLaden()[0]).includes(b.id));
+  k.feedAendern(feed.id, { gruppeIds: [] });
+  pruefe("alle Zuordnungen entfernbar", k.gruppenIds(k.feedsLaden()[0]).length === 0);
+}
+
 // ── Suche, Sortierung, Merkliste, Gesehen ───────────────────────────────────
 console.log("\n── Suche, Merkliste und Gesehen ────────────────────────────");
 {

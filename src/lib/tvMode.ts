@@ -88,6 +88,7 @@ const BACK_KEYS = new Set(["Escape", "GoBack", "BrowserBack", "XF86Back"]);
 const BACK_CODES = new Set([461 /* webOS */, 10009 /* Tizen */, 166 /* KEY_BACK */]);
 
 function onKey(e: KeyboardEvent): void {
+  if (e.defaultPrevented) return;
   // Zurück (TV-040): Fernbedienungs-Zurück → eine Seite zurück
   if (BACK_KEYS.has(e.key) || BACK_CODES.has(e.keyCode)) {
     if (isTextField(document.activeElement)) return (document.activeElement as HTMLElement).blur();

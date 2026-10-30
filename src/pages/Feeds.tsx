@@ -15,6 +15,8 @@ import { Button, EmptyState, Modal, Spinner, TextInput } from "../components/ui"
 import type { Feed, FeedBeitrag, FeedGruppe } from "../lib/types";
 
 type Art = "youtube" | "blog";
+const gruppenIds = (f: Feed) => f.gruppeIds ?? (f.gruppeId ? [f.gruppeId] : []);
+
 type Format = "alle" | "videos" | "shorts";
 type Reiter = "alle" | "ungelesen" | "gemerkt";
 
@@ -303,7 +305,7 @@ function GruppenKachel({
     >
       {/* Vorschaustreifen aus den letzten Bildern der Gruppe */}
       <div className="h-24 bg-ghg-bg2 flex">
-        {g.bilder.length > 0 ? (
+        {g.bild ? <img src={g.bild} alt="" className="w-full h-full object-cover" /> : g.bilder.length > 0 ? (
           g.bilder.slice(0, 4).map((b, i) => (
             <img key={i} src={b} alt="" className="flex-1 h-full object-cover opacity-70" loading="lazy" referrerPolicy="strict-origin-when-cross-origin" />
           ))
@@ -373,6 +375,7 @@ function GruppenEinstellungen({
   toast: (t: string, k?: "success" | "error" | "info") => void;
 }) {
   const [name, setName] = useState(gruppe.name);
+  const [bild, setBild] = useState(gruppe.bild ?? "");
   const [emoji, setEmoji] = useState(gruppe.emoji);
   const [farbe, setFarbe] = useState<string | null>(gruppe.farbe ?? null);
   const [standardOffen, setStandardOffen] = useState(gruppe.standardOffen);
@@ -381,7 +384,7 @@ function GruppenEinstellungen({
   const speichern = async () => {
     setBusy(true);
     try {
-      await feedGroupUpdate(gruppe.id!, { name, emoji, farbe, standardOffen });
+      await feedGroupUpdate(gruppe.id!, { name, emoji, farbe, standardOffen, bild });
       onAendern();
       toast("Gruppe gespeichert", "success");
       onClose();
@@ -394,7 +397,7 @@ function GruppenEinstellungen({
 
   const zuordnen = async (f: Feed, drin: boolean) => {
     try {
-      await feedUpdate(f.id, { gruppeId: drin ? gruppe.id! : null });
+      await feedUpdate(f.id, { gruppeIds: drin ? [...new Set([...gruppenIds(f), gruppe.id!])] : gruppenIds(f).filter((id) => id !== gruppe.id) });
       onAendern();
     } catch (e) {
       toast(String(e), "error");
@@ -410,6 +413,24 @@ function GruppenEinstellungen({
             <TextInput value={name} onChange={setName} />
           </label>
         </div>
+
+        <label className="block text-sm">
+          Gruppenbild oder Logo
+          <input type="file" accept="image/png,image/jpeg,image/webp" className="block mt-2" onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            if (file.size > 10 * 1024 * 1024) { toast("Bitte ein Bild unter 10 MB wählen", "error"); return; }
+            try {
+              const bitmap = await createImageBitmap(file);
+              const canvas = document.createElement("canvas");
+              const scale = Math.min(1, 960 / Math.max(bitmap.width, bitmap.height));
+              canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale);
+              canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+              bitmap.close(); setBild(canvas.toDataURL("image/webp", 0.85));
+            } catch { toast("Das Bild konnte nicht geladen werden", "error"); }
+          }} />
+          {bild && <><img src={bild} alt="Gruppenbild" className="mt-2 max-h-32 rounded-lg" /><button type="button" onClick={() => setBild("")} className="mt-2 text-ghg-muted">Bild entfernen</button></>}
+        </label>
 
         <div>
           <span className="text-xs uppercase tracking-wide text-ghg-muted">Symbol</span>
@@ -466,7 +487,7 @@ function GruppenEinstellungen({
           <div className="max-h-64 overflow-y-auto border border-ghg-line rounded-lg divide-y divide-ghg-line">
             {abos.length === 0 && <p className="px-3 py-3 text-sm text-ghg-muted">Noch nichts abonniert.</p>}
             {abos.map((f) => {
-              const drin = f.gruppeId === gruppe.id;
+              const drin = gruppenIds(f).includes(gruppe.id!);
               const woanders = !!f.gruppeId && !drin;
               return (
                 <label key={f.id} className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-ghg-surface2">
@@ -573,7 +594,7 @@ function GruppenAnsicht({
   });
 
   const meineAbos = useMemo(
-    () => (alles ? abos : abos.filter((f) => (f.gruppeId ?? null) === gruppeId)),
+    () => (alles ? abos : abos.filter((f) => (gruppeId === null ? gruppenIds(f).length === 0 : gruppenIds(f).includes(gruppeId)))),
     [abos, gruppeId, alles],
   );
 
@@ -844,19 +865,17 @@ function GruppenAnsicht({
               >
                 <Settings2 className="w-4 h-4" />
               </button>
-              <select
-                value={f.gruppeId ?? ""}
-                onChange={(e) => void feedUpdate(f.id, { gruppeId: e.target.value || null }).then(auffrischen)}
-                className="bg-ghg-surface2 border border-ghg-line rounded-lg px-2 py-1 text-xs max-w-40"
-                title="Gruppe"
-              >
-                <option value="">Ohne Gruppe</option>
-                {alleGruppen.filter((g) => g.id).map((g) => (
-                  <option key={g.id} value={g.id!}>
-                    {g.emoji} {g.name}
-                  </option>
-                ))}
-              </select>
+              <details className="relative text-xs">
+                <summary className="cursor-pointer rounded-lg border border-ghg-line px-2 py-1">Gruppen ({gruppenIds(f).length})</summary>
+                <div className="absolute right-0 z-20 w-52 max-h-48 overflow-auto rounded-lg border border-ghg-line bg-ghg-bg p-2">
+                  {alleGruppen.filter((g) => g.id).map((g) => <label key={g.id} className="flex items-center gap-2 py-2">
+                    <input type="checkbox" checked={gruppenIds(f).includes(g.id!)} onChange={(e) => {
+                      const ids = e.target.checked ? [...gruppenIds(f), g.id!] : gruppenIds(f).filter((id) => id !== g.id);
+                      void feedUpdate(f.id, { gruppeIds: ids }).then(auffrischen).catch((e) => toast(String(e), "error"));
+                    }} />{g.emoji} {g.name}
+                  </label>)}
+                </div>
+              </details>
               <button
                 onClick={() => void feedUpdate(f.id, { benachrichtigen: !f.benachrichtigen }).then(auffrischen)}
                 title={f.benachrichtigen ? "Benachrichtigungen aus" : "Benachrichtigungen an"}
@@ -975,6 +994,7 @@ function BeitragsKachel({ b, onOeffnen, onAendern }: { b: FeedBeitrag; onOeffnen
           {!b.gelesen && (
             <span className="absolute top-2 left-2 zz-clip bg-ghg-red px-2 py-0.5 text-[10px] font-bold uppercase">Neu</span>
           )}
+          {b.videoId && b.istShort == null && <span className="absolute bottom-2 left-2 rounded bg-black/70 px-2 py-0.5 text-[10px]">Format noch ungeprüft</span>}
           {b.istShort === true && (
             <span className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/70 rounded px-1.5 py-0.5 text-[10px] font-bold">
               <Zap className="w-3 h-3" /> SHORT

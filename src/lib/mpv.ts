@@ -507,7 +507,23 @@ export async function observeProperties(
   props: readonly string[],
   cb: PropCb,
 ): Promise<() => void> {
-  if (IS_TAURI) return native.observeProperties(props as never, cb as never);
+  if (IS_TAURI) {
+    // Native subscriptions only forward changes: duration may never change
+    // during a handoff. Subscribe first, then hydrate unchanged properties.
+    const changed = new Set<string>();
+    let active = true;
+    const un = await native.observeProperties(props as never, ((e: { name: string; data: unknown }) => {
+      changed.add(e.name);
+      if (active) cb(e);
+    }) as never);
+    await Promise.all(props.filter((name) => name !== "eof-reached").map(async (name) => {
+      try {
+        const data = await native.getProperty(name as never);
+        if (active && !changed.has(name)) cb({ name, data });
+      } catch { /* unavailable until the file is loaded */ }
+    }));
+    return () => { active = false; un(); };
+  }
   S.observers.add(cb);
   // push current values immediately so late subscribers (mini player) sync up
   const v = S.video;
@@ -530,8 +546,10 @@ export async function webTogglePip(): Promise<boolean> {
       await doc.exitPictureInPicture?.();
       return false;
     }
-    await (v as HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> }).requestPictureInPicture?.();
-    return true;
+    const request = (v as HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> }).requestPictureInPicture;
+    if (!request) return false;
+    await request.call(v);
+    return !!doc.pictureInPictureElement;
   } catch {
     return false;
   }

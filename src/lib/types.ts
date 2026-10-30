@@ -255,6 +255,7 @@ export interface Feed {
   benachrichtigen: boolean;
   /** Zu welcher Gruppe (Film/Serie) gehört dieses Abo? null = keine. */
   gruppeId?: string | null;
+  gruppeIds?: string[];
   hinzugefuegt: number;
   /** Zeitpunkt des letzten erfolgreichen Abrufs (0 = noch nie). */
   zuletzt: number;
@@ -287,6 +288,7 @@ export interface FeedBeitrag {
 
 /** Eine Gruppe auf der Kanäle-Seite: ein Film, eine Filmreihe oder eine Serie. */
 export interface FeedGruppe {
+  bild?: string | null;
   /** null = die Sammelkachel „Ohne Gruppe" */
   id: string | null;
   name: string;

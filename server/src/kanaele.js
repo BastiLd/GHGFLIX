@@ -351,6 +351,8 @@ export function abbestellen(id) {
 }
 
 /** Einstellungen eines Abos ändern. */
+export const gruppenIds = (f) => f.gruppeIds ?? (f.gruppeId ? [f.gruppeId] : []);
+
 export function feedAendern(id, teil = {}) {
   const feeds = feedsLaden();
   const f = feeds.find((x) => x.id === id);
@@ -359,6 +361,11 @@ export function feedAendern(id, teil = {}) {
   if (teil.titel) f.titel = String(teil.titel);
   // gruppeId === null heißt ausdrücklich „aus der Gruppe nehmen".
   if (teil.gruppeId !== undefined) f.gruppeId = teil.gruppeId ? String(teil.gruppeId) : null;
+  if (teil.gruppeIds !== undefined) {
+    if (!Array.isArray(teil.gruppeIds)) throw new Error("Gruppen müssen eine Liste sein");
+    f.gruppeIds = [...new Set(teil.gruppeIds.map(String).filter(Boolean))];
+    f.gruppeId = f.gruppeIds[0] ?? null;
+  } else if (teil.gruppeId !== undefined) f.gruppeIds = f.gruppeId ? [f.gruppeId] : [];
   feedsSpeichern(feeds);
   return f;
 }
@@ -430,8 +437,9 @@ export function gruppeLoeschen(id) {
   const feeds = feedsLaden();
   let n = 0;
   for (const f of feeds) {
-    if (f.gruppeId === id) {
-      f.gruppeId = null;
+    if (gruppenIds(f).includes(id)) {
+      f.gruppeIds = gruppenIds(f).filter((g) => g !== id);
+      f.gruppeId = f.gruppeIds[0] ?? null;
       n++;
     }
   }
@@ -444,7 +452,7 @@ export function gruppenUebersicht() {
   const feeds = feedsLaden();
   const items = beitraegeLaden();
   const bau = (g) => {
-    const abos = feeds.filter((f) => (g ? f.gruppeId === g.id : !f.gruppeId));
+    const abos = feeds.filter((f) => (g ? gruppenIds(f).includes(g.id) : gruppenIds(f).length === 0));
     const ids = new Set(abos.map((f) => f.id));
     const meine = items.filter((b) => ids.has(b.feedId));
     return {
@@ -656,7 +664,7 @@ export function beitraege({
   // gruppeId: undefined = egal, null = nur gruppenlose, sonst genau diese
   let erlaubt = null;
   if (gruppeId !== undefined) {
-    erlaubt = new Set(feedListe.filter((f) => (gruppeId === null ? !f.gruppeId : f.gruppeId === gruppeId)).map((f) => f.id));
+    erlaubt = new Set(feedListe.filter((f) => (gruppeId === null ? gruppenIds(f).length === 0 : gruppenIds(f).includes(gruppeId))).map((f) => f.id));
   }
 
   const q = suche ? String(suche).toLowerCase().trim() : null;
