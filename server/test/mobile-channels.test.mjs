@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 const dir = mkdtempSync(join(tmpdir(), "ghgflix-mobile-channels-"));
 process.env.DATA_DIR = dir;
-for (const key of ["SHOWS_DIRS", "MOVIES_DIRS", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_USER_ID", "TMDB_API_KEY", "PUSH_CONTACT"]) process.env[key] = "";
+for (const key of ["SHOWS_DIRS", "MOVIES_DIRS", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_USER_ID", "TMDB_API_KEY", "PUSH_CONTACT", "EXPO_PUSH_ENABLED", "EXPO_PUSH_ACCESS_TOKEN"]) process.env[key] = "";
 const db = await import("../src/db.js");
 const { handleInvoke } = await import("../src/invoke.js");
 const { kanalAufruf, kanalUebersicht } = await import("../../mobile/src/kanaele-api.js");
@@ -16,6 +16,15 @@ const api = async (path, options) => {
 };
 const call = (command, args) => kanalAufruf(api, command, args);
 try {
+  assert.equal((await call("native_push_status", {tokens:[]})).configured,false);
+  process.env.EXPO_PUSH_ENABLED="1";
+  process.env.EXPO_PUSH_PROJECT_ID="b14ed30d-3ecc-4465-ac79-7988b90ab0d8";
+  const token="ExpoPushToken[isolatedtesttoken]";
+  await call("native_push_subscribe",{token,projectId:process.env.EXPO_PUSH_PROJECT_ID,previousTokens:[]});
+  assert.equal((await call("native_push_status",{tokens:[token]})).registered,true);
+  await call("native_push_unsubscribe",{tokens:[token]});
+  assert.equal((await call("native_push_status",{tokens:[token]})).registered,false);
+  process.env.EXPO_PUSH_ENABLED="";
   const a = await call("feed_group_add", { name: "Science" });
   const b = await call("feed_group_add", { name: "Space" });
   db.setSetting("feeds", JSON.stringify([{ id: "f", art: "youtube", titel: "Lab", gruppeIds: [a.id, b.id], benachrichtigen: true }]));

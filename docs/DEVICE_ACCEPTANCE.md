@@ -1,6 +1,6 @@
 # Geräteabnahme für Player und Kanäle
 
-Stand: 30.10.2026. Diese Liste ist eine offene Abnahme, kein Nachweis bestandener Gerätetests.
+Stand: 31.10.2026. Diese Liste ist eine offene Abnahme, kein Nachweis bestandener Gerätetests.
 
 ## Bisherige Evidenz
 
@@ -28,7 +28,7 @@ Gerät, OS, App-Version/Commit, Wiedergabeweg (direkt/HLS/Umwandlung), Medienfor
 
 ## Noch erforderliche Umsetzung und Einrichtung
 
-- Web-Push ist implementiert; Zielserver-Konfiguration und wirkliche Zustellung sind offen. Native Expo-/Tauri-Geräte-Push-Anbindung ist weiterhin nicht implementiert. In-App-Meldungen bleiben Standard. Einrichtung und Grenzen stehen in [PUSH.md](PUSH.md).
+- Web- und native Expo-Push-Anbindung sind implementiert; Provider-/Build-/Zielserver-Konfiguration und wirkliche Zustellung sind offen ([#30](https://github.com/BastiLd/GHGFLIX/issues/30)). Tauri-Desktop und Android TV unterstützen diesen nativen Push-Weg nicht. In-App-Meldungen bleiben Standard. Einrichtung und Grenzen stehen in [PUSH.md](PUSH.md).
 - Die Integrationstests verwenden 90-Sekunden-Testmedien. Wiederholte Wechsel und Spulrunden belegen keine mehrstündige Wiedergabe großer UHD-Dateien oder die Kapazität des NAS. Die Belastungswerte des jeweiligen Laufs stehen in [PLAYER_CHANNELS_STATUS.md](PLAYER_CHANNELS_STATUS.md).
 - Der VLC-artige Modus bleibt zurückgestellt, bis die normale Erfahrung abgenommen ist.
 

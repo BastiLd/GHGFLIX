@@ -3,6 +3,7 @@ import { BackHandler, Image, Linking, ScrollView, Text, View } from "react-nativ
 import { FFeld, QrBild } from "./bausteine.js";
 import { FKnopf, FokusReihe, useFokusSystem } from "./fokus.js";
 import { kanalbildWaehlen } from "./kanalbild.js";
+import { NativePushSettings } from "./native-push.js";
 import { C, M, st, istTV } from "./stile.js";
 import { beitragsFormat, FORMATE, gruppenIds, kanalAufruf, kanalUebersicht, webAdresse } from "./kanaele-api.js";
 
@@ -18,7 +19,7 @@ function Aktion({ text, onPress, row, disabled, children, selected }) {
   </FokusReihe>;
 }
 
-export function KanaeleSeite({ api, onChange }) {
+export function KanaeleSeite({ api, onChange, serverId }) {
   const sys = useFokusSystem();
   const [history, setHistory] = useState([{ kind: "groups" }]);
   const route = history[history.length - 1];
@@ -117,7 +118,7 @@ export function KanaeleSeite({ api, onChange }) {
       }))}
       {action("Neue Gruppe", () => open({ kind: "groupEdit" }))}
       {action("Kanal abonnieren", () => open({ kind: "subscribe" }))}
-      <Text style={st.gedaempft}>Neue Beiträge erscheinen in der App. Geräte-Push ist in dieser App noch nicht verfügbar.</Text>
+      <NativePushSettings api={api} serverId={serverId} row={row} />
     </>}
 
     {route.kind === "posts" && <>

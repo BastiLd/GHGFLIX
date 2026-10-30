@@ -1,5 +1,6 @@
 import webpush from "web-push";
 import { openDb } from "./db.js";
+import { sendNativePosts } from "./native-push.js";
 
 const contact = () => process.env.PUSH_CONTACT || "";
 const configured = () => /^(mailto:[^\s@]+@[^\s@]+|https:\/\/[^\s]+)$/.test(contact());
@@ -42,6 +43,11 @@ export function unsubscribePush(endpoint) {
   return true;
 }
 export async function sendNewPosts(posts, feeds, send = webpush.sendNotification.bind(webpush)) {
+  // Independent opt-ins: a server can use native delivery without Web Push.
+  const native = sendNativePosts(posts,feeds).catch(() => console.warn("[native-push] Zustellung fehlgeschlagen"));
+  try { await sendWebPosts(posts,feeds,send); } finally { await native; }
+}
+async function sendWebPosts(posts, feeds, send) {
   if (!configured()) return;
   const enabled = new Set(feeds.filter(f => f.benachrichtigen).map(f => f.id));
   const count = posts.filter(p => enabled.has(p.feedId)).length;

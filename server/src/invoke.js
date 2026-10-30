@@ -1,4 +1,5 @@
 import { pushStatus, subscribePush, unsubscribePush, sendNewPosts } from "./push.js";
+import { nativePushStatus, subscribeNativePush, unsubscribeNativePush } from "./native-push.js";
 // /api/invoke/<cmd> — the desktop app's ENTIRE Tauri command surface,
 // re-implemented against the server's SQLite DB. This is what lets the
 // unmodified desktop React UI run in the browser: src/lib/backend.ts routes
@@ -335,6 +336,9 @@ export async function handleInvoke(cmd, a = {}) {
     }
     // ===== Kanäle & Feeds (Punkt 5) =====
     case "push_status": return pushStatus(a.endpoint);
+    case "native_push_status": return nativePushStatus(a.tokens);
+    case "native_push_subscribe": return subscribeNativePush(a.token, a.projectId, a.previousTokens);
+    case "native_push_unsubscribe": return unsubscribeNativePush(a.tokens);
     case "push_subscribe": return subscribePush(a.subscription);
     case "push_unsubscribe": return unsubscribePush(a.endpoint);
     case "feeds_list":

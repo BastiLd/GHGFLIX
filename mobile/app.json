@@ -7,11 +7,12 @@
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0b0b0f",
     "newArchEnabled": false,
-    "runtimeVersion": "2",
+    "runtimeVersion": "3",
     "splash": {
       "backgroundColor": "#0b0b0f"
     },
     "plugins": [
+      ["expo-notifications", { "defaultChannel": "kanaele", "color": "#e50914" }],
       "./plugins/withAndroidTv.js",
       [
         "expo-image-picker",
@@ -27,6 +28,7 @@
       "fallbackToCacheTimeout": 0
     },
     "ios": {
+      "bundleIdentifier": "com.bastild.ghgflix",
       "supportsTablet": true,
       "buildNumber": "1.1.0",
       "infoPlist": {
@@ -37,7 +39,7 @@
     },
     "android": {
       "package": "com.bastild.ghgflix",
-      "versionCode": 16
+      "versionCode": 17
     },
     "extra": {
       "eas": {

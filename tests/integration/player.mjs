@@ -18,7 +18,7 @@ assert.ok(Number.isInteger(soakSeconds) && soakSeconds>=0 && soakSeconds<=3600, 
 const dir=mkdtempSync(join(tmpdir(),"ghgflix-integration-"));
 process.env.DATA_DIR=dir;
 // Never import library roots or cloud credentials from the developer machine.
-for (const key of ["SHOWS_DIRS","MOVIES_DIRS","SUPABASE_URL","SUPABASE_SERVICE_KEY","SUPABASE_USER_ID","TMDB_API_KEY","PUSH_CONTACT"]) process.env[key]="";
+for (const key of ["SHOWS_DIRS","MOVIES_DIRS","SUPABASE_URL","SUPABASE_SERVICE_KEY","SUPABASE_USER_ID","TMDB_API_KEY","PUSH_CONTACT","EXPO_PUSH_ENABLED","EXPO_PUSH_PROJECT_ID","EXPO_PUSH_ACCESS_TOKEN"]) process.env[key]="";
 const {openDb}=await import("../../server/src/db.js");
 const db=openDb();
 const port=await new Promise(r=>{const s=createServer();s.listen(0,"127.0.0.1",()=>{const p=s.address().port;s.close(()=>r(p));});});

@@ -10,5 +10,5 @@ export default defineConfig({
     dedupe: ["react", "react-dom"],
     alias: { "react-native": fileURLToPath(new URL("./test/native-dom.jsx", import.meta.url)) },
   },
-  test: { include: ["mobile/test/*.test.jsx"], environment: "jsdom" },
+  test: { include: ["mobile/test/*.test.jsx"], setupFiles: ["./mobile/test/native-platform-mocks.js"], environment: "jsdom" },
 });

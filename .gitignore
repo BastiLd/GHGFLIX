@@ -48,3 +48,5 @@ tests/.generated/
 mobile/android/
 mobile/ios/
 mobile/.expo/
+mobile/google-services.json
+mobile/GoogleService-Info.plist

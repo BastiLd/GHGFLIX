@@ -32,6 +32,7 @@ import { FokusProvider, useFokusSystem } from "./src/fokus.js";
 import { Laden, se } from "./src/bausteine.js";
 import { Seitenleiste, Unterleiste } from "./src/seitenleiste.js";
 import { useKanalmeldungen } from "./src/kanalmeldungen.js";
+import { useNativePushNavigation } from "./src/native-push.js";
 import { KanaeleSeite } from "./src/kanaele.js";
 import { PlayerScreen } from "./src/player.js";
 import { VerbindungsScreen } from "./src/verbindung.js";
@@ -122,6 +123,9 @@ function AppInner() {
   const [profile, setProfile] = useState([]);
   const [appAktuell, setAppAktuell] = useState(null);
   const [kanalRevision, setKanalRevision] = useState(0);
+  useNativePushNavigation(conn?.profile ? serverInfo?.id : null,
+    () => { setStapel([]); setSeite("channels"); setKanalRevision(v => v+1); },
+    () => setKanalRevision(v => v+1));
 
   const oben = stapel[stapel.length - 1] || null;
   const push = useCallback((s) => setStapel((alt) => [...alt, s]), []);
@@ -357,7 +361,7 @@ function AppInner() {
   } else if (seite === "search") {
     inhalt = <SuchSeite lib={lib} img={img} aufTitel={aufTitel} />;
   } else if (seite === "channels") {
-    inhalt = <KanaeleSeite key={`${basis}:${conn.profile}`} api={api} onChange={() => setKanalRevision((v) => v + 1)} />;
+    inhalt = <KanaeleSeite key={`${basis}:${conn.profile}`} api={api} serverId={serverInfo?.id} onChange={() => setKanalRevision((v) => v + 1)} />;
   } else if (seite === "profiles") {
     inhalt = (
       <ProfilSeite

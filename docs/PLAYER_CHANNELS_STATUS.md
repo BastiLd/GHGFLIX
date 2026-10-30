@@ -1,6 +1,6 @@
 # Player und Kanaele: Implementierungsstand
 
-Stand: 30.10.2026, sechster Umsetzungsstand. Branch: codex/player-channels-stability. Ausgangspunkt: 8151d0b.
+Stand: 31.10.2026, achter Umsetzungsstand. Branch: codex/player-channels-stability. Ausgangspunkt: 8151d0b. Die nummerierten Abschnitte dokumentieren auch frühere Zwischenstände; maßgeblich sind der letzte Abschnitt und die aktuelle offene Abnahme.
 
 ## Implementiert
 
@@ -75,7 +75,7 @@ Stand: 30.10.2026, sechster Umsetzungsstand. Branch: codex/player-channels-stabi
 ## Offen: kein vollstaendiger Abschluss des Gesamtplans
 
 - Automatische, verlässliche Live/Podcast/Trailer-Quelldaten über die bisher vorhandenen RSS/Shorts-Daten hinaus. Manuelle Zuordnung ist umgesetzt.
-- Web-Push-Provider-/Geräteabnahme und Einrichtung am Zielserver. Native Tauri-/Expo-Push-Anbindung ist nicht implementiert; die Oberfläche kennzeichnet fehlende Unterstützung.
+- Web-/Expo-Push-Provider-/Geräteabnahme und Einrichtung am Zielserver. Expo-Anbindung ist inzwischen implementiert (achter Stand); native Tauri-/Android-TV-Push-Anbindung wird nicht angeboten und als nicht verfügbar gekennzeichnet.
 - Native Desktop-mpv-, iOS-/Android- und echte TV-Abnahme; reales PiP-Fenster und HLS/Transcode-Langzeit-/Lasttests. Der kurze echte Server-Browser-Integrationstest ersetzt diese nicht.
 - Eigene Gruppenbild-Uploads sind im Browser und über den nativen Android-Fotodialog im Emulator geprüft. iOS-Dateiauswahl und tatsächliche TV-Lesbarkeit auf Geräten bleiben abzunehmen.
 - Keine Bereitstellung auf NAS oder Installation auf Nutzergeraeten erfolgt.
@@ -95,7 +95,7 @@ Dritter Stand: #8 (Browser-Lade-/Spulrennen), #9 (Kanal-Datenverlust) und #10 (M
 
 ## Fehlen nur noch echte Gerätetests?
 
-**Nein.** Neben Geräteabnahme fehlen noch die native Tauri-/Expo-Push-Anbindung und ihre nötige Provider-/Build-Konfiguration sowie längere Last-/Dauertests. Web-Push ist implementiert, am Zielserver aber noch nicht eingerichtet/zugestellt. Die native Android-App wurde zusätzlich als APK im eigenen fensterlosen Android-Emulator geprüft. Das Tablet-Systemimage mit TV-Layout und D-Pad-Eingaben ersetzt weder ein echtes Android-TV-System noch einen Fernseher. Native Kanalbeiträge öffnen extern; vollständige Funktionsgleichheit mit dem Web-Player ist nicht nachgewiesen. Die normale Erfahrung gilt daher weiterhin nicht als vollständig abgenommen, und der VLC-Modus bleibt zurückgestellt.
+**Noch nicht ausschließlich.** Web- und native Expo-Push-Anbindung sind implementiert, aber Provider-/Build-Konfiguration am Zielsystem und tatsächliche Zustellung fehlen. Native Tauri-/Android-TV-Apps unterstützen diesen Push-Weg nicht. Zusätzlich fehlen physische Geräteabnahme sowie Stunden-/UHD-Lasttests. Die native Android-App wurde als APK im eigenen fensterlosen Android-Emulator geprüft. Das Tablet-Systemimage mit TV-Layout und D-Pad-Eingaben ersetzt weder ein echtes Android-TV-System noch einen Fernseher. Native Kanalbeiträge öffnen extern; vollständige Funktionsgleichheit mit dem Web-Player ist nicht nachgewiesen. Die normale Erfahrung gilt daher weiterhin nicht als vollständig abgenommen, und der VLC-Modus bleibt zurückgestellt.
 
 Arbeitsumgebung: Drei ältere, ausschließlich generierte Integrationstestordner aus fehlgeschlagenen Läufen konnten wegen einer automatischen Policy-Ablehnung des nachträglichen Löschbefehls nicht bereinigt werden. Neue Testläufe räumen ihre eigenen Daten nach dem Prozess-Fix erfolgreich auf. Keine Nutzerbibliothek, kein NAS-Deployment und keine Geräteinstallation verändert.
 
@@ -141,3 +141,14 @@ Fortsetzung: zuerst letzten HTTP-Fehlerfix in gebauter APK mit503 ->Wiederholen 
 - Emulator, separater ADB-Server, HTTP-Proxy und nativer Testserver beendet. Der Browser-Integrationstest hat seinen eigenen Server und seine temporären Testdaten aufgeräumt. Nutzerdesktop nicht gesteuert.
 
 Die offene Geräteabnahme ist kompakt in [DEVICE_ACCEPTANCE.md](DEVICE_ACCEPTANCE.md) beschrieben. **Noch nicht nur echte Tests offen:** Native Expo-/Tauri-Push-Anbindung sowie Provider-/Build-Konfiguration fehlen weiterhin; Web-Push-Zielserver und wirkliche Zustellung sind noch nicht abgenommen. #1/#2/#3/#5 bleiben entsprechend offen. Der VLC-Modus bleibt zurückgestellt. Keine Veröffentlichung oder NAS-Bereitstellung vorgenommen.
+
+## Achter Umsetzungsstand: nativer Geräte-Push (31.10.2026)
+
+- Optionaler Expo-Push-Weg für konfigurierte Android-/iOS-Builds umgesetzt. Kein automatischer Berechtigungsdialog oder Tokenabruf; Einschalten erst nach ausdrücklicher Aktion. Statusanzeige, Server-/Projektabgleich, OS-/Android-Kanalsperre, Ausschalten, Erneuern und Wiederherstellung nach verlorener Registrierungsantwort. Benachrichtigungsklick öffnet nur Kanäle des passenden aktiven Servers; fremde Serverlinks werden nicht geöffnet.
+- Server: separate Geräte-/Belegtabellen, höchstens 100 Geräte, atomarer Tokenwechsel, Kanal-Glocken, neutraler Zählertext und Empfangsbelege. Ungültige Tokens werden entfernt, verspätete Tickets dürfen abgemeldete Geräte nicht wieder einführen. Web- und native Push-Konfiguration unabhängig; Providerfehler gelten nicht als bestätigte Zustellung. Keine persistente Versand-Retry-Queue. Einrichtung und Grenzen in [PUSH.md](PUSH.md).
+- `expo-notifications` 0.32.17 ergänzt; neue Binärdatei erforderlich: runtimeVersion 3 / Android versionCode 17. Firebase-Konfigurationspfad optional über GOOGLE_SERVICES_JSON; keine Zugangsdaten hinzugefügt und kein produktiver Dienst aktiviert. Tauri-Desktop und Android TV bleiben für nativen Geräte-Push ausdrücklich nicht unterstützt.
+- 34 Mobile-Komponenten-/Funktionsprüfungen erfolgreich, darunter neun neue Push-Fälle: stiller Statuscheck, fehlende Einrichtung vor OS-Abfrage, Ablehnung, gesperrter Android-Kanal, Tokenwechsel, verlorene Antwort, fehlgeschlagene Abmeldung, TV-Ausschluss und Bindung an den richtigen Server. React Native/Provider dabei ersetzt. Vollständige bisherige Mobile- und Server-Suiten erfolgreich. Zusätzlicher SQLite-/Invoke-Vertragstest für An-/Abmelden und Status; neue Server-Prüfung für Tickets/Belege, Ablauf und Abmelderennen mit simuliertem Providertransport. CI führt diese Regressionen künftig aus.
+- Android-x86_64-APK erfolgreich gebaut; zusammengeführtes Manifest enthält POST_NOTIFICATIONS und native Benachrichtigungsdienste. iOS-JavaScript-Export erfolgreich. Keine iOS-Binärdatei, kein signiertes ARM-Geräterelease. Logs: `mobile-push-round8-final.log`, `mobile-round8.log`, `server-round8.log`, `android-round8-final.log`, `ios-round8.log` unter test-results.
+- Tatsächliche neue APK im eigenen fensterlosen Android-Emulator: App-Start und Kanäle ohne unaufgeforderten Berechtigungsdialog; unkonfigurierter Testserver zeigt fehlende Einrichtung. Danach nur isolierte Testserver-Projektkennung aktiviert, ohne Providerzugangsdaten. Einschalt-Klick öffnet Android-Berechtigungsdialog. Ablehnen zeigt Geräteeinstellungs-Hinweis; erneut erlauben zeigt erwarteten Fehler wegen fehlender FCM-/APNs-Einrichtung, keinen falschen Einschalt-Erfolg. Screenshots `emulator-round8-push-unconfigured.png`, `emulator-round8-push-denied.png`, `emulator-round8-push-no-provider.png`. Keine echte Expo-/FCM-/APNs-Zustellung behauptet. Emulator-HTTP-Proxy blockiert externe HTTP-/CONNECT-Anfragen.
+
+#30 bleibt für Providerkonfiguration und tatsächliche Zustellung offen. #1/#2/#5 benötigen weiterhin die beschriebene native Geräteabnahme; #3 verfolgt den Restumfang. Die Implementierung ist nicht veröffentlicht und der VLC-Modus bleibt bis zur normalen Abnahme zurückgestellt.

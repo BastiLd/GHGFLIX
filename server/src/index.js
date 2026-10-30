@@ -1,4 +1,5 @@
 import { sendNewPosts } from "./push.js";
+import { checkNativeReceipts } from "./native-push.js";
 // GHGFlix Server — a small Plex/Jellyfin-style media server with zero npm
 // dependencies. HTTP + routing on node:http, storage on node:sqlite,
 // video via ffmpeg. Designed for ZimaOS/Docker (see ../Dockerfile).
@@ -1102,6 +1103,7 @@ const feedsAbholen = () =>
 // externe Server wartet.
 setTimeout(feedsAbholen, 20_000).unref();
 setInterval(feedsAbholen, feedTakt).unref();
+setInterval(() => void checkNativeReceipts().catch(() => console.warn("[native-push] Zustellstatus nicht erreichbar")), 5*60_000).unref();
 
 // S-030: pending_progress nicht unbegrenzt wachsen lassen — Einträge, die nach
 // 180 Tagen immer noch keinem Medium zugeordnet werden konnten (Medien, die es

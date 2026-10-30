@@ -8,7 +8,13 @@ import sharp from "sharp";
 mkdirSync("test-results", { recursive: true });
 const dir = mkdtempSync(resolve("test-results/mobile-fixture-"));
 process.env.DATA_DIR = dir;
-for (const key of ["SHOWS_DIRS", "MOVIES_DIRS", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_USER_ID", "TMDB_API_KEY", "PUSH_CONTACT"]) process.env[key] = "";
+for (const key of ["SHOWS_DIRS", "MOVIES_DIRS", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_USER_ID", "TMDB_API_KEY", "PUSH_CONTACT", "EXPO_PUSH_ENABLED", "EXPO_PUSH_PROJECT_ID", "EXPO_PUSH_ACCESS_TOKEN"]) process.env[key] = "";
+// Only for exercising the native opt-in/error UI. No provider credentials are
+// imported; run the AVD behind emulator-proxy.mjs (external requests blocked).
+if (process.env.GHGFLIX_TEST_NATIVE_PUSH === "1") {
+  process.env.EXPO_PUSH_ENABLED = "1";
+  process.env.EXPO_PUSH_PROJECT_ID = "b14ed30d-3ecc-4465-ac79-7988b90ab0d8";
+}
 Object.assign(process.env, { HOST: "127.0.0.1", PORT: "19844", BROWSE_ROOTS: dir, GHGFLIX_PASSWORD: "", GHGFLIX_WEB_DIR: resolve("dist"), SCAN_INTERVAL_SEC: "99999" });
 const image = await sharp({ create: { width: 1600, height: 900, channels: 3, background: "#35588c" } }).png().toBuffer();
 const imageFile = join(dir, "test-group.png"); writeFileSync(imageFile, image);
