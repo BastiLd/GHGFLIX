@@ -131,7 +131,10 @@ test("TV: lange Spurliste scrollt die ausgewählte Sprache sichtbar ins Bild", a
   await page.setViewportSize({ width: 1280, height: 720 });
   await ready(page, "tv"); await key(page, "ArrowRight"); await key(page, "Enter");
   await page.getByRole("button", { name: "Sprache & Untertitel", exact: true }).click();
+  // Wait for the portal's asynchronous initial focus before sending remote input.
+  await expect(selected(page)).toHaveAttribute("aria-label", /^Audio:/);
   await key(page, "ArrowRight");
+  await expect(selected(page)).toHaveAttribute("aria-label", /^Untertitel: Aus/);
   await key(page, "ArrowDown", 16); await visibleFocus(page);
   await expect(selected(page)).toContainText("Sprache 16");
   await page.screenshot({ path: "evidence/tv-long-dialog.png" });

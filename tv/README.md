@@ -1,11 +1,13 @@
 # GHGFlix TV ab Version 3.4
 
+Release 3.5.0: signierte Pakete und geprüfte Grenzen stehen in [RELEASE_3.5.0.md](../docs/RELEASE_3.5.0.md).
+
 Die TV-App ist jetzt ein eigenes Android-Produkt: `com.bastild.ghgflix.tv`,
-Querformat, Android-TV-Launcher mit Banner und eigenem Update-Runtime `tv-1`.
+Querformat, Android-TV-Launcher mit Banner und eigenem Update-Runtime `tv-3`.
 Die Handy-App behält `com.bastild.ghgflix` und erhält keinen TV-Launcher.
 
 Lokaler Bau: im Ordner `../mobile` den Befehl `npm run build:tv` ausführen.
-Die Test-APK liegt anschließend unter `build/GHGFlix-TV-3.4.0-local.apk`.
+Die Test-APK liegt anschließend unter `build/GHGFlix-TV-3.5.0-local.apk`.
 EAS-Bau: im selben Ordner `npx eas-cli build --platform android --profile tv`.
 Das Profil verwendet den Kanal `tv-preview`.
 

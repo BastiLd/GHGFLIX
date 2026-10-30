@@ -34,7 +34,7 @@ Originale Testlogs und Emulatorbilder liegen im ignorierten `test-results` des I
 
 ## Build-Herkunft
 
-Windows-Binaries: Anwendungsstand `b8b975b`. Finale Android-Binaries: Anwendungsstand `1de3588`, Version 3.5.0 / versionCode 19. Spätere Änderungen am Release-Tag betreffen Prüfdokumentation/CI. SHA-256-Datei und Build-Manifest werden zusammen mit den Paketen veröffentlicht. Frühere APKs mit versionCode 18 dienten der Emulatorprüfung und werden nicht als finales Paket verteilt.
+Windows-Binaries: Anwendungsstand `b8b975b`. Finale Android-Binaries: Anwendungsstand `1de3588`, Version 3.5.0 / versionCode 19. Spätere Änderungen am Release-Tag betreffen Prüfdokumentation/CI und Tests. Der Test für lange TV-Spurlisten wartet ausdrücklich auf den asynchronen Dialogfokus, bevor er Tasten sendet; drei gezielte Wiederholungen bestanden. SHA-256-Datei und Build-Manifest werden zusammen mit den Paketen veröffentlicht. Frühere APKs mit versionCode 18 dienten der Emulatorprüfung und werden nicht als finales Paket verteilt.
 
 ## Was noch echte Geräte oder Einrichtung benötigt
 

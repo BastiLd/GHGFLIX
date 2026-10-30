@@ -1,12 +1,14 @@
 # GHGFlix Mobile
 
+Release 3.5.0: signierte Pakete und geprüfte Grenzen stehen in [RELEASE_3.5.0.md](../docs/RELEASE_3.5.0.md).
+
 Seit 3.4 sind Handy und TV getrennte Android-Produkte. Mobile verwendet
 `com.bastild.ghgflix`, TV verwendet `com.bastild.ghgflix.tv`. Beide lassen sich
 nebeneinander installieren. Aktueller Stand, Emulatoren und Testnachweise:
 [TV_HANDY_TRENNUNG.md](../docs/TV_HANDY_TRENNUNG.md).
 
 Lokale Handy-Test-APK: in diesem Ordner `npm run build:mobile` starten.
-Ausgabe: `build/GHGFlix-Mobile-3.4.0-local.apk`. TV: `npm run build:tv`, Ausgabe
+Ausgabe: `build/GHGFlix-Mobile-3.5.0-local.apk`. TV: `npm run build:tv`, Ausgabe
 unter `../tv/build`. Die lokalen APKs sind mit dem lokalen Testschlüssel
 signiert; für ein Update einer bestehenden Installation ist deren bisheriger
 Signierschlüssel erforderlich.
