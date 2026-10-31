@@ -56,8 +56,8 @@ Tailscale bleibt privat: Die erzeugte Adresse funktioniert für berechtigte Ger�
 ### Server / Website auf ZimaOS
 
 1. Bestehende GHGFlix-Datenablage sichern. Container-Konfiguration, Bibliotheks-/Daten-Volumes und vorhandene Passwörter/Schlüssel beibehalten; keinen leeren neuen Datenordner zuweisen.
-2. In den Einstellungen der vorhandenen GHGFlix-App das Image auf `ghcr.io/bastild/ghgflix-server:3.6.2` stellen und das neue Image laden/den Container damit neu erstellen lassen. Das genaue ZimaOS-Menü hängt von der installierten Version ab. Ein bloßer Neustart des alten Containers lädt kein neues Image.
-3. `http://192.168.68.10:8484/api/ping` aufrufen: Version **3.6.2** und `accounts: true` müssen sichtbar sein. Erst dann ist der Server tatsächlich aktualisiert.
+2. In den Einstellungen der vorhandenen GHGFlix-App das Image auf `ghcr.io/bastild/ghgflix-server:3.6.3` stellen und das neue Image laden/den Container damit neu erstellen lassen. Das genaue ZimaOS-Menü hängt von der installierten Version ab. Ein bloßer Neustart des alten Containers lädt kein neues Image.
+3. `http://192.168.68.10:8484/api/ping` aufrufen: Version **3.6.3** und `accounts: true` müssen sichtbar sein. Erst dann ist der Server tatsächlich aktualisiert. Diese Version behebt auch den Rücksprung während der Besitzer-Einrichtung.
 4. Website neu laden, Server-Passwort eingeben und den Besitzer-Account mit dem Einrichtungsschlüssel anlegen. Danach WebHafen-Weiterleitung testen.
 
 Die Veröffentlichung eines Images auf GitHub installiert es nicht automatisch auf dem NAS. In dieser Änderung wird der laufende Nutzer-Server nicht verändert.

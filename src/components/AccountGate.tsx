@@ -11,6 +11,7 @@ import Profiles from '../pages/Profiles';
 import {GoogleLogin} from './GoogleLogin';
 import {ServerConnection} from './ServerConnection';
 import {PasswordInput} from './PasswordInput';
+import {AccountActionButton} from './AccountActionButton';
 
 export function AccountGate({children}:{children:React.ReactNode}) {
   const session=useAccount(s=>s.session),enabled=useAccount(s=>s.enabled),qc=useQueryClient(),navigate=useNavigate(),location=useLocation();
@@ -93,8 +94,8 @@ export function AccountGate({children}:{children:React.ReactNode}) {
       {stage!=='server'&&mode==='setup'&&<label className="block text-sm">Besitzer-Schlüssel<PasswordInput className={field} aria-label="Besitzer-Schlüssel"  autoComplete="off" value={setupKey} onChange={e=>setSetupKey(e.target.value)} required/><span className="block text-xs text-ghg-muted mt-2">Auf deinem Server in DATA_DIR/account-setup-key. Damit übernimmst du einmalig die bisherigen Profile.</span></label>}
       {stage!=='server'&&mode==='register'&&<label className="block text-sm">Server-Passwort für neuen Account<PasswordInput className={field} aria-label="Server-Passwort für neuen Account"  autoComplete="off" value={serverPassword} onChange={e=>setServerPassword(e.target.value)} required/></label>}
       {error&&<p role="alert" className="text-ghg-red text-sm">{error}</p>}
-      <button disabled={busy} className="w-full rounded-xl py-3 bg-ghg-red font-semibold disabled:opacity-50">{busy?'Bitte warten …':stage==='server'?'Server öffnen':mode==='login'?'Anmelden':mode==='setup'?'Besitzer-Account anlegen':'Account erstellen'}</button>
-      {stage!=='server'&&<div className="flex flex-wrap gap-4 text-sm">{mode!=='login'&&<button type="button" onClick={()=>{setMode('login');setError('');}}>Zur Anmeldung</button>}{mode==='login'&&status.registration&&<button type="button" onClick={()=>{setMode('register');setError('');}}>Neuen Account erstellen</button>}{status.setupNeeded&&mode!=='setup'&&<button type="button" onClick={()=>{setMode('setup');setError('');}}>Ich bin der Serverbesitzer</button>}</div>}
+      <AccountActionButton type="submit" primary disabled={busy}>{busy?'Bitte warten …':stage==='server'?'Server öffnen':mode==='login'?'Anmelden':mode==='setup'?'Besitzer-Account anlegen':'Account erstellen'}</AccountActionButton>
+      {stage!=='server'&&<div className="grid gap-3 border-t border-ghg-line pt-4">{mode!=='login'&&<AccountActionButton key="login" disabled={busy} onClick={()=>{setMode('login');setError('');}}>Zur Anmeldung</AccountActionButton>}{mode==='login'&&status.registration&&<AccountActionButton key="register" disabled={busy} onClick={()=>{setMode('register');setError('');}}>Neuen Account erstellen</AccountActionButton>}{status.setupNeeded&&mode!=='setup'&&<AccountActionButton key="setup" disabled={busy} onClick={()=>{setMode('setup');setError('');}}>Ich bin der Serverbesitzer</AccountActionButton>}</div>}
       {stage!=='server'&&mode==='login'&&(status.google?<GoogleLogin onSession={data=>{acceptSession(data);qc.clear();usePlayback.getState().clearQueue();setPassword('');setRepeat('');setServerPassword('');setSetupKey('');setStage('ready');navigate('/profiles',{replace:true});void useUiPrefs.getState().load();}}/>:<p className="text-xs text-ghg-muted">Google-Anmeldung ist am Server noch nicht eingerichtet.</p>)}
     </form>}
     {!IS_WEB&&stage!=='loading'&&<button className="text-sm text-ghg-muted" onClick={()=>{setChangeServer(true);setError('');}}>Serveradresse oder Server-Passwort ändern</button>}

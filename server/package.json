@@ -1,6 +1,6 @@
 {
   "name": "ghgflix-server",
-  "version": "3.6.2",
+  "version": "3.6.3",
   "description": "GHGFlix media server — Plex/Jellyfin-style streaming for your own library (ZimaOS/Docker)",
   "type": "module",
   "main": "src/index.js",

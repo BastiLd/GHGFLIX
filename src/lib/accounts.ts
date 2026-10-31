@@ -1,5 +1,5 @@
 import {create} from 'zustand';
-import {IS_WEB,accountToken,setAccountToken,serverBase,serverToken,setWebToken,configureAccountServer} from './platform';
+import {IS_WEB,accountToken,setAccountToken,serverBase,serverToken,setWebToken,configureAccountServer,notifyAccountExpired} from './platform';
 import {loadServerConfig,resolveServer,saveServerConfig,stopServerSync} from './serverSync';
 import {stopSupabaseSync} from './supabase';
 import {useStore} from './store';
@@ -30,11 +30,12 @@ export async function connectAccounts() {
   return ping;
 }
 export async function accountRequest<T=any>(path:string,body?:unknown,method=body?'POST':'GET',gateway=false):Promise<T> {
-  const res=await fetch(serverBase()+path,{method,headers:{'Content-Type':'application/json',Authorization:`Bearer ${gateway?serverToken():accountToken()||serverToken()}`},
+  const base=serverBase(),token=gateway?serverToken():accountToken()||serverToken();
+  const res=await fetch(base+path,{method,headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},
     body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
   const data=await res.json();
   if(!res.ok){
-    if(res.status===401 && !['invalid_credentials'].includes(data.code) && !path.endsWith('/login')) window.dispatchEvent(new CustomEvent('ghgflix:account-required'));
+    if(res.status===401 && !gateway && data.code!=='invalid_credentials' && !path.endsWith('/login')) notifyAccountExpired(base,token);
     throw Object.assign(Error(data.error||'Anfrage fehlgeschlagen.'),{status:res.status,code:data.code});
   }
   return data;

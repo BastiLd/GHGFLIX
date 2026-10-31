@@ -38,6 +38,12 @@ jobs:
         run: npx tsc --noEmit
       - name: Web-Build (identisch zum Docker-Build)
         run: npm run build:web
+      - name: Besitzer-Einrichtung im Browser (Desktop, Handy, TV)
+        env:
+          GHGFLIX_WEB_DIR: ${{ github.workspace }}/server/webapp
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test -c playwright.onboarding.config.ts --reporter=line
       - name: WebHafen-Export prüfen
         run: node scripts/export-website.mjs server/webapp tests/.generated/website
       - name: Server-Module Syntax

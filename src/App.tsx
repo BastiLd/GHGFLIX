@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { getCurrentWindow, listen } from "./lib/backend";
 import { IS_WEB } from "./lib/platform";
 import { AccountGate } from "./components/AccountGate";
+import { useAccount } from "./lib/accounts";
 import { ServerConnection } from "./components/ServerConnection";
 import { UpdateNotice } from "./components/AppUpdates";
 import { useEffect } from "react";
@@ -36,6 +37,8 @@ export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const prefs = useUiPrefs();
+  const accountsEnabled = useAccount(s => s.enabled);
+  const accountSession = useAccount(s => s.session);
   useEffect(() => {
     const refresh=()=>{void qc.invalidateQueries({queryKey:['progress']});void qc.invalidateQueries({queryKey:['favorites']});};
     window.addEventListener('ghgflix:sync',refresh);
@@ -89,13 +92,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Subscribe after profile selection, and rebind when desktop switches from
+    // its local backend to a server. Account setup needs no library polling.
+    if (accountsEnabled && !accountSession?.profile) return;
     const un = listen("library://updated", () => {
       qc.invalidateQueries();
     });
     return () => {
       un.then((f) => f());
     };
-  }, [qc]);
+  }, [qc, accountsEnabled, accountSession?.account.id, accountSession?.profile?.id]);
 
   // preference-driven root classes: card size, animations, hover zoom, UI scale
   useEffect(() => {

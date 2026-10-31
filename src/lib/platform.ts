@@ -25,6 +25,14 @@ export const serverToken = () => localStorage.getItem("ghgflix.web.token") || ""
 export const webToken = () => accountToken() || serverToken();
 export const setWebToken = (t: string) => localStorage.setItem("ghgflix.web.token", t);
 
+/** Only the still-current personal session may expire. A gateway request or a
+ * late response from a previous server/account must not reset an open form. */
+export function notifyAccountExpired(base: string, token: string) {
+  if (token && base === serverBase() && token === accountToken()) {
+    window.dispatchEvent(new CustomEvent('ghgflix:account-required'));
+  }
+}
+
 /** Query-string fragment for URLs that can't send headers (video src, images). */
 export const tokenParam = () => (webToken() ? `token=${encodeURIComponent(webToken())}` : "");
 

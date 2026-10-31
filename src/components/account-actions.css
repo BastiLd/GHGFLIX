@@ -1,0 +1,65 @@
+.account-action {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  min-height: 48px;
+  padding: 0.75rem 0.9rem;
+  overflow: hidden;
+  border: 1px solid #565664;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #2b2b36, #202028);
+  color: var(--color-ghg-text);
+  box-shadow: 0 3px 0 #09090d, inset 0 1px 0 #ffffff0d;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform 160ms ease-out, box-shadow 160ms ease-out, border-color 160ms ease-out;
+}
+.account-action--primary {
+  border-color: #ff5260;
+  background: linear-gradient(180deg, var(--color-ghg-red-bright), var(--color-ghg-red));
+  box-shadow: 0 3px 0 var(--color-ghg-red-dark), inset 0 1px 0 #ffffff26;
+  text-align: center;
+}
+.account-action__label { position: relative; z-index: 1; flex: 1; min-width: 0; }
+.account-action__arrow {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  opacity: 0.65;
+  transition: transform 180ms ease-out, opacity 180ms ease-out;
+}
+.account-action:focus-visible { outline: 2px solid var(--color-ghg-red-bright); outline-offset: 4px; }
+.account-action:focus-visible .account-action__arrow { transform: translateX(3px); opacity: 1; }
+@media (hover: hover) {
+  .account-action:not(:disabled):hover { transform: translateY(-1px); border-color: #9999aa; }
+  .account-action--primary:not(:disabled):hover { border-color: #ff8891; }
+  .account-action:not(:disabled):hover .account-action__arrow { transform: translateX(3px); opacity: 1; }
+}
+.account-action:not(:disabled):active { transform: translateY(2px); box-shadow: 0 1px 0 #09090d; }
+.account-action--primary:not(:disabled):active { box-shadow: 0 1px 0 var(--color-ghg-red-dark); }
+.account-action:disabled { opacity: 0.55; cursor: wait; }
+.account-action__ripple {
+  position: absolute;
+  z-index: 0;
+  border-radius: 50%;
+  background: #ffffff26;
+  pointer-events: none;
+  animation: account-action-ripple 420ms ease-out forwards;
+}
+@keyframes account-action-ripple {
+  from { transform: translate(-50%, -50%) scale(0); opacity: 1; }
+  to { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .account-action, .account-action__arrow { transition: none; transform: none !important; }
+  .account-action__ripple { display: none; }
+}
+.no-anim .account-action, .no-anim .account-action__arrow { transition: none; transform: none !important; }
+.no-anim .account-action__ripple { display: none; }

@@ -11,24 +11,25 @@ import { getCurrentWindow as tauriGetCurrentWindow, LogicalSize as TauriLogicalS
 import { open as tauriOpenDialog, save as tauriSaveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl as tauriOpenUrl } from "@tauri-apps/plugin-opener";
 import { join as tauriJoin, pictureDir as tauriPictureDir } from "@tauri-apps/api/path";
-import { IS_TAURI, webToken, usesServer, serverBase } from "./platform";
+import { IS_TAURI, webToken, usesServer, serverBase, accountToken, notifyAccountExpired } from "./platform";
 
 // ─── invoke ──────────────────────────────────────────────────────────────────
 
 /** Desktop: Tauri command. Web: POST /api/invoke/<cmd> on the same origin. */
-export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+export async function invoke<T>(cmd: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
   if (IS_TAURI && (!usesServer() || (["get_setting","set_setting"].includes(cmd) && args?.key === "ghg_server_config"))) return tauriInvoke<T>(cmd, args);
-  const res = await fetch(`${serverBase()}/api/invoke/${cmd}`, {
+  const base = serverBase(), token = webToken();
+  const res = await fetch(`${base}/api/invoke/${cmd}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(webToken() ? { Authorization: `Bearer ${webToken()}` } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(args ?? {}),
+    signal,
   });
   if (res.status === 401) {
-    // token expired / password newly set → back to the web login
-    window.dispatchEvent(new CustomEvent("ghgflix:account-required"));
+    notifyAccountExpired(base, token);
     throw new Error("Nicht angemeldet");
   }
   const body = await res.json().catch(() => ({}));
@@ -48,15 +49,22 @@ const webBus = new EventTarget();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let lastRunning = false;
 let pollListeners = 0;
+let polling = false;
 
 function ensurePolling() {
   if (pollTimer) return;
   pollTimer = setInterval(async () => {
-    if (pollListeners <= 0) return;
+    // A shared server password is not a personal login. In particular, keep
+    // owner setup and registration free from unauthenticated background calls.
+    if (pollListeners <= 0 || !accountToken()) { lastRunning = false; return; }
+    if (polling) return;
+    polling = true;
+    const base = serverBase(), token = accountToken();
     try {
       const s = await invoke<{ running: boolean; stage: string; message: string; current: number; total: number }>(
-        "scan_status",
+        "scan_status", undefined, AbortSignal.timeout(10000),
       );
+      if (pollListeners <= 0 || base !== serverBase() || token !== accountToken()) return;
       if (s.running) {
         webBus.dispatchEvent(
           new CustomEvent("scan://progress", {
@@ -70,6 +78,8 @@ function ensurePolling() {
       lastRunning = s.running;
     } catch {
       /* server briefly unreachable — keep polling */
+    } finally {
+      polling = false;
     }
   }, 2000);
 }
@@ -81,9 +91,15 @@ export function listen<T>(event: string, handler: (e: { payload: T }) => void): 
   webBus.addEventListener(event, h);
   pollListeners++;
   ensurePolling();
+  let listening = true;
   return Promise.resolve(() => {
+    if (!listening) return;
+    listening = false;
     webBus.removeEventListener(event, h);
     pollListeners--;
+    if (pollListeners === 0 && pollTimer) {
+      clearInterval(pollTimer);pollTimer = null;lastRunning = false;
+    }
   });
 }
 
