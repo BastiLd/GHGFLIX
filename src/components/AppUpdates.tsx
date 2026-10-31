@@ -12,6 +12,10 @@ function usePlaybackActive() {
   const location = useLocation();
   return active || location.pathname.startsWith('/play/');
 }
+function playbackActiveNow() {
+  const state = usePlayback.getState();
+  return state.mpvInited || !!state.mini || state.handoff || !!state.expandTo || window.location.hash.startsWith('#/play/') || !!document.pictureInPictureElement;
+}
 
 /** Mounted once after login; preference loading must finish before network work. */
 export function UpdateNotice() {
@@ -51,7 +55,7 @@ export function AppUpdates() {
     <p className="text-sm text-ghg-muted">{IS_TAURI ? 'Neue Versionen werden von GitHub geladen und vor der Installation geprüft. „Herunterladen & aktualisieren“ schließt die App; Einstellungen und Profile bleiben erhalten.' : 'WebHafen kann geprüfte Website-Versionen automatisch aus GitHub übernehmen. Mit „Website neu laden“ öffnest du den bereitgestellten Stand. Dein GHGFlix-Server wird separat aktualisiert.'}</p>
     <div className="flex gap-2 flex-wrap">
       <Button variant="ghost" disabled={busy} onClick={() => void state.check()}>Auf Updates prüfen</Button>
-      {state.phase === 'available' && <Button disabled={active} onClick={() => void state.install(active)}>{IS_TAURI ? 'Herunterladen & aktualisieren' : 'Website neu laden'}</Button>}
+      {state.phase === 'available' && <Button disabled={active} onClick={() => void state.install(playbackActiveNow)}>{IS_TAURI ? 'Herunterladen & aktualisieren' : 'Website neu laden'}</Button>}
       <Button variant="ghost" onClick={() => void openUrl('https://github.com/BastiLd/GHGFLIX/releases/latest').catch(() => {})}>Aktuelle Downloads öffnen</Button>
     </div>
     {active && state.phase === 'available' && <p className="text-sm text-ghg-muted">Zum Aktualisieren zuerst Player, Mini-Player und Bild-in-Bild schließen.</p>}

@@ -33,9 +33,10 @@ type UpdateState = {
   phase: 'idle' | 'checking' | 'current' | 'available' | 'installing' | 'error';
   version: string; serverVersion: string; error: string; progress: number | null;
   checkedAt: number; dismissed: boolean;
-  check: () => Promise<void>; install: (playbackActive: boolean) => Promise<void>; dismiss: () => void;
+  check: () => Promise<void>; install: (playbackActive: () => boolean) => Promise<void>; dismiss: () => void;
 };
 let pending: Update | null = null;
+let downloaded = false;
 export const useUpdates = create<UpdateState>((set, get) => ({
   phase: 'idle', version: '', serverVersion: '', error: '', progress: null, checkedAt: 0, dismissed: false,
   dismiss: () => set({ dismissed: true }),
@@ -45,6 +46,7 @@ export const useUpdates = create<UpdateState>((set, get) => ({
     set({ phase: 'checking', error: '' });
     try {
       if (pending) { await pending.close(); pending = null; }
+      downloaded = false;
       if (IS_TAURI) {
         const { check } = await import('@tauri-apps/plugin-updater');
         pending = await check({ timeout: 20000 });
@@ -61,17 +63,25 @@ export const useUpdates = create<UpdateState>((set, get) => ({
   },
   install: async (playbackActive) => {
     if (get().phase !== 'available') return;
-    if (playbackActive) { set({ error: 'Bitte zuerst die Wiedergabe einschließlich Mini-Player und Bild-in-Bild schließen.' }); return; }
+    if (playbackActive()) { set({ error: 'Bitte zuerst die Wiedergabe einschließlich Mini-Player und Bild-in-Bild schließen.' }); return; }
     set({ phase: 'installing', error: '', progress: null });
     try {
       if (!IS_TAURI) { window.location.reload(); return; }
       if (!pending) throw Error('Bitte erneut auf Updates prüfen.');
       let received = 0, total = 0;
-      await pending.downloadAndInstall(event => {
+      if (!downloaded) await pending.download(event => {
         if (event.event === 'Started') total = event.data.contentLength || 0;
         if (event.event === 'Progress') received += event.data.chunkLength;
         set({ progress: total ? Math.min(100, Math.round(received / total * 100)) : null });
       });
+      downloaded = true;
+      // Playback may have started while a large package was downloading.
+      // Keep the verified bytes and defer installation until playback ends.
+      if (playbackActive()) {
+        set({ phase: 'available', progress: 100, error: 'Download abgeschlossen. Zum Installieren zuerst die Wiedergabe schließen und erneut auf Aktualisieren klicken.' });
+        return;
+      }
+      await pending.install();
       // Windows exits during install; other desktop targets need an explicit restart.
       const { relaunch } = await import('@tauri-apps/plugin-process');
       await relaunch();

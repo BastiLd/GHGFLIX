@@ -42,28 +42,44 @@ it('deduplicates native checks and respects the no-update response', async () =>
 });
 it('blocks installation while playing and never restarts after signature failure', async () => {
   native.enabled = true;
-  const update = { version: '3.7.0', close: vi.fn(), downloadAndInstall: vi.fn().mockRejectedValue(Error('Invalid signature')) };
+  const update = { version: '3.7.0', close: vi.fn(), download: vi.fn().mockRejectedValue(Error('Invalid signature')), install: vi.fn() };
   native.check.mockResolvedValue(update);
   await useUpdates.getState().check();
-  await useUpdates.getState().install(true);
-  expect(update.downloadAndInstall).not.toHaveBeenCalled();
+  await useUpdates.getState().install(() => true);
+  expect(update.download).not.toHaveBeenCalled();
   expect(useUpdates.getState().phase).toBe('available');
-  await useUpdates.getState().install(false);
+  await useUpdates.getState().install(() => false);
   expect(useUpdates.getState().phase).toBe('error');
   expect(useUpdates.getState().error).toContain('Invalid signature');
   expect(native.relaunch).not.toHaveBeenCalled();
+  expect(update.install).not.toHaveBeenCalled();
 });
 it('downloads once, reports progress and relaunches only after successful install', async () => {
   native.enabled = true;
-  const update = { version: '3.7.0', close: vi.fn(), downloadAndInstall: vi.fn(async callback => {
+  const update = { version: '3.7.0', close: vi.fn(), install: vi.fn(), download: vi.fn(async callback => {
     callback({ event: 'Started', data: { contentLength: 100 } });
     callback({ event: 'Progress', data: { chunkLength: 55 } });
     expect(useUpdates.getState().progress).toBe(55);
-    await useUpdates.getState().install(false);
+    await useUpdates.getState().install(() => false);
   }) };
   native.check.mockResolvedValue(update);
   await useUpdates.getState().check();
-  await useUpdates.getState().install(false);
-  expect(update.downloadAndInstall).toHaveBeenCalledTimes(1);
+  await useUpdates.getState().install(() => false);
+  expect(update.download).toHaveBeenCalledTimes(1);
+  expect(update.install).toHaveBeenCalledTimes(1);
   expect(native.relaunch).toHaveBeenCalledTimes(1);
+});
+it('defers installation if playback starts during download and reuses verified bytes', async () => {
+  native.enabled = true;
+  let playing = false;
+  const update = { version: '3.7.0', close: vi.fn(), install: vi.fn(), download: vi.fn(async () => { playing = true; }) };
+  native.check.mockResolvedValue(update);
+  await useUpdates.getState().check();
+  await useUpdates.getState().install(() => playing);
+  expect(useUpdates.getState().phase).toBe('available');
+  expect(update.install).not.toHaveBeenCalled();
+  playing = false;
+  await useUpdates.getState().install(() => playing);
+  expect(update.download).toHaveBeenCalledTimes(1);
+  expect(update.install).toHaveBeenCalledTimes(1);
 });
