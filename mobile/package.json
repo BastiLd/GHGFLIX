@@ -6,7 +6,7 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "test": "node test/laden.test.mjs && node test/fokus.test.mjs && node test/oberflaeche.test.mjs && node test/netzsuche.test.mjs && node test/untertitel.test.mjs && node test/qr.test.mjs && node test/update.test.mjs && node --test test/client-regression.test.mjs",
+    "test": "node test/native-text.test.mjs && node test/laden.test.mjs && node test/fokus.test.mjs && node test/oberflaeche.test.mjs && node test/netzsuche.test.mjs && node test/untertitel.test.mjs && node test/qr.test.mjs && node test/update.test.mjs && node --test test/client-regression.test.mjs",
     "start:tv": "node scripts/client.cjs tv start",
     "build:tv": "node scripts/client.cjs tv build",
     "build:mobile": "node scripts/client.cjs mobile build"

@@ -37,7 +37,7 @@
     "ios": {
       "bundleIdentifier": "com.bastild.ghgflix",
       "supportsTablet": true,
-      "buildNumber": "20",
+      "buildNumber": "21",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
@@ -46,7 +46,7 @@
     },
     "android": {
       "package": "com.bastild.ghgflix",
-      "versionCode": 20
+      "versionCode": 21
     },
     "extra": {
       "eas": {

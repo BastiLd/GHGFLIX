@@ -25,3 +25,17 @@ test('personal account, child profile, PIN, images, isolation and logout',async(
  await page.getByRole('button',{name:'Account abmelden',exact:true}).click();await expect(page.getByRole('button',{name:'Anmelden',exact:true})).toBeVisible();await expect(page.getByText('Familienfilm',{exact:true})).toHaveCount(0);
  expect(errors).toEqual([]);
 });
+
+test('an existing account can claim and retain legacy profiles with the owner key',async({page,request},info)=>{
+ test.skip(info.project.name!=='desktop','Owner migration runs once per disposable server.');
+ const gateway=await (await request.post('/api/login',{data:{password:'server-ui-password'}})).json();
+ const account=await (await request.post('/api/accounts/register',{headers:{Authorization:'Bearer '+gateway.token},data:{email:'claim-owner@example.test',password:'owner-browser-password',serverPassword:'server-ui-password'}})).json();
+ const ping=await (await request.get('/api/ping')).json();
+ await page.addInitScript(({id,token,server})=>{localStorage.setItem('ghgflix.web.token',server);localStorage.setItem('ghgflix.account.'+id,token);},{id:ping.id,token:account.token,server:gateway.token});
+ await page.goto('/#/profiles');await page.getByRole('button',{name:'Vorhandene Profile übernehmen',exact:true}).click();
+ await page.getByLabel('Bisheriges Passwort').fill('owner-browser-password');await page.getByLabel('Besitzer-Schlüssel').fill('fixture-owner-setup');
+ await page.getByRole('button',{name:'Profile übernehmen',exact:true}).click();
+ await expect(page.getByRole('dialog')).toHaveCount(0);
+ await expect(page.getByRole('button',{name:/^Profil .+ auswählen$/})).toHaveCount(2);
+ await expect(page.getByRole('button',{name:'Vorhandene Profile übernehmen',exact:true})).toHaveCount(0);
+});

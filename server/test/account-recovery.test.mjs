@@ -4,16 +4,24 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
+import {DatabaseSync} from 'node:sqlite';
 const dir=mkdtempSync(join(tmpdir(),'ghgflix-account-recovery-'));
 Object.assign(process.env,{DATA_DIR:dir,GHGFLIX_PASSWORD:'gateway-secret'});
 delete process.env.GHGFLIX_ACCOUNT_SETUP_KEY;
+// Persist the previous release's schema before opening the new database code.
+const legacy=new DatabaseSync(join(dir,'ghgflix.db'));
+legacy.exec(`CREATE TABLE profiles(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,avatar TEXT,supabase_id TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL DEFAULT 0);
+ CREATE TABLE progress(profile_id INTEGER NOT NULL,media_type TEXT NOT NULL,ref_id INTEGER NOT NULL,position REAL NOT NULL DEFAULT 0,duration REAL NOT NULL DEFAULT 0,watched INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(profile_id,media_type,ref_id));
+ INSERT INTO profiles VALUES(1,'Standard','legacy-avatar','legacy-cloud-id',1,12);
+ INSERT INTO progress VALUES(1,'movie',42,24,90,0,1);`);
+legacy.close();
 const {openDb,setSetting,getSetting}=await import('../src/db.js');
 const {accountContext}=await import('../src/account-context.js');
 const a=await import('../src/accounts.js');
 const db=openDb();
 try {
-  db.prepare("UPDATE profiles SET name='Standard' WHERE id=1").run();
-  db.prepare("INSERT INTO progress VALUES(1,'movie',42,24,90,0,1)").run();
+  assert.equal(db.prepare('SELECT avatar FROM profiles WHERE id=1').get().avatar,'legacy-avatar');
+  assert.equal(db.prepare('SELECT supabase_id FROM profiles WHERE id=1').get().supabase_id,'legacy-cloud-id');
   setSetting('feeds',JSON.stringify([{id:'legacy',name:'Owner channel'}]));
   a.initializeAccounts();
   const friend=await a.registerAccount({email:'friend@example.test',password:'friend-password-123',serverPassword:'gateway-secret'},'gateway');
