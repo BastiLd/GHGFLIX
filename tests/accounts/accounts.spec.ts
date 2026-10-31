@@ -39,3 +39,23 @@ test('an existing account can claim and retain legacy profiles with the owner ke
  await expect(page.getByRole('button',{name:/^Profil .+ auswählen$/})).toHaveCount(2);
  await expect(page.getByRole('button',{name:'Vorhandene Profile übernehmen',exact:true})).toHaveCount(0);
 });
+
+test('account switch clears cached appearance preferences and keeps server controls hidden',async({page,request},info)=>{
+ test.skip(info.project.name!=='desktop','Shared store regression.');
+ const gateway=await (await request.post('/api/login',{data:{password:'server-ui-password'}})).json();
+ const ping=await (await request.get('/api/ping')).json();
+ const users=[];
+ for(const suffix of ['a','b']){
+   const u=await (await request.post('/api/accounts/register',{headers:{Authorization:'Bearer '+gateway.token},data:{email:`prefs-${suffix}@example.test`,password:'preferences-test-password',serverPassword:'server-ui-password'}})).json();
+   const profiles=await (await request.get('/api/profiles',{headers:{Authorization:'Bearer '+u.token}})).json();
+   await request.post('/api/accounts/select-profile',{headers:{Authorization:'Bearer '+u.token},data:{id:profiles[0].id}});users.push(u);
+ }
+ await request.post('/api/invoke/set_setting',{headers:{Authorization:'Bearer '+users[0].token},data:{key:'pref_cardSize',value:'sm'}});
+ await page.addInitScript(({id,token,server})=>{localStorage.setItem('ghgflix.web.token',server);localStorage.setItem('ghgflix.account.'+id,token);},{id:ping.id,token:users[0].token,server:gateway.token});
+ await page.goto('/#/settings');await expect(page.getByLabel('Kartengröße')).toHaveValue('sm');
+ await expect(page.getByRole('button',{name:'Bibliothek',exact:true})).toHaveCount(0);
+ await page.goto('/#/profiles');await page.getByRole('button',{name:'Account abmelden',exact:true}).click();
+ await page.getByLabel('E-Mail',{exact:true}).fill('prefs-b@example.test');await page.getByLabel('Account-Passwort',{exact:true}).fill('preferences-test-password');await page.getByRole('button',{name:'Anmelden',exact:true}).click();
+ await page.getByRole('button',{name:'Profil Standard auswählen',exact:true}).click();await page.goto('/#/settings');
+ await expect(page.getByLabel('Kartengröße')).toHaveValue('md');
+});

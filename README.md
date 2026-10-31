@@ -21,6 +21,12 @@ alles butterweich über den eingebauten mpv-Player ab.
 - **Cloud-Sync, der wirklich läuft**: Fortschritt und „Meine Liste“ gleichen sich automatisch ab (alle 60 s + beim Fensterwechsel) — siehe [`docs/SUPABASE.md`](docs/SUPABASE.md)
 - **GHGFlix Server (ZimaOS/Docker)**: dieselbe Oberfläche 1:1 im Browser & am Handy — der Server streamt (Direct Play oder Live-Transcode), PC-App/Handy/Browser teilen sich automatisch den Stand. Siehe [`server/README-ZimaOS.md`](server/README-ZimaOS.md)
 
+## Accounts ab 3.6.0
+
+Im Serverbetrieb folgt auf das gemeinsame Server-Passwort die persönliche Anmeldung per E-Mail/Passwort oder optional Google. Jeder Account hat eigene Profile, Fortschritte, Merklisten und Kanäle. Profile unterstützen eigene Bilder, sechsstellige PINs und serverseitig gefilterte Kinderfreigaben.
+
+**Server und Clients zusammen aktualisieren.** Den bisherigen Datenordner behalten und vorher sichern. Der Besitzer übernimmt die vorhandenen Profile einmalig mit dem Schlüssel aus `DATA_DIR/account-setup-key`; gewöhnliche neue Accounts erhalten diese Daten nicht. [Einrichtung, Google, Datenübernahme und Passwort-Wiederherstellung](docs/ACCOUNTS.md).
+
 ## 🚀 Installation (Nutzer)
 
 1. **GHGFlix installieren**: den neuesten Installer aus den [Releases](https://github.com/BastiLd/GHGFLIX/releases) laden

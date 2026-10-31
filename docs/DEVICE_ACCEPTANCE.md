@@ -28,6 +28,12 @@ Gerät, OS, App-Version/Commit, Wiedergabeweg (direkt/HLS/Umwandlung), Medienfor
 
 ## Noch erforderliche Abnahme und Einrichtung
 
+### Accounts ab 3.6.0
+
+Zusätzlich pro echtem Gerät prüfen: gemeinsames Server-Passwort → E-Mail/Passwort → eigenes Profil; Gerät/App neu starten; Profilbild erstellen/ändern; Kinderprofil bis 6 auswählen; unbekannte/18er-Inhalte und Kanäle bleiben verborgen; Wechsel zum Erwachsenenprofil mit falscher/richtiger PIN sowie ohne PIN mit Account-Passwort; Abmelden und zweiten Account öffnen. Listen, Profile, Fortschritt und Kanäle des ersten Accounts dürfen dabei nicht erscheinen. Die serverweite Mediathek bleibt gemeinsam.
+
+Die einmalige Besitzer-Übernahme und optionale Google-Einrichtung sind in [ACCOUNTS.md](ACCOUNTS.md) beschrieben. Echte Google-Anmeldung benötigt den eigenen OAuth-Client und die passende HTTPS-Weiterleitung; signierte Test-Token und nachgebildete Providerantworten ersetzen diese Abnahme nicht. Die konkreten 3.6.0-Prüfergebnisse stehen in [RELEASE_3.6.0.md](RELEASE_3.6.0.md).
+
 - Web- und native Expo-Push-Anbindung sind implementiert; Provider-/Build-/Zielserver-Konfiguration und wirkliche Zustellung sind offen ([#30](https://github.com/BastiLd/GHGFLIX/issues/30)). Tauri-Desktop und Android TV unterstützen diesen nativen Push-Weg nicht. In-App-Meldungen bleiben Standard. Einrichtung und Grenzen stehen in [PUSH.md](PUSH.md).
 - Die Integrationstests verwenden 90-Sekunden-Testmedien. Wiederholte Wechsel und Spulrunden belegen keine mehrstündige Wiedergabe großer UHD-Dateien oder die Kapazität des NAS. Die Belastungswerte des jeweiligen Laufs stehen in [PLAYER_CHANNELS_STATUS.md](PLAYER_CHANNELS_STATUS.md).
 - Der VLC-artige Modus bleibt zurückgestellt, bis die normale Erfahrung abgenommen ist.

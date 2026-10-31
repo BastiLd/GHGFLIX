@@ -1,5 +1,7 @@
 # GHGFlix Server auf ZimaOS installieren
 
+**Ab 3.6.0:** Auf das Server-Passwort folgt ein persönlicher Account. Vor dem Update `/data` sichern und behalten; Server und Apps gemeinsam aktualisieren. Der Besitzer übernimmt vorhandene Profile einmalig mit `DATA_DIR/account-setup-key`. [Einrichtung, Google-Anmeldung und Passwort-Wiederherstellung](../docs/ACCOUNTS.md).
+
 Dein eigener Plex/Jellyfin-Ersatz — läuft als Docker-Container auf dem
 ZimaBoard/ZimaCube und streamt an Browser, Handy (PWA/Expo) und synchronisiert
 mit der PC-App.

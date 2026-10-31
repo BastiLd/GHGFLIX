@@ -38,6 +38,8 @@ if action == "dump":
 elif action == "tap":
     matches = [n for n in nodes() if sys.argv[2] in (n.get("text"), n.get("content-desc"))]
     assert matches, "Control not present: " + sys.argv[2]
+    # A screen heading may have the same label as its submit button.
+    matches.sort(key=lambda n: n.get("clickable") != "true")
     x1, y1, x2, y2 = map(int, re.findall(r"\d+", matches[0].get("bounds")))
     call("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
 elif action == "text":
