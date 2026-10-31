@@ -11,14 +11,14 @@ import { getCurrentWindow as tauriGetCurrentWindow, LogicalSize as TauriLogicalS
 import { open as tauriOpenDialog, save as tauriSaveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl as tauriOpenUrl } from "@tauri-apps/plugin-opener";
 import { join as tauriJoin, pictureDir as tauriPictureDir } from "@tauri-apps/api/path";
-import { IS_TAURI, webToken } from "./platform";
+import { IS_TAURI, webToken, usesServer, serverBase } from "./platform";
 
 // ─── invoke ──────────────────────────────────────────────────────────────────
 
 /** Desktop: Tauri command. Web: POST /api/invoke/<cmd> on the same origin. */
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (IS_TAURI) return tauriInvoke<T>(cmd, args);
-  const res = await fetch(`/api/invoke/${cmd}`, {
+  if (IS_TAURI && (!usesServer() || (["get_setting","set_setting"].includes(cmd) && args?.key === "ghg_server_config"))) return tauriInvoke<T>(cmd, args);
+  const res = await fetch(`${serverBase()}/api/invoke/${cmd}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -28,11 +28,13 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
   });
   if (res.status === 401) {
     // token expired / password newly set → back to the web login
-    window.dispatchEvent(new CustomEvent("ghgflix:unauthorized"));
+    window.dispatchEvent(new CustomEvent("ghgflix:account-required"));
     throw new Error("Nicht angemeldet");
   }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(String(body?.error ?? `Serverfehler (${res.status})`));
+  if(IS_TAURI && cmd==='media_thumbnail' && typeof body.result==='string' && body.result.startsWith('/api/'))return (serverBase()+body.result) as T;
+  if(IS_TAURI && cmd==='trickplay_info' && body.result?.url?.startsWith('/api/'))body.result.url=serverBase()+body.result.url;
   return body.result as T;
 }
 
@@ -74,7 +76,7 @@ function ensurePolling() {
 
 /** Same call-shape as Tauri's listen(): returns Promise<UnlistenFn>. */
 export function listen<T>(event: string, handler: (e: { payload: T }) => void): Promise<UnlistenFn> {
-  if (IS_TAURI) return tauriListen<T>(event, handler);
+  if (IS_TAURI && (!usesServer() || !['scan://progress','library://updated'].includes(event))) return tauriListen<T>(event, handler);
   const h = (e: Event) => handler({ payload: (e as CustomEvent).detail as T });
   webBus.addEventListener(event, h);
   pollListeners++;

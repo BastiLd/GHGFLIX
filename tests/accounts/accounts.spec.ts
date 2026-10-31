@@ -1,0 +1,27 @@
+import sharp from "sharp";
+import {test,expect} from '@playwright/test';
+test('personal account, child profile, PIN, images, isolation and logout',async({page},info)=>{
+ const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('/');await page.getByLabel('Server-Passwort',{exact:true}).fill('server-ui-password');await page.getByRole('button',{name:'Server öffnen',exact:true}).click();
+ await page.getByRole('button',{name:'Neuen Account erstellen',exact:true}).click();
+ await page.getByLabel('E-Mail',{exact:true}).fill(`${info.project.name}-${Date.now()}@example.test`);
+ await page.getByLabel('Account-Passwort',{exact:true}).fill('browser-test-password');await page.getByLabel('Passwort wiederholen',{exact:true}).fill('browser-test-password');
+ await page.getByRole('button',{name:'Account erstellen',exact:true}).click();await expect(page.getByRole('heading',{name:'Wer schaut?'})).toBeVisible();
+ await page.getByRole('button',{name:'Profil hinzufügen',exact:true}).click();
+ await page.getByPlaceholder('Dein Name').fill('Kleine Zuschauer');await page.getByLabel('Kinderprofil',{exact:true}).check();await page.getByLabel('Altersgrenze').selectOption('6');
+ await page.getByLabel('Account-Passwort zur Bestätigung').fill('browser-test-password');await page.getByRole('button',{name:'Speichern',exact:true}).click();
+ await page.getByRole('button',{name:'Profil Kleine Zuschauer auswählen',exact:true}).click();await expect(page).toHaveURL(/#\/$/);
+ await page.goto('/#/movies');await expect(page.getByText('Familienfilm',{exact:true}).first()).toBeVisible();await expect(page.getByText('Erwachsenenfilm',{exact:true})).toHaveCount(0);await expect(page.getByText('Unbekannte Freigabe',{exact:true})).toHaveCount(0);
+ await page.goto('/#/profiles');await page.getByRole('button',{name:'Profil Standard auswählen',exact:true}).click();await expect(page.getByRole('dialog')).toBeVisible();
+ await page.getByLabel('Account-Passwort',{exact:true}).fill('wrong-password');await page.getByRole('button',{name:'Profil öffnen',exact:true}).click();await expect(page.getByRole('alert').last()).toContainText('falsch');
+ await page.getByLabel('Account-Passwort',{exact:true}).fill('browser-test-password');await page.getByRole('button',{name:'Profil öffnen',exact:true}).click();await expect(page).toHaveURL(/#\/$/);
+ await page.goto('/#/profiles');await page.getByRole('button',{name:'Standard bearbeiten',exact:true}).click();
+ const avatar=await sharp({create:{width:256,height:256,channels:3,background:'#ff8800'}}).png().toBuffer();
+ await page.getByLabel('Profilbild auswählen').setInputFiles({name:'avatar.png',mimeType:'image/png',buffer:avatar});await page.getByRole('button',{name:'Übernehmen',exact:true}).click();
+ await page.getByLabel('Profil-PIN',{exact:true}).fill('123456');await page.getByLabel('Account-Passwort zur Bestätigung').fill('browser-test-password');await page.getByRole('button',{name:'Speichern',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Profil Standard auswählen',exact:true}).locator('img')).toHaveAttribute('src',/^data:image\//);
+ await page.getByRole('button',{name:'Profil Kleine Zuschauer auswählen',exact:true}).click();await expect(page).toHaveURL(/#\/$/);await page.goto('/#/profiles');await page.getByRole('button',{name:'Profil Standard auswählen',exact:true}).click();await page.getByLabel('Profil-PIN',{exact:true}).fill('123456');await page.getByRole('button',{name:'Profil öffnen',exact:true}).click();await expect(page).toHaveURL(/#\/$/);
+ await page.goto('/#/profiles');await page.getByRole('button',{name:'Kleine Zuschauer bearbeiten',exact:true}).click();await page.getByLabel('Account-Passwort zur Bestätigung').fill('browser-test-password');await page.getByRole('button',{name:'Profil löschen',exact:true}).click();await page.getByRole('button',{name:'Endgültig löschen',exact:true}).click();await expect(page.getByRole('button',{name:'Profil Kleine Zuschauer auswählen',exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Account abmelden',exact:true}).click();await expect(page.getByRole('button',{name:'Anmelden',exact:true})).toBeVisible();await expect(page.getByText('Familienfilm',{exact:true})).toHaveCount(0);
+ expect(errors).toEqual([]);
+});

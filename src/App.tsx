@@ -1,8 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { getCurrentWindow, listen } from "./lib/backend";
-import { IS_WEB, setWebToken, webToken } from "./lib/platform";
-import { useEffect, useState } from "react";
-import { Wordmark } from "./components/Brand";
+import { IS_WEB } from "./lib/platform";
+import { AccountGate } from "./components/AccountGate";
+import { useEffect } from "react";
+
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { Fehlerfang } from "./components/Fehlerfang";
 import { ContextMenu } from "./components/ContextMenu";
@@ -11,7 +12,7 @@ import { MiniPlayer } from "./components/MiniPlayer";
 import { openCtx } from "./lib/contextmenu";
 import { scanLibraries } from "./lib/api";
 import { loadAccent, useUiPrefs } from "./lib/uiPrefs";
-import { loadServerConfig, startServerSync } from "./lib/serverSync";
+import { loadServerConfig } from "./lib/serverSync";
 import { useGlobalHorizontalWheel } from "./lib/useHorizontalWheel";
 import Feeds from "./pages/Feeds";
 import Home from "./pages/Home";
@@ -27,83 +28,6 @@ import Stats from "./pages/Stats";
 import More from "./pages/More";
 import ShowDetail from "./pages/ShowDetail";
 import Shows from "./pages/Shows";
-
-/** Web build only: if the server has a password (GHGFLIX_PASSWORD), gate the
- *  whole UI behind a login — same look as the rest of the app. */
-function WebAuthGate({ children }: { children: React.ReactNode }) {
-  const [needed, setNeeded] = useState<boolean | null>(IS_WEB ? null : false);
-  const [pw, setPw] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [serverError, setServerError] = useState(false);
-  const [retry, setRetry] = useState(0);
-
-  useEffect(() => {
-    if (!IS_WEB) return;
-    setServerError(false);
-    let active = true;
-    const abort = new AbortController();
-    const timeout = window.setTimeout(() => abort.abort(), 10000);
-    fetch("/api/ping", { signal: abort.signal })
-      .then((r) => { if (!r.ok) throw new Error("Server nicht erreichbar"); return r.json(); })
-      .then((r) => { if (active) setNeeded(!!r.auth && !webToken()); })
-      .catch(() => { if (active) setServerError(true); })
-      .finally(() => window.clearTimeout(timeout));
-    const onUnauthorized = () => setNeeded(true);
-    window.addEventListener("ghgflix:unauthorized", onUnauthorized);
-    return () => { active = false; abort.abort(); window.clearTimeout(timeout); window.removeEventListener("ghgflix:unauthorized", onUnauthorized); };
-  }, [retry]);
-
-  if (serverError) return <div className="h-screen grid place-items-center p-6"><div className="max-w-sm"><Wordmark size="lg"/><h1 className="text-2xl font-bold mt-8">Server nicht erreichbar</h1><p className="text-ghg-muted my-5">Prüfe deine Verbindung zum Heimnetz oder aktiviere Tailscale. Deine Bibliothek bleibt auf deinem Server gespeichert.</p><button className="bg-ghg-red rounded-xl px-5 py-3" onClick={() => setRetry(n => n + 1)}>Erneut verbinden</button></div></div>;
-  if (needed === null) return <div className="h-screen grid place-items-center"><p role="status" className="text-ghg-muted">Mit GHGFlix verbinden …</p></div>;
-  if (!needed) return <>{children}</>;
-
-  const submit = async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      const r = await fetch("/api/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw }),
-      });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok || !body.token) throw new Error(String(body.error ?? "Falsches Passwort"));
-      setWebToken(body.token);
-      window.location.reload();
-    } catch (e) {
-      setErr(String(e instanceof Error ? e.message : e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="h-screen flex flex-col items-center justify-center gap-6 bg-ghg-bg">
-      <Wordmark size="lg" />
-      <div className="w-80 bg-ghg-surface border border-ghg-line rounded-2xl p-6 space-y-3">
-        <p className="font-bold">Server-Passwort</p>
-        <input
-          type="password"
-          value={pw}
-          autoFocus
-          onChange={(e) => setPw(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && void submit()}
-          className="w-full bg-ghg-bg2 border border-ghg-line rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-ghg-red"
-          placeholder="Passwort"
-        />
-        {err && <p className="text-xs text-ghg-red">{err}</p>}
-        <button
-          onClick={() => void submit()}
-          disabled={busy}
-          className="w-full py-2 rounded-lg bg-ghg-red hover:bg-ghg-red-bright transition font-semibold text-sm disabled:opacity-50"
-        >
-          Anmelden
-        </button>
-      </div>
-    </div>
-  );
-}
 
 export default function App() {
   const qc = useQueryClient();
@@ -127,7 +51,9 @@ export default function App() {
 
   // load user preferences once, then honor the configured start page
   useEffect(() => {
-    void useUiPrefs
+    const load=async()=>{
+    if(IS_WEB || (await loadServerConfig()).enabled)return;
+    await useUiPrefs
       .getState()
       .load()
       .then(() => {
@@ -138,6 +64,8 @@ export default function App() {
           });
         }
       });
+    };
+    void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -187,7 +115,7 @@ export default function App() {
   useEffect(() => {
     if (IS_WEB) return;
     void loadServerConfig().then((cfg) => {
-      if (cfg.enabled) startServerSync();
+      if (cfg.enabled) { /* AccountGate uses the authenticated server directly. */ }
     });
   }, []);
 
@@ -206,7 +134,7 @@ export default function App() {
   const pageKey = prefs.pageTransition && prefs.animations ? location.pathname : "static";
 
   return (
-    <WebAuthGate>
+    <AccountGate>
     <div className="h-screen" onContextMenu={defaultMenu} data-pagekey={pageKey}>
       <Routes>
         <Route element={<Layout />}>
@@ -232,6 +160,6 @@ export default function App() {
       <MiniPlayer />
       <ContextMenu />
     </div>
-    </WebAuthGate>
+    </AccountGate>
   );
 }

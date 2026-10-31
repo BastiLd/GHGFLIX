@@ -10,6 +10,7 @@ import { autoStartSync } from "./lib/supabase";
 import { initTheme } from "./lib/themes";
 import { initTvMode } from "./lib/tvMode";
 import { useStore } from "./lib/store";
+import {loadServerConfig} from './lib/serverSync';
 
 initTheme();
 document.body.classList.toggle("web-app", IS_WEB);
@@ -29,7 +30,7 @@ const queryClient = new QueryClient({
 // beim normalen Benutzen NIE etwas in Supabase ankam.
 {
   const { profileId, profileName } = useStore.getState();
-  void autoStartSync(profileId || "local", profileName || "Lokal");
+  if(!IS_WEB)void loadServerConfig().then(cfg=>{if(!cfg.enabled)void autoStartSync(profileId || "local", profileName || "Lokal");});
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

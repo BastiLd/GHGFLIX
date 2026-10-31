@@ -175,6 +175,7 @@ export function startServerSync(): void {
   tick();
   loop = window.setInterval(tick, 30_000);
 }
+export function stopServerSync():void { if(loop!=null){window.clearInterval(loop);loop=null;} }
 
 /** Test a server address: reachable? password needed? Returns the ping info. */
 export async function testServer(url: string): Promise<{ ok: boolean; name?: string; auth?: boolean }> {

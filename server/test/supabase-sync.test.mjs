@@ -53,4 +53,15 @@ await syncNow();assert.equal(cloud.watch_progress.find(r=>r.tmdb_id===99999)?.wa
 assert.equal(supabaseStatus().lastError,null);
 // Parallele Aufrufe teilen einen Durchgang und können sich nicht überholen.
 const a=syncNow(),b=syncNow();assert.equal(a,b);await a;
+// Once claimed, only the legacy owner's profiles participate in the old cloud.
+d.prepare("INSERT INTO accounts(id,email,password_hash,created_at) VALUES(1,'owner@example.test','fixture',1),(2,'friend@example.test','fixture',1)").run();
+d.prepare("INSERT INTO settings VALUES('legacy_owner_account','1')").run();
+d.prepare('UPDATE profiles SET account_id=1 WHERE id=1').run();
+d.prepare("INSERT INTO profiles(name,created_at,account_id) VALUES('Friend private',1,2)").run();
+await syncNow();
+assert.equal(d.prepare("SELECT supabase_id FROM profiles WHERE account_id=2").get().supabase_id,null);
+assert(!cloud.profiles.some(p=>p.name==='Friend private'));
+d.prepare("INSERT INTO deleted_cloud_profiles VALUES('cloud-deleted')").run();
+cloud.profiles.push({id:'cloud-deleted',user_id:'owner',name:'Deleted',updated_at:1});
+await syncNow();assert(!d.prepare("SELECT 1 FROM profiles WHERE supabase_id='cloud-deleted'").get());
 console.log('Cloud-Regressionsprüfung bestanden: Profile in beide Richtungen, UUID-Zuordnung, private Bilder, Entfernen/Wiederaufnahme, 505 Zeilen, kein paralleler Sync.',requests);

@@ -380,7 +380,7 @@ export function haeppchenSenden(res, s, name) {
     "Content-Length": st.size,
     // Häppchen ändern sich nie, dürfen aber auch nicht ewig liegen bleiben —
     // die Sitzung wird ja aufgeräumt.
-    "Cache-Control": "private, max-age=300",
+    "Cache-Control": "private, no-store",
   });
   createReadStream(datei).pipe(res);
 }

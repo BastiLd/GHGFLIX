@@ -11,9 +11,18 @@ export const IS_TAURI: boolean =
 
 export const IS_WEB = !IS_TAURI;
 
+let remoteBase: string | null = null;
+let accountKey = '';
+export const serverBase = () => remoteBase ?? '';
+export const usesServer = () => IS_WEB || remoteBase !== null;
+export function configureAccountServer(base:string|null,id:string) { remoteBase=base;accountKey=id ? `ghgflix.account.${id}` : ''; }
+export const accountToken = () => accountKey ? localStorage.getItem(accountKey) || '' : '';
+export function setAccountToken(token:string) { if(accountKey) { if(token)localStorage.setItem(accountKey,token);else localStorage.removeItem(accountKey); } }
+
 /** Auth token for the web server (set by the web login screen when the
  *  server has a password; empty when the server is open). */
-export const webToken = () => localStorage.getItem("ghgflix.web.token") || "";
+export const serverToken = () => localStorage.getItem("ghgflix.web.token") || "";
+export const webToken = () => accountToken() || serverToken();
 export const setWebToken = (t: string) => localStorage.setItem("ghgflix.web.token", t);
 
 /** Query-string fragment for URLs that can't send headers (video src, images). */
@@ -21,6 +30,7 @@ export const tokenParam = () => (webToken() ? `token=${encodeURIComponent(webTok
 
 /** Append the token to a same-origin API url when needed. */
 export function withToken(url: string): string {
+  if (url.startsWith('/api/')) url=serverBase()+url;
   const t = tokenParam();
   if (!t) return url;
   return url + (url.includes("?") ? "&" : "?") + t;

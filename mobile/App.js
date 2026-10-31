@@ -34,6 +34,7 @@ import { useKanalmeldungen } from "./src/kanalmeldungen.js";
 import { useNativePushNavigation } from "./src/native-push.js";
 import { KanaeleSeite } from "./src/kanaele.js";
 import { PlayerScreen } from "./src/player.js";
+import { AccountScreen } from "./src/AccountScreen.js";
 import { VerbindungsScreen } from "./src/verbindung.js";
 import { normUrl, ping } from "./src/netzsuche.js";
 import { pruefeUpdate, starteUpdate } from "./src/update.js";
@@ -88,7 +89,7 @@ class Absturzfang extends React.Component {
 /* ══ Verbindungsdaten ════════════════════════════════════════════════════ */
 
 const CONN_KEY = "ghgflix.conn";
-const standardConn = { list: [], manualUrl: "", token: "", profile: 0 };
+const standardConn = { list: [], manualUrl: "", token: "", serverToken: "", profile: 0 };
 
 async function ladeConn() {
   try {
@@ -122,7 +123,9 @@ function AppInner() {
   const [profile, setProfile] = useState([]);
   const [appAktuell, setAppAktuell] = useState(null);
   const [kanalRevision, setKanalRevision] = useState(0);
-  useNativePushNavigation(conn?.profile ? serverInfo?.id : null,
+  const [account,setAccount]=useState(null),[authChecked,setAuthChecked]=useState(false);
+  const identityRef=useRef('');identityRef.current=`${basis}:${conn?.token}:${conn?.profile}`;
+  useNativePushNavigation(account && conn?.profile ? serverInfo?.id : null,
     () => { setStapel([]); setSeite("channels"); setKanalRevision(v => v+1); },
     () => setKanalRevision(v => v+1));
 
@@ -176,8 +179,9 @@ function AppInner() {
   const api = useCallback(
     async (pfad, opt = {}) => {
       if (!basis) throw new Error("offline");
+      const identity=identityRef.current;
       const tr = pfad.includes("?") ? "&" : "?";
-      let url = `${basis}${pfad}${tr}profile=${conn?.profile || 1}`;
+      let url = `${basis}${pfad}${tr}profile=${conn?.profile || 0}`;
       if (conn?.token) url += `&token=${conn.token}`;
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 12000);
@@ -189,20 +193,29 @@ function AppInner() {
         body: opt.body ? JSON.stringify(opt.body) : undefined,
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || (res.status === 401 ? "Bitte erneut mit dem Server verbinden." : `Serverfehler (${res.status})`));
+      if(identity!==identityRef.current)throw new Error('Profil wurde gewechselt.');
+      if (!res.ok) {
+        if(res.status===401 && data?.code!=='invalid_credentials' && !pfad.endsWith('/login')) {
+          setAccount(null);setStapel([]);setLib(null);setWeiter([]);setVerlauf([]);setFavoriten([]);setProfile([]);
+          if(conn?.serverToken && conn.token!==conn.serverToken) {
+            const next={...conn,token:conn.serverToken,profile:0};setConn(next);void sichereConn(next);
+          }
+        }
+        throw Object.assign(new Error(data?.error || `Serverfehler (${res.status})`),{status:res.status,code:data?.code});
+      }
       return data;
       } finally { clearTimeout(timeout); }
     },
     [basis, conn],
   );
 
-  const kanalUngelesen = useKanalmeldungen(api, !!basis && !!conn?.profile, kanalRevision);
+  const kanalUngelesen = useKanalmeldungen(api, !!basis && !!account && !account.profile?.is_child && !!conn?.profile, kanalRevision);
 
   const img = useCallback(
     (pfad, groesse = "w500") =>
       globalThis.__GHG_PREVIEW_IMAGE__ ? globalThis.__GHG_PREVIEW_IMAGE__(pfad, groesse) :
       pfad
-        ? `${basis}/api/img?path=${encodeURIComponent(pfad)}&size=${groesse}&profile=1${
+        ? `${basis}/api/img?path=${encodeURIComponent(pfad)}&size=${groesse}&profile=${conn?.profile||0}${
             conn?.token ? `&token=${conn.token}` : ""
           }`
         : null,
@@ -231,9 +244,32 @@ function AppInner() {
     [conn],
   );
 
+  useEffect(()=>{
+    if(!basis||!conn)return;
+    let active=true;setAuthChecked(false);
+    api('/api/accounts/me').then(data=>{if(!active)return;setAccount(data);
+      if(conn.profile!==(data.profile?.id||0))void aendereConn({profile:data.profile?.id||0});
+    }).catch(()=>{if(active)setAccount(null);}).finally(()=>{if(active)setAuthChecked(true);});
+    return()=>{active=false;};
+  },[api,basis]);
+  const acceptAccount=async(data)=>{
+    setStapel([]);setLib(null);setWeiter([]);setVerlauf([]);setFavoriten([]);setProfile([]);setSeite('home');
+    await aendereConn({serverToken:conn.serverToken||conn.token,token:data.token,profile:data.profile?.id||0});setAccount(data);
+  };
+  const selectProfile=async(profile)=>{
+    setStapel([]);setLib(null);setWeiter([]);setVerlauf([]);setFavoriten([]);setSeite('home');
+    await aendereConn({profile:profile.id});setAccount(old=>({...old,profile}));
+  };
+  const logout=async()=>{
+    try{const known=JSON.parse(await AsyncStorage.getItem('ghgflix.push.'+serverInfo?.id)||'[]');await api('/api/accounts/logout',{method:'POST',body:{nativePushTokens:known}});await AsyncStorage.removeItem('ghgflix.push.'+serverInfo?.id);}finally{
+      setAccount(null);setStapel([]);setLib(null);setWeiter([]);setVerlauf([]);setFavoriten([]);setProfile([]);
+      await aendereConn({token:conn.serverToken||'',profile:0});setSeite('home');
+    }
+  };
+
   /* ── Daten laden ──────────────────────────────────────────────────── */
   const datenLaden = useCallback(() => {
-    if (!basis || !conn?.profile) return;
+    if (!basis || !conn?.profile || !account) return;
     setDatenFehler(null);
     api("/api/library").then(setLib).catch((e) => setDatenFehler(e.message || "Die Mediathek konnte nicht geladen werden."));
     api("/api/continue").then((c) => setWeiter(Array.isArray(c) ? c : [])).catch(() => {});
@@ -242,7 +278,7 @@ function AppInner() {
     const refreshProfiles=()=>api("/api/profiles").then(p=>setProfile(Array.isArray(p)?p:[])).catch(()=>{});
     refreshProfiles();const profileTimer=setInterval(refreshProfiles,15000);
     return()=>clearInterval(profileTimer);
-  }, [api, basis, conn?.profile]);
+  }, [api, basis, conn?.profile, account]);
 
   useEffect(datenLaden, [datenLaden]);
 
@@ -250,11 +286,11 @@ function AppInner() {
      damit „Weiterschauen“ sofort stimmt. */
   const stapelHoehe = stapel.length;
   useEffect(() => {
-    if (stapelHoehe !== 0 || !basis || !conn?.profile) return;
+    if (stapelHoehe !== 0 || !basis || !conn?.profile || !account) return;
     api("/api/continue").then((c) => setWeiter(Array.isArray(c) ? c : [])).catch(() => {});
     api("/api/history").then((h) => setVerlauf(Array.isArray(h) ? h : [])).catch(() => {});
     api("/api/favorites").then((f) => setFavoriten(Array.isArray(f) ? f : [])).catch(() => {});
-  }, [stapelHoehe, api, basis, conn?.profile]);
+  }, [stapelHoehe, api, basis, conn?.profile, account]);
 
   /* ── Navigation ───────────────────────────────────────────────────── */
   const aufTitel = useCallback(
@@ -294,7 +330,8 @@ function AppInner() {
         conn={conn}
         aufAbbruch={basis ? () => setSeite("settings") : null}
         aufSpeichern={async (teil) => {
-          const naechste = await aendereConn(teil);
+          const naechste = await aendereConn({...teil,serverToken:teil.token||"",profile:0});
+          setAccount(null);
           await verbinden(naechste);
           setSeite("home");
           setStapel([]);
@@ -303,9 +340,12 @@ function AppInner() {
     );
   }
 
+  if(!authChecked)return <Laden text="Account wird geprüft …"/>;
+  if(!account)return <AccountScreen api={api} onRefresh={async()=>setAccount(await api('/api/accounts/me'))} onSession={acceptAccount} onServer={()=>setSeite('verbindung')}/>;
   if (!conn.profile) {
-    return <ProfilSeite base={basis} api={api} aufWahl={(id) => aendereConn({ profile: id })} />;
+    return <ProfilSeite base={basis} api={api} account={account.account} activeProfile={account.profile} aufWahl={selectProfile} aufAbmelden={logout} onRefresh={async()=>setAccount(await api('/api/accounts/me'))} onSession={acceptAccount}/>;
   }
+  if(account.profile?.is_child && ['channels','settings'].includes(seite))return <ProfilSeite base={basis} api={api} account={account.account} activeProfile={account.profile} aufWahl={selectProfile} aufAbmelden={logout} onRefresh={async()=>setAccount(await api('/api/accounts/me'))} onSession={acceptAccount} aufZurueck={()=>setSeite('home')}/>;
 
   /* ── Player läuft im Vollbild, ohne Seitenleiste ──────────────────── */
   if (oben?.name === "play") {
@@ -381,7 +421,7 @@ function AppInner() {
       <ProfilSeite
         base={basis}
         api={api}
-        aufWahl={(id) => { aendereConn({ profile: id }); setSeite("home"); }}
+        aufWahl={selectProfile} account={account.account} activeProfile={account.profile} aufAbmelden={logout} onRefresh={async()=>setAccount(await api('/api/accounts/me'))} onSession={acceptAccount}
         aufZurueck={() => setSeite("home")}
       />
     );
@@ -394,10 +434,7 @@ function AppInner() {
         aufServerAendern={() => setSeite("verbindung")}
         aufProfilWechseln={() => setSeite("profiles")}
         aufNeuEinlesen={() => api("/api/scan", { method: "POST", body: {} }).catch(() => {})}
-        aufAbmelden={async () => {
-          await aendereConn({ profile: 0 });
-          setSeite("home");
-        }}
+        aufAbmelden={logout}
       />
     );
   }
@@ -424,7 +461,7 @@ function AppInner() {
   );
   const ansicht = <View key={`${seite}:${oben?.name || "root"}:${oben?.id || ""}:${stapel.length}:${ansichtNr}`} style={{ flex: 1 }}>{inhalt}</View>;
   const Shell = istTV ? TVShell : HandyShell;
-  return <Shell seite={seite} aufSeite={wechsle} zahlen={zahlen} profilName={profilName} profilAvatar={profilAvatar}>{ansicht}</Shell>;
+  return <Shell child={!!account.profile?.is_child} seite={seite} aufSeite={wechsle} zahlen={zahlen} profilName={profilName} profilAvatar={profilAvatar}>{ansicht}</Shell>;
 }
 
 export default function App() {

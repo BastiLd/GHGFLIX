@@ -15,7 +15,7 @@ if (process.env.GHGFLIX_TEST_NATIVE_PUSH === "1") {
   process.env.EXPO_PUSH_ENABLED = "1";
   process.env.EXPO_PUSH_PROJECT_ID = "b14ed30d-3ecc-4465-ac79-7988b90ab0d8";
 }
-Object.assign(process.env, { HOST: "127.0.0.1", PORT: "19844", BROWSE_ROOTS: dir, GHGFLIX_PASSWORD: "", GHGFLIX_WEB_DIR: resolve("dist"), SCAN_INTERVAL_SEC: "99999" });
+Object.assign(process.env, { HOST: "127.0.0.1", PORT: "19844", BROWSE_ROOTS: dir, GHGFLIX_PASSWORD: "emulator-server", GHGFLIX_ACCOUNT_SETUP_KEY:"emulator-owner-key", GHGFLIX_WEB_DIR: resolve("dist"), SCAN_INTERVAL_SEC: "99999" });
 const image = await sharp({ create: { width: 1600, height: 900, channels: 3, background: "#35588c" } }).png().toBuffer();
 const imageFile = join(dir, "test-group.png"); writeFileSync(imageFile, image);
 const movie = join(dir, "Testfilm.mp4");
@@ -35,6 +35,8 @@ const converted = join(dir, "Umwandlung.mkv");
 execFileSync("ffmpeg", ["-y", "-hide_banner", "-loglevel", "error", "-i", movie, "-c:v", "ffv1", "-c:a", "copy", converted], { stdio: "pipe", windowsHide: true });
 db.prepare("INSERT INTO movies (id,title,path,added_at) VALUES (2,'Umwandlung',?,?)").run(converted, Date.now());
 db.prepare("INSERT INTO shows (id,title,added_at) VALUES (1,'Testserie',?)").run(Date.now());
+db.prepare("UPDATE movies SET cert=CASE WHEN id=1 THEN '6' ELSE '18' END").run();
+db.prepare("UPDATE shows SET cert='6'").run();
 for (let id = 1; id <= 3; id++) {
   const episode = join(dir, `Testserie-S01E0${id}.mp4`);
   copyFileSync(movie, episode);

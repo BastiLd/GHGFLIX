@@ -1,4 +1,4 @@
-import { IS_WEB, withToken } from "./platform";
+import { usesServer, withToken } from "./platform";
 
 const TMDB_IMG = "https://image.tmdb.org/t/p";
 
@@ -18,9 +18,9 @@ function img(path: string, size: string): string {
   if (isLocal(path)) {
     // Lokale Dateien kann nur der Server ausliefern. Im Desktop-Build gibt es
     // sie nicht — dort führt der Pfad ins Leere, deshalb lieber nichts liefern.
-    return IS_WEB ? withToken(`/api/img?path=${encodeURIComponent(path)}`) : "";
+    return usesServer() ? withToken(`/api/img?path=${encodeURIComponent(path)}`) : "";
   }
-  if (IS_WEB) return withToken(`/api/img?path=${encodeURIComponent(path)}&size=${size}`);
+  if (usesServer()) return withToken(`/api/img?path=${encodeURIComponent(path)}&size=${size}`);
   return `${TMDB_IMG}/${size}${path}`;
 }
 

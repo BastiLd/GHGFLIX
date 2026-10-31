@@ -1,8 +1,9 @@
+import {mockAccount} from "./account-fixture";
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 test("fullscreen return and mini-player expansion retain a usable timeline", async ({page}) => {
   const errors: string[]=[]; page.on("pageerror",e=>errors.push(e.message));
-  await page.route("**/test-video.webm", r => {
+  await page.route("**/test-video.webm*", r => {
     const data = readFileSync("tests/.generated/video.webm");
     const match = /bytes=(\d+)-(\d*)/.exec(r.request().headers().range ?? "");
     const start = match ? Number(match[1]) : 0;
@@ -10,7 +11,7 @@ test("fullscreen return and mini-player expansion retain a usable timeline", asy
     return r.fulfill({status:match ? 206 : 200,contentType:"video/webm",headers:{"Accept-Ranges":"bytes",...(match ? {"Content-Range":`bytes ${start}-${end}/${data.length}`} : {})},body:data.subarray(start,end+1)});
   });
   await page.route("**/api/**",async route=>{
-    if(route.request().url().endsWith("/api/ping")) return route.fulfill({json:{auth:false}});
+    if(await mockAccount(route))return;
     const cmd=route.request().url().split("/").pop();
     let result: unknown=null;
     if(cmd==="get_episode") result={id:1,showId:1,showTitle:"Testserie",season:1,episode:1,title:"Testfolge",path:"test.webm",width:320,height:180};
@@ -63,9 +64,9 @@ test("late episode lookup cannot relabel or save progress for the next episode",
     {key:"queued-2",kind:"episode",mediaType:"episode",label:"Queuefolge 2",ids:[2]},
   ])));
   const saves: {refId:number}[] = [];
-  await page.route("**/test-video.webm", r => r.fulfill({contentType:"video/webm",body:readFileSync("tests/.generated/video.webm")}));
+  await page.route("**/test-video.webm*", r => r.fulfill({contentType:"video/webm",body:readFileSync("tests/.generated/video.webm")}));
   await page.route("**/api/**",async route=>{
-    if(route.request().url().endsWith("/api/ping")) return route.fulfill({json:{auth:false}});
+    if(await mockAccount(route))return;
     const cmd=route.request().url().split("/").pop();
     const args=route.request().postDataJSON();
     let result: unknown=null;
@@ -107,3 +108,5 @@ test("late episode lookup cannot relabel or save progress for the next episode",
   await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem("ghgflix.queue")!))).toEqual([]);
   await expect(page.getByText("Serie 2",{exact:true}).last()).toBeVisible();
 });
+
+test.beforeEach(async({page})=>{await page.addInitScript(()=>localStorage.setItem("ghgflix.account.browser-fixture","fixture-token"));});

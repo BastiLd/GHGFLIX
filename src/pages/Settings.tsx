@@ -55,11 +55,12 @@ import {
   getSession, reinitSupabase, signOut, startSupabaseSync, supabaseSyncHealth, syncNow, type SyncHealth,
 } from "../lib/supabase";
 import { setTvModePref, tvModePref } from "../lib/tvMode";
-import { loadServerConfig, loginServer, saveServerConfig, startServerSync, syncOnce, testServer, type ServerConfig } from "../lib/serverSync";
+import { loadServerConfig, loginServer, saveServerConfig, testServer, type ServerConfig } from "../lib/serverSync";
 import { Button, InfoButton, Modal, Spinner, TextInput } from "../components/ui";
 import { ThemeStore } from "../components/ThemeStore";
 import { FolderScanDialog, IgnoredFilesList } from "../components/FolderScanDialog";
 import ZuordnungDialog from "../components/ZuordnungDialog";
+import { useAccount } from "../lib/accounts";
 
 type TabId =
   | "allgemein"
@@ -307,6 +308,32 @@ function ToolRow({ name, status }: { name: string; status?: { path?: string | nu
 }
 
 export default function Settings() {
+  const session = useAccount(s=>s.session);
+  return session && !session.account.isAdmin ? <PersonalSettings/> : <FullSettings/>;
+}
+
+function PersonalSettings() {
+  const navigate=useNavigate();
+  return <div className="max-w-4xl mx-auto p-6 space-y-6">
+    <h1 className="text-2xl font-bold">Einstellungen</h1>
+    <Section title="Dein Account" desc="Profile, Bilder, Kinderfreigaben, PIN und Account-Passwort verwalten.">
+      <Button onClick={()=>navigate('/profiles')}>Account und Profile</Button>
+    </Section>
+    <Section title="Darstellung" desc="Deine Einstellungen gelten innerhalb deines Accounts.">
+      <div className="space-y-4"><PrefSelect k="cardSize" label="Kartengröße" options={[["sm","Klein"],["md","Mittel"],["lg","Groß"]]}/>
+      <PrefToggle k="animations" label="Animationen"/><PrefToggle k="heroEnabled" label="Großes Titelbild"/></div>
+    </Section>
+    <Section title="Wiedergabe"><div className="space-y-4">
+      <PrefToggle k="autoplayNext" label="Nächste Folge automatisch abspielen"/>
+      <PrefToggle k="miniPlayer" label="Mini-Player verwenden"/>
+      <PrefToggle k="thumbEnabled" label="Vorschau auf der Zeitleiste"/>
+      <PrefSelect k="audioLangPref" label="Bevorzugte Sprache" options={[["de-en","Deutsch, dann Englisch"],["en-de","Englisch, dann Deutsch"],["file","Vorgabe der Datei"]]}/>
+    </div></Section>
+    {!IS_WEB&&<ServerSyncSection/>}
+  </div>;
+}
+
+function FullSettings() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const toast = useStore((s) => s.toast);
@@ -1511,7 +1538,7 @@ export default function Settings() {
 
       {tab === "konto" && IS_WEB && <SupabaseServerSection />}
 
-      {tab === "konto" && (
+      {tab === "konto" && !useAccount.getState().enabled && (
         <Section
           title="Konto & Sync (Supabase)"
           desc={
@@ -1930,7 +1957,7 @@ function ServerSyncSection() {
   const toast = useStore((s) => s.toast);
   const [cfg, setCfg] = useState<ServerConfig | null>(null);
   const [pw, setPw] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy] = useState(false);
   const [status, setStatus] = useState<Record<number, "ok" | "fail" | "…">>({});
 
   useEffect(() => {
@@ -1948,8 +1975,7 @@ function ServerSyncSection() {
     const clean = { ...cfg, endpoints: cfg.endpoints.filter((e) => e.url.trim()) };
     await saveServerConfig(clean);
     setCfg(clean);
-    if (clean.enabled) startServerSync();
-    toast("Server-Sync gespeichert", "success");
+    window.location.reload();
   };
 
   const test = async (i: number) => {
@@ -1972,24 +1998,17 @@ function ServerSyncSection() {
     } else toast("Anmeldung fehlgeschlagen", "error");
   };
 
-  const syncNow = async () => {
-    setBusy(true);
-    try {
-      const r = await syncOnce();
-      toast(r ? `Sync fertig: ${r.pushed} gesendet, ${r.pulled} empfangen` : "Kein Server erreichbar (oder Sync aus)", r ? "success" : "error");
-    } finally {
-      setBusy(false);
-    }
-  };
+  const syncNow = async () => { await save(); };
+
 
   return (
     <Section
       title="GHGFlix-Server (ZimaOS)"
-      desc="Fortschritt automatisch mit deinem eigenen GHGFlix-Server abgleichen — zuhause über die lokale IP, unterwegs über Domain oder Tailscale. Bei „Automatisch“ nimmt die App immer die erste erreichbare Adresse."
+      desc="Mit deinem GHGFlix-Server verbinden und nach dem Serverzugang persönlich anmelden. Profile, Bibliothek und Wiedergabestände werden dann direkt vom Server geladen. Die lokale Bibliothek bleibt auf diesem PC erhalten."
     >
       <label className="flex items-center gap-3 mb-3 cursor-pointer">
         <input type="checkbox" checked={cfg.enabled} onChange={(e) => update({ enabled: e.target.checked })} className="w-4 h-4 accent-ghg-red" />
-        <span>Sync mit GHGFlix-Server aktivieren</span>
+        <span>GHGFlix-Server verwenden</span>
       </label>
 
       <label className="block mb-3 max-w-xs">

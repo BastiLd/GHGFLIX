@@ -5,7 +5,7 @@ import { C } from "./stile.js";
 import { Unterleiste } from "./seitenleiste.js";
 import { Icon } from "./Icons.js";
 
-export function HandyShell({ seite, aufSeite, zahlen, profilName, profilAvatar, children }) {
+export function HandyShell({ seite, aufSeite, zahlen, profilName, profilAvatar, child = false, children }) {
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <View style={{ height: 48, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderBottomWidth: 1, borderBottomColor: "#20212c" }}>
@@ -16,7 +16,7 @@ export function HandyShell({ seite, aufSeite, zahlen, profilName, profilAvatar, 
         </View>
       </View>
       <View style={{ flex: 1, minHeight: 0 }}>{children}</View>
-      <Unterleiste seite={seite} aufSeite={aufSeite} zahlen={zahlen} handy />
+      <Unterleiste seite={seite} aufSeite={aufSeite} zahlen={zahlen} child={child} handy />
     </View>
   );
 }

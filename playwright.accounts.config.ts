@@ -1,0 +1,2 @@
+import {defineConfig} from '@playwright/test';
+export default defineConfig({testDir:'./tests/accounts',outputDir:'./test-results/accounts-browser',timeout:45000,workers:1,use:{baseURL:'http://127.0.0.1:19848',headless:true},webServer:{command:'node tests/integration/account-server.mjs',url:'http://127.0.0.1:19848/api/ping',reuseExistingServer:false},projects:[{name:'desktop',use:{viewport:{width:1440,height:900}}},{name:'phone',use:{viewport:{width:390,height:844},isMobile:true,hasTouch:true}},{name:'tv',use:{viewport:{width:960,height:540}}}]});

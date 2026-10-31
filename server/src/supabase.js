@@ -28,8 +28,9 @@ async function all(table,params) {
 function scoped(){if(!owner())throw Error("Cloud-Konto am Server noch nicht zugeordnet (Benutzer-ID fehlt).");}
 async function profiles() {
   scoped();const d=openDb();
+  const accountId=Number(getSetting("legacy_owner_account"))||null;
   let remote=await all("profiles",{select:"*",user_id:`eq.${owner()}`,order:"id"});
-  if(pushEnabled())for(const p of d.prepare('SELECT * FROM profiles').all()){
+  if(pushEnabled())for(const p of d.prepare('SELECT * FROM profiles WHERE account_id IS ?').all(accountId)){
     let r=remote.find(x=>x.id===p.supabase_id);
     if(!r&&!p.supabase_id)r=remote.find(x=>x.name===p.name);
     if(!r&&!p.supabase_id){
@@ -45,17 +46,18 @@ async function profiles() {
     }
   }
   if(pullEnabled())for(const r of remote){
-    const p=d.prepare('SELECT * FROM profiles WHERE supabase_id=?').get(r.id);
+    if(d.prepare('SELECT 1 FROM deleted_cloud_profiles WHERE supabase_id=?').get(r.id))continue;
+    const p=d.prepare('SELECT * FROM profiles WHERE supabase_id=? AND account_id IS ?').get(r.id,accountId);
     if(p){
       if((r.updated_at||0)>=p.updated_at)d.prepare('UPDATE profiles SET name=?,avatar=?,updated_at=? WHERE id=?').run(r.name,r.avatar,r.updated_at||0,p.id);
     }else{
-      const named=d.prepare('SELECT id FROM profiles WHERE name=? AND supabase_id IS NULL').get(r.name);
+      const named=d.prepare('SELECT id FROM profiles WHERE name=? AND supabase_id IS NULL AND account_id IS ?').get(r.name,accountId);
       if(named)d.prepare('UPDATE profiles SET supabase_id=?,avatar=?,updated_at=? WHERE id=?').run(r.id,r.avatar,r.updated_at||0,named.id);
-      else d.prepare('INSERT INTO profiles(name,avatar,supabase_id,created_at,updated_at) VALUES(?,?,?,?,?)').run(r.name,r.avatar,r.id,Date.now(),r.updated_at||0);
+      else d.prepare('INSERT INTO profiles(name,avatar,supabase_id,created_at,updated_at,account_id) VALUES(?,?,?,?,?,?)').run(r.name,r.avatar,r.id,Date.now(),r.updated_at||0,accountId);
     }
   }
   const allowed=new Set(remote.map(p=>p.id));
-  return d.prepare('SELECT * FROM profiles WHERE supabase_id IS NOT NULL').all().filter(p=>allowed.has(p.supabase_id));
+  return d.prepare('SELECT * FROM profiles WHERE supabase_id IS NOT NULL AND account_id IS ?').all(accountId).filter(p=>allowed.has(p.supabase_id));
 }
 async function progressPull(ps) {
   const d=openDb();let count=0;

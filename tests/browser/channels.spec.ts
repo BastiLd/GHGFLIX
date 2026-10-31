@@ -1,3 +1,4 @@
+import {mockAccount} from "./account-fixture";
 import { test, expect } from "@playwright/test";
 test("group to channel to formats and back", async ({page}, info) => {
   const errors: string[] = []; page.on("pageerror", e => errors.push(e.message));
@@ -5,7 +6,7 @@ test("group to channel to formats and back", async ({page}, info) => {
   const item = {id:"i1",feedId:"f1",art:"youtube",videoId:"v1",titel:"Testbeitrag",veroeffentlicht:Date.now(),gelesen:true,istShort:null,feedTitel:"Avatar Kanal"};
   await page.route("**/api/**", async route => {
     const url = route.request().url();
-    if (url.endsWith("/api/ping")) return route.fulfill({json:{auth:false}});
+    if(await mockAccount(route))return;
     const cmd = url.split("/").pop(); const args = route.request().postDataJSON() ?? {};
     let result: unknown = null;
     if (cmd === "feed_groups") result = [{id:"g1",name:"Avatar",emoji:"📺",abos:1,kanaele:1,blogs:0,beitraege:1,ungelesen:0,bilder:[],standardOffen:false,sortierung:0}];
@@ -42,7 +43,7 @@ test("group to channel to formats and back", async ({page}, info) => {
   const groups = ["Avatar","Weitere Gruppe"].map((name,i)=>({id:`g${i+1}`,name,emoji:"📺",abos:1,kanaele:1,blogs:0,beitraege:0,ungelesen:0,bilder:[],standardOffen:false,sortierung:i}));
   const feed = {id:"f1",art:"youtube",titel:"Avatar Kanal",gruppeId:"g1",gruppeIds:["g1"],benachrichtigen:true};
   await page.route("**/api/**", async route => {
-    if(route.request().url().endsWith("/api/ping")) return route.fulfill({json:{auth:false}});
+    if(await mockAccount(route))return;
     const cmd=route.request().url().split("/").pop(); const args=route.request().postDataJSON() ?? {};
     let result:unknown=null;
     if(cmd==="feed_groups") result=groups;
@@ -82,7 +83,7 @@ test("group to channel to formats and back", async ({page}, info) => {
 
 test("shared channels count unread posts once in the overview", async ({page}) => {
   await page.route("**/api/**", async route => {
-    if(route.request().url().endsWith("/api/ping")) return route.fulfill({json:{auth:false}});
+    if(await mockAccount(route))return;
     const cmd=route.request().url().split("/").pop();
     let result:unknown=null;
     if(cmd==="feed_groups") result=["Science","Space"].map((name,i)=>({id:`g${i}`,name,emoji:"S",abos:1,kanaele:1,blogs:0,beitraege:1,ungelesen:1,bilder:[],standardOffen:false,sortierung:i}));
@@ -97,3 +98,5 @@ test("shared channels count unread posts once in the overview", async ({page}) =
   await expect(header.getByText("1 neu",{exact:true})).toBeVisible();
   await expect(header.getByText("2 neu",{exact:true})).toHaveCount(0);
 });
+
+test.beforeEach(async({page})=>{await page.addInitScript(()=>localStorage.setItem("ghgflix.account.browser-fixture","fixture-token"));});

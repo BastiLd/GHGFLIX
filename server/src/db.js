@@ -1,6 +1,8 @@
 // SQLite storage via Node's built-in node:sqlite — zero native dependencies,
 // which keeps the Docker build 100 % reproducible (no npm install at all).
 import { DatabaseSync } from "node:sqlite";
+import { migrateAccounts } from "./account-schema.js";
+import { settingKey } from "./account-context.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -296,6 +298,7 @@ export function openDb() {
     added_at INTEGER NOT NULL, removed INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL,
     PRIMARY KEY(profile_id,media_type,tmdb_id))`);
   migrateTextProfiles(db);
+  migrateAccounts(db);
   return db;
 }
 
@@ -473,9 +476,9 @@ export const setPlacement = (path, showTmdb, season, episode) =>
     )
     .run(path, showTmdb, season, episode);
 
-export const getSetting = (key) => openDb().prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value ?? null;
+export const getSetting = (key) => openDb().prepare("SELECT value FROM settings WHERE key = ?").get(settingKey(key))?.value ?? null;
 export const setSetting = (key, value) =>
-  openDb().prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, String(value));
+  openDb().prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(settingKey(key), String(value));
 
 /** Setting with env-var fallback (env wins only when the setting is unset). */
 export const settingOr = (key, envName, def = null) => getSetting(key) ?? process.env[envName] ?? def;

@@ -1,5 +1,5 @@
-import { sendNewPosts } from "./push.js";
-import { checkNativeReceipts } from "./native-push.js";
+import { sendNewPosts,unsubscribePush } from "./push.js";
+import { checkNativeReceipts,unsubscribeNativePush } from "./native-push.js";
 // GHGFlix Server — a small Plex/Jellyfin-style media server with zero npm
 // dependencies. HTTP + routing on node:http, storage on node:sqlite,
 // video via ffmpeg. Designed for ZimaOS/Docker (see ../Dockerfile).
@@ -24,6 +24,10 @@ import { makeThumb, trickplayInfo, ensureTrickplay, pruneThumbCache, TRICK_DIR }
 import { isLocalRef, localRefPath, imageMime } from "./artwork.js";
 import { isImage } from "./parser.js";
 import { spawn } from "node:child_process";
+import * as accounts from './accounts.js';
+import {googleConfigured,startGoogle,googleCallback,checkGoogle,finishGoogle,googleAuthorizationUrl} from './google-auth.js';
+import { accountContext } from './account-context.js';
+import { authorizeInvoke, filterInvoke, authorizeRest, requireAdmin, requireMedia, requirePath, filterMedia, filterRefs } from './access.js';
 
 const PORT = parseInt(process.env.PORT || "8484", 10);
 const SERVER_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -32,9 +36,10 @@ const SERVER_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const WEBAPP_DIR = process.env.GHGFLIX_WEB_DIR ? resolve(process.env.GHGFLIX_WEB_DIR) : join(SERVER_ROOT, "webapp");
 const LEGACY_DIR = join(SERVER_ROOT, "web");
 const WEB_DIR = existsSync(join(WEBAPP_DIR, "index.html")) ? WEBAPP_DIR : LEGACY_DIR;
-const VERSION = "3.5.0";
+const VERSION = "3.6.0";
 
 const db = openDb();
+accounts.initializeAccounts();
 
 // ARCH-16: stable per-installation ID (random UUID, created once). Clients use
 // it to key their sync cursors (S-017) so switching between addresses
@@ -61,6 +66,8 @@ function authed(req, url) {
   if (!password()) return true;
   const h = req.headers.authorization || "";
   const t = h.startsWith("Bearer ") ? h.slice(7) : url.searchParams.get("token") || "";
+  const session = accounts.sessionFor(t);
+  if (session) return [...tokens].some(([serverToken,born]) => accounts.digest(serverToken) === session.server_token_hash && Date.now()-born <= TOKEN_TTL_MS);
   const born = tokens.get(t);
   if (born == null) return false;
   if (Date.now() - born > TOKEN_TTL_MS) {
@@ -371,6 +378,13 @@ async function handle(req, res) {
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   if (req.method === "OPTIONS") return res.writeHead(204).end();
 
+  if(p==='/api/accounts/google/go'){
+    res.writeHead(302,{Location:googleAuthorizationUrl(url.searchParams.get('id')),'Cache-Control':'no-store','Referrer-Policy':'no-referrer'});return res.end();
+  }
+  if(p==='/api/accounts/google/callback') {
+    try{await googleCallback(url.searchParams);res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'"});return res.end('<!doctype html><meta name="viewport" content="width=device-width"><title>GHGFlix Anmeldung</title><body style="background:#111;color:white;font:20px system-ui;padding:40px">Google bestätigt. Kehre zur GHGFlix-App zurück, um die Anmeldung abzuschließen.</body>');}
+    catch{res.writeHead(400,{'Content-Type':'text/plain; charset=utf-8','Cache-Control':'no-store'});return res.end('Anmeldung abgebrochen oder abgelaufen. Bitte in GHGFlix neu starten.');}
+  }
   // ── App-Verteilung: Installationsseite + APK-Download ──────────────────────
   // Bewusst OHNE Anmeldung erreichbar: am Fernseher tippt man die Adresse in
   // die "Downloader"-App ein, die kein Login-Formular anzeigen kann.
@@ -468,6 +482,9 @@ async function handle(req, res) {
       return json(res, { error: "Hochladen nur mit gesetztem Server-Passwort (GHGFLIX_PASSWORD)." }, 403);
     }
     if (!authed(req, url)) return json(res, { error: "unauthorized" }, 401);
+    const uploader=accounts.sessionFor(bearerToken(req,url));
+    if (!uploader) return json(res,{error:'Bitte mit deinem Account anmelden.',code:'account_required'},401);
+    requireAdmin(uploader,accounts.activeProfile(uploader));
     const dir = join(process.env.DATA_DIR || "/data", "apk");
     const target = join(dir, "GHGFlix.apk");
     const tmp = target + ".teil";
@@ -541,6 +558,7 @@ async function handle(req, res) {
       version: VERSION,
       name: getSetting("server_name") || "GHGFlix",
       id: SERVER_ID, // ARCH-16 (stable installation ID for cursor keys, S-017)
+      accounts: true,
       auth: !!password(),
       time: Date.now(),
     });
@@ -571,7 +589,49 @@ async function handle(req, res) {
 
   if (!authed(req, url)) return json(res, { error: "unauthorized" }, 401);
 
-  const profileId = Number(resolveProfile(url.searchParams.get("profile") || 'local'));
+  res.setHeader('Cache-Control','private, no-store');
+  const credential=bearerToken(req,url), session=accounts.sessionFor(credential);
+  const ip=req.socket.remoteAddress || '?';
+  if (p==='/api/accounts/status') return json(res,{...accounts.accountStatus(),google:googleConfigured()});
+  if(p.startsWith('/api/accounts/google/')&&req.method==='POST'){
+    const body=await readBody(req),hash=session?.server_token_hash??accounts.digest(credential);
+    if(p.endsWith('/start'))return json(res,await accounts.limitedLogin(ip,'google-start',()=>startGoogle(hash)));
+    if(p.endsWith('/check'))return json(res,checkGoogle(body,hash));
+    if(p.endsWith('/finish'))return json(res,await accounts.limitedLogin(ip,'google:'+body.id,()=>finishGoogle(body,hash)));
+  }
+  if (['/api/accounts/register','/api/accounts/setup','/api/accounts/login'].includes(p) && req.method==='POST') {
+    const body=await readBody(req);
+    const serverHash=session?.server_token_hash ?? accounts.digest(credential);
+    return json(res,await accounts.limitedLogin(ip,body.email,()=>p.endsWith('/login')
+      ? accounts.loginAccount(body,serverHash) : accounts.registerAccount(body,serverHash,p.endsWith('/setup'))));
+  }
+  if (!session) return json(res,{error:'Bitte mit deinem persönlichen Account anmelden.',code:'account_required'},401);
+  return accountContext.run({accountId:session.account_id},()=>handleAccount(req,res,url,session));
+}
+async function handleAccount(req,res,url,session) {
+  const p=url.pathname;
+  const accountOp = async (fn) => {
+    const body=await readBody(req);
+    return json(res,await accounts.limitedLogin(req.socket.remoteAddress || '?',session.email,()=>fn(body)));
+  };
+  if(p==='/api/accounts/me') return json(res,accounts.sessionInfo(session));
+  if(p==='/api/accounts/logout' && req.method==='POST') {
+    const body=await readBody(req);
+    if(body.pushEndpoint)unsubscribePush(body.pushEndpoint);
+    if(body.nativePushTokens)unsubscribeNativePush(body.nativePushTokens);
+    accounts.logoutAccount(session);return json(res,{ok:true});
+  }
+  if(p==='/api/accounts/password' && req.method==='POST') return accountOp(b=>accounts.changePassword(session,b));
+  if(p==='/api/accounts/claim-owner' && req.method==='POST') return accountOp(b=>accounts.claimOwner(session,b));
+  if(p==='/api/accounts/select-profile' && req.method==='POST') return accountOp(b=>accounts.selectProfile(session,b));
+  if(p==='/api/profiles' && req.method==='GET') return json(res,accounts.accountProfiles(session));
+  if(p==='/api/profiles' && req.method==='POST') return accountOp(b=>accounts.saveAccountProfile(session,null,b));
+  const profileRoute=p.match(/^\/api\/profiles\/(\d+)$/);
+  if(profileRoute && req.method==='PATCH') return accountOp(b=>accounts.saveAccountProfile(session,Number(profileRoute[1]),b));
+  if(profileRoute && req.method==='DELETE') return accountOp(b=>accounts.deleteAccountProfile(session,Number(profileRoute[1]),b));
+  const profile=accounts.activeProfile(session,url.searchParams.get('profile'));
+  const profileId=profile.id;
+  authorizeRest(session,profile,p,url,req.method);
 
   // ── library ──
   if (p === "/api/library") {
@@ -579,7 +639,7 @@ async function handle(req, res) {
     // Siehe Erklaerung in invoke.js/showOut.
     const shows = db.prepare("SELECT s.*, COUNT(DISTINCT CASE WHEN e.season > 0 THEN e.season END) seasons, COUNT(e.id) episodes FROM shows s LEFT JOIN episodes e ON e.show_id=s.id GROUP BY s.id ORDER BY s.title").all();
     const movies = db.prepare("SELECT * FROM movies ORDER BY title").all();
-    return json(res, { shows: shows.map(withArt), movies: movies.map(withArt) });
+    return json(res, { shows: filterMedia(profile,'show',shows).map(withArt), movies: filterMedia(profile,'movie',movies).map(withArt) });
   }
   let m;
   if ((m = p.match(/^\/api\/shows\/(\d+)$/))) {
@@ -594,7 +654,7 @@ async function handle(req, res) {
     }
     // Punkt 3: Kinofilme dieser Serie — die Handy-App zeigt sie als eigenen
     // Reiter neben den Staffeln und den Specials.
-    const movies = serienfilme.fuerSerie(show, eps).map(withArt);
+    const movies = filterMedia(profile,'movie',serienfilme.fuerSerie(show, eps)).map(withArt);
     return json(res, { show: withArt(show), seasons, movies });
   }
   if ((m = p.match(/^\/api\/movies\/(\d+)$/))) {
@@ -602,28 +662,14 @@ async function handle(req, res) {
     return movie ? json(res, withArt(movie)) : json(res, { error: "not found" }, 404);
   }
 
-  // ── profiles ──
-  if (p === "/api/profiles" && req.method === "GET") {
-    return json(res, listServerProfiles());
-  }
-  if ((p === '/api/profiles' && req.method === 'POST') || (/^\/api\/profiles\/\d+$/.test(p) && req.method === 'PATCH')) {
-    const body = await readBody(req);
-    try {
-      const result = saveServerProfile(req.method === 'PATCH' ? Number(p.split('/').pop()) : null, body);
-      void supabase.syncNow().catch(() => {});
-      return json(res,result);
-    } catch (e) {
-      return json(res, { error: String(e.message) }, 400);
-    }
-  }
-
   // ── progress ──
   if (p === "/api/progress" && req.method === "GET") {
-    return json(res, db.prepare("SELECT media_type mediaType, ref_id refId, position, duration, watched, updated_at updatedAt FROM progress WHERE profile_id = ?").all(profileId));
+    return json(res, filterRefs(profile,db.prepare("SELECT media_type mediaType, ref_id refId, position, duration, watched, updated_at updatedAt FROM progress WHERE profile_id = ?").all(profileId)));
   }
   if (p === "/api/progress" && req.method === "POST") {
     const b = await readBody(req);
     if (!["movie", "episode"].includes(b.mediaType) || !b.refId) return json(res, { error: "bad payload" }, 400);
+    requireMedia(profile,b.mediaType,b.refId);
     db.prepare(
       `INSERT INTO progress (profile_id, media_type, ref_id, position, duration, watched, updated_at) VALUES (?,?,?,?,?,?,?)
        ON CONFLICT(profile_id, media_type, ref_id) DO UPDATE SET position=excluded.position, duration=excluded.duration, watched=excluded.watched, updated_at=excluded.updated_at`,
@@ -647,7 +693,7 @@ async function handle(req, res) {
          ORDER BY pr.updated_at DESC LIMIT 20`,
       )
       .all(profileId);
-    return json(res, rows.map(withArt));
+    return json(res, filterRefs(profile,rows).map(withArt));
   }
   // "Zuletzt gesehen" — most recent progress rows (watched or in-progress)
   if (p === "/api/history") {
@@ -667,16 +713,17 @@ async function handle(req, res) {
          ORDER BY pr.updated_at DESC LIMIT 20`,
       )
       .all(profileId);
-    return json(res, rows.map(withArt));
+    return json(res, filterRefs(profile,rows).map(withArt));
   }
 
   // ── favorites / Meine Liste ──
   if (p === "/api/favorites" && req.method === "GET") {
-    return json(res, db.prepare("SELECT media_type mediaType, ref_id refId, added_at addedAt FROM favorites WHERE profile_id = ? ORDER BY added_at DESC").all(profileId));
+    return json(res, filterRefs(profile,db.prepare("SELECT media_type mediaType, ref_id refId, added_at addedAt FROM favorites WHERE profile_id = ? ORDER BY added_at DESC").all(profileId)));
   }
   if (p === "/api/favorites" && req.method === "POST") {
     const b = await readBody(req);
     if (!["movie", "show"].includes(b.mediaType) || !b.refId) return json(res, { error: "bad payload" }, 400);
+    requireMedia(profile,b.mediaType,b.refId);
     const existing = db.prepare("SELECT 1 FROM favorites WHERE profile_id=? AND media_type=? AND ref_id=?").get(profileId, b.mediaType, b.refId);
     if (existing) {
       recordFavorite(db,profileId,b.mediaType,b.refId,true);
@@ -690,6 +737,7 @@ async function handle(req, res) {
   // mark a whole movie/show (or single episode) watched / unwatched
   if (p === "/api/watched" && req.method === "POST") {
     const b = await readBody(req);
+    requireMedia(profile,b.mediaType==='season'?'show':b.mediaType,b.refId);
     const now = Date.now();
     const setOne = (mediaType, refId, dur) =>
       db.prepare(
@@ -866,6 +914,7 @@ async function handle(req, res) {
   if ((m = p.match(/^\/api\/hls\/s\/([a-f0-9]+)\/index\.m3u8$/))) {
     const s = sitzung(m[1]);
     if (!s) return res.writeHead(404).end("Sitzung abgelaufen");
+    requirePath(profile,s.pfad);
     const token = url.searchParams.get("token");
     const tq = token ? `?token=${encodeURIComponent(token)}` : "";
     try {
@@ -880,6 +929,7 @@ async function handle(req, res) {
   if ((m = p.match(/^\/api\/hls\/s\/([a-f0-9]+)\/([^/]+)$/))) {
     const s = sitzung(m[1]);
     if (!s) return res.writeHead(404).end("Sitzung abgelaufen");
+    requirePath(profile,s.pfad);
     return haeppchenSenden(res, s, m[2]);
   }
 
@@ -890,7 +940,7 @@ async function handle(req, res) {
     // über den Plattencache statt bei jedem Aufruf erneut ffmpeg zu starten
     const file = await makeThumb(row.path, Math.round(at), 480);
     if (!file) return res.writeHead(404).end();
-    res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=604800" });
+    res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "private, no-store" });
     return createReadStream(file).pipe(res);
   }
 
@@ -901,11 +951,15 @@ async function handle(req, res) {
     try {
       // Token durchreichen, damit Kommandos Bild-URLs bauen können, die ein
       // <img>-Tag auch bei gesetztem Passwort laden darf (kann keine Header).
+      const selected=authorizeInvoke(session,m[1],args);
       args.__token = bearerToken(req, url);
-      const result = await handleInvoke(m[1], args);
+      if(args.__privateSetting)return json(res,{result:null});
+      if((!session.is_admin||profile.is_child)&&m[1]==='scan_status')return json(res,{result:{running:false}});
+      if((!session.is_admin||profile.is_child)&&m[1]==='is_scanning')return json(res,{result:false});
+      const result = filterInvoke(selected,m[1],await handleInvoke(m[1], args));
       return json(res, { result: result === undefined ? null : result });
     } catch (e) {
-      return json(res, { error: String(e?.message || e) }, 400);
+      return json(res, { error: String(e?.message || e), code:e.code }, e.status || 400);
     }
   }
   // Einzelbild für die Zeitleisten-Vorschau (erzeugt + gecacht)
@@ -916,7 +970,7 @@ async function handle(req, res) {
     const w = Math.min(960, Math.max(80, parseInt(url.searchParams.get("w") || "320", 10) || 320));
     const file = await makeThumb(path, t, w);
     if (!file) return res.writeHead(404).end();
-    res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=604800" });
+    res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "private, no-store" });
     return createReadStream(file).pipe(res);
   }
   // Sprite-Blatt (Trickplay): EIN Bild mit allen Vorschaupositionen
@@ -926,7 +980,7 @@ async function handle(req, res) {
     const info = trickplayInfo(path);
     if (!info) return res.writeHead(404).end();
     const file = join(TRICK_DIR, info.file);
-    res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=2592000, immutable" });
+    res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "private, no-store" });
     return createReadStream(file).pipe(res);
   }
   // embedded text subtitles → WebVTT (browsers can only render VTT)
@@ -947,12 +1001,12 @@ async function handle(req, res) {
     if (isLocalRef(raw)) {
       const file = localRefPath(raw);
       if (!file || !isAllowedImage(file)) return res.writeHead(404).end();
-      res.writeHead(200, { "Content-Type": imageMime(file), "Cache-Control": "public, max-age=604800" });
+      res.writeHead(200, { "Content-Type": imageMime(file), "Cache-Control": "private, no-store" });
       return createReadStream(file).pipe(res);
     }
     const stream = await cachedImage(raw, url.searchParams.get("size") || "w342");
     if (!stream) return res.writeHead(404).end();
-    res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=2592000" });
+    res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "private, no-store" });
     return stream.pipe(res);
   }
 
@@ -1048,6 +1102,7 @@ async function handle(req, res) {
   // SEC-004: "Alle Geräte abmelden" — invalidiert JEDES gespeicherte Token
   // (verlorenes Handy / verkaufter TV-Stick), ohne das Passwort zu ändern.
   if (p === "/api/logout_all" && req.method === "POST") {
+    db.prepare('DELETE FROM account_sessions').run();
     tokens.clear();
     saveTokens();
     return json(res, { ok: true });
@@ -1066,8 +1121,8 @@ async function handle(req, res) {
 
 const server = createServer((req, res) => {
   handle(req, res).catch((e) => {
-    console.error("[http]", req.url, e);
-    if (!res.headersSent) json(res, { error: "server error" }, 500);
+    if (!e.status) console.error("[http]", new URL(req.url,"http://x").pathname, e.message);
+    if (!res.headersSent) json(res, { error: e.status?e.message:"server error",code:e.code }, e.status||500);
     else res.end();
   });
 });
@@ -1102,14 +1157,13 @@ supabase.startSupabaseLoop();
    Standard 30 Minuten; YouTubes Atom-Feed hat kein Kontingent, öfter wäre
    trotzdem nur unnötiger Verkehr. */
 const feedTakt = Math.max(300, parseInt(process.env.FEED_INTERVAL_SEC || "1800", 10)) * 1000;
-const feedsAbholen = () =>
-  void kanaele
-    .abholen()
-    .then((neu) => {
-      if (neu.length > 0) console.log(`[feeds] ${neu.length} neue Beiträge`);
-      return sendNewPosts(neu, kanaele.feedsLaden());
-    })
-    .catch((e) => console.warn("[feeds]", String(e)));
+const feedsAbholen = async () => {
+  const owners=db.prepare('SELECT id FROM accounts').all();
+  for (const {id} of owners) await accountContext.run({accountId:id},async()=>{
+    try { const posts=await kanaele.abholen(); await sendNewPosts(posts,kanaele.feedsLaden()); }
+    catch(e) { console.warn('[feeds] Abruf fehlgeschlagen',e.message); }
+  });
+};
 // Erster Abruf 20 s nach dem Start — nicht sofort, damit der Boot nicht auf
 // externe Server wartet.
 setTimeout(feedsAbholen, 20_000).unref();

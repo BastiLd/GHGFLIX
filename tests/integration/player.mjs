@@ -35,17 +35,23 @@ try {
   db.close();
   const moduleUrl=pathToFileURL(resolve("server/src/index.js")).href;
   server=spawn(process.execPath,["--input-type=module","-e",`process.on('message',m=>{if(m==='shutdown')process.emit('SIGTERM')});await import(${JSON.stringify(moduleUrl)});`],{
-    env:{...process.env,DATA_DIR:dir,PORT:String(port),HOST:"127.0.0.1",GHGFLIX_WEB_DIR:resolve("dist"),GHGFLIX_PASSWORD:"",BROWSE_ROOTS:dir,SCAN_INTERVAL_SEC:"99999"},
+    env:{...process.env,DATA_DIR:dir,PORT:String(port),HOST:"127.0.0.1",GHGFLIX_WEB_DIR:resolve("dist"),GHGFLIX_PASSWORD:"",GHGFLIX_ACCOUNT_SETUP_KEY:"playback-owner-key",BROWSE_ROOTS:dir,SCAN_INTERVAL_SEC:"99999"},
     stdio:["ignore","pipe","pipe","ipc"],windowsHide:true,
   });
   server.stdout.on("data",d=>logs+=d);server.stderr.on("data",d=>logs+=d);
   await expect.poll(async()=>{try{return (await fetch(base+"/api/ping")).ok;}catch{return false;}},{timeout:15000}).toBe(true);
+  const serverId=(await fetch(base+'/api/ping').then(r=>r.json())).id;
+  const setup=await fetch(base+'/api/accounts/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'playback@example.test',password:'playback-test-123',setupKey:'playback-owner-key'})});
+  assert.equal(setup.status,200);
   browser=await chromium.launch({headless:true,args:["--autoplay-policy=no-user-gesture-required"]});
   const errors=[];
   async function playbackCase([id,mode,profileId]) {
     const page=await browser.newPage({viewport:{width:1440,height:900}});
     page.on("pageerror",e=>errors.push(e.message));
-    await page.addInitScript((id)=>localStorage.setItem("ghgflix.profileId",String(id)),profileId);
+    const login=await fetch(base+'/api/accounts/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'playback@example.test',password:'playback-test-123'})}).then(r=>r.json());
+    assert.ok(login.token);
+    await fetch(base+'/api/accounts/select-profile',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+login.token},body:JSON.stringify({id:profileId})});
+    await page.addInitScript(({serverId,token})=>localStorage.setItem('ghgflix.account.'+serverId,token),{serverId,token:login.token});
     if(mode==="fragmented-mp4") await page.addInitScript(()=>{
       const native=HTMLMediaElement.prototype.canPlayType;
       HTMLMediaElement.prototype.canPlayType=function(type){return type.includes("mpegurl")?"":native.call(this,type);};
@@ -88,7 +94,12 @@ try {
       await expect.poll(()=>video.evaluate(v=>v.paused)).toBe(true);
       const target=Number(await bar.getAttribute("aria-valuenow"));
       await page.getByRole("button",{name:"Abspielen",exact:true}).click();
-      await expect.poll(async()=>Number(await bar.getAttribute("aria-valuenow")),{timeout:20000}).toBeGreaterThan(target+2);
+      try {
+        await expect.poll(async()=>Number(await bar.getAttribute("aria-valuenow")),{timeout:20000}).toBeGreaterThan(target+2);
+      } catch(error) {
+        console.error('STALLED',mode,await video.evaluate(v=>({time:v.currentTime,paused:v.paused,ready:v.readyState,network:v.networkState,error:v.error?.message,buffered:Array.from({length:v.buffered.length},(_,i)=>[v.buffered.start(i),v.buffered.end(i)]),url:new URL(v.src).pathname})));
+        throw error;
+      }
       await page.waitForTimeout(5000);
       const measured=Number(await bar.getAttribute("aria-valuenow"));
       assert.ok(Number.isFinite(measured) && measured>=0 && measured<=91);
@@ -97,7 +108,7 @@ try {
       console.log(`SOAK ${mode}: ${soakChecks} pause/seek/resume rounds, ${Math.round((Date.now()-soakStart)/1000)}s`);
     }
     // Validate a thumbnail from the real ffmpeg endpoint, not an image placeholder.
-    const thumb=await page.request.post(`${base}/api/invoke/media_thumbnail`,{data:{path:join(dir,id===1?"Direct.mp4":"Transcode.mkv"),timeSec:20,width:176}});
+    const thumb=await page.request.post(`${base}/api/invoke/media_thumbnail`,{headers:{Authorization:"Bearer "+login.token},data:{path:join(dir,id===1?"Direct.mp4":"Transcode.mkv"),timeSec:20,width:176}});
     assert.equal(thumb.status(),200);
     const payload=await thumb.json();
     assert.ok(payload.result,"thumbnail result missing");
@@ -111,7 +122,7 @@ try {
     await expect(video).toHaveCount(0);
     let saved;
     await expect.poll(async()=>{
-      const rows=await fetch(`${base}/api/progress?profile=${profileId}`).then(r=>r.json());
+      const rows=await fetch(`${base}/api/progress?profile=${profileId}`,{headers:{Authorization:"Bearer "+login.token}}).then(r=>r.json());
       assert.equal(rows.length,1,"another profile's playback must not leak into this profile");
       saved=rows[0];
       assert.equal(saved.refId,id);assert.equal(saved.mediaType,"movie");
@@ -122,7 +133,7 @@ try {
     await page.close();
     console.log(`PASS ${mode}: ${transport}, decoded frames, timeline and thumbnail`);
   }
-  const cases=[[1,"direct",1],[2,"automatic",2],[2,"fragmented-mp4",3]];
+  const cases=[[1,"direct",1],[2,"automatic",2],[2,"fragmented-mp4",3]].filter(c=>!process.env.GHGFLIX_PLAYBACK_CASE||c[1]===process.env.GHGFLIX_PLAYBACK_CASE);
   if(parallel) {
     const completed=await Promise.allSettled(cases.map(playbackCase));
     for(const result of completed) if(result.status==="rejected") throw result.reason;

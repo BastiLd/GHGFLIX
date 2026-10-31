@@ -14,7 +14,7 @@
  *  the chapter menu, intro skip and track menus keep working. */
 import * as native from "tauri-plugin-mpv-api";
 import { invoke } from "./backend";
-import { IS_TAURI, withToken } from "./platform";
+import { IS_TAURI, withToken, usesServer } from "./platform";
 
 type PropCb = (e: { name: string; data: unknown }) => void;
 
@@ -368,6 +368,10 @@ export async function destroy(): Promise<void> {
 
 export async function command(name: string, args: unknown[] = []): Promise<void> {
   if (IS_TAURI) {
+    if (name === "loadfile" && usesServer()) {
+      const info=await invoke<WebPlayInfo>("play_info",{path:String(args[0]??"")});
+      args=[withToken(info.directUrl),...args.slice(1)];
+    }
     await native.command(name, args as never);
     return;
   }

@@ -6,7 +6,7 @@ import { NAV } from "../../mobile/src/seitenleiste.js";
 import { Icon } from "../../mobile/src/Icons.js";
 
 /** Feste Schiene: Beim Fokuswechsel verschiebt sich die Mediathek nicht. */
-export function TVShell({ seite, aufSeite, zahlen, profilName, profilAvatar, children }) {
+export function TVShell({ seite, aufSeite, zahlen, profilName, profilAvatar, child = false, children }) {
   // Viele 1080p-TVs melden nur 960×540 Layoutpunkte. Auch dort müssen alle
   // Navigationspunkte samt Profil ohne Scrollen erreichbar bleiben.
   const { height } = useWindowDimensions();
@@ -16,7 +16,7 @@ export function TVShell({ seite, aufSeite, zahlen, profilName, profilAvatar, chi
       <View style={{ width: 88 * s, paddingVertical: 8 * s }}>
         <Text style={{ color: C.red, fontSize: 19 * s, fontWeight: "900", textAlign: "center", marginBottom: 3 }}>GHGFlix</Text>
         <Text style={{ color: C.muted, fontSize: 10, letterSpacing: 4, textAlign: "center", marginBottom: 18 * s }}>TV</Text>
-        {NAV.map((n, i) => (
+        {NAV.filter(n=>!child||!["channels","settings"].includes(n.id)).map((n, i) => (
           <FKnopf key={n.id} id={`nav:${n.id}`} bereich="nav" zeile={i} spalte={0}
             accessibilityLabel={n.text} onPress={() => aufSeite(n.id)}
             style={{ height: 54 * s, borderWidth: 2, borderColor: "transparent", borderRadius: 8, marginBottom: 5 * s, justifyContent: "center", alignItems: "center", backgroundColor: seite === n.id ? "#e5091422" : "transparent" }}

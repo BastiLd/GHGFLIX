@@ -1,3 +1,4 @@
+import {useAccount} from "../lib/accounts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderPlus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -27,6 +28,8 @@ import type { Movie, Show } from "../lib/types";
 
 export default function Home() {
   const navigate = useNavigate();
+  const session=useAccount(s=>s.session);
+  const managesLibrary=!session || (session.account.isAdmin&&!session.profile?.is_child);
   const qc = useQueryClient();
   const profileId = useStore((s) => s.profileId);
   const prefs = useUiPrefs();
@@ -34,7 +37,7 @@ export default function Home() {
   // one random draw per visit → the hero rotates instead of always showing the same title
   const [heroSeed, setHeroSeed] = useState(() => Math.floor(Math.random() * 100000));
 
-  const libs = useQuery({ queryKey: ["libraries"], queryFn: getLibraries });
+  const libs = useQuery({ queryKey: ["libraries"], queryFn: getLibraries,enabled:managesLibrary });
   const movies = useQuery({ queryKey: ["movies"], queryFn: listMovies });
   const shows = useQuery({ queryKey: ["shows"], queryFn: listShows });
   const cont = useQuery({ queryKey: ["continue", profileId], queryFn: () => continueWatching(profileId) });
@@ -139,7 +142,7 @@ export default function Home() {
     );
   }
 
-  if ((libs.data?.length ?? 0) === 0) {
+  if (managesLibrary && (libs.data?.length ?? 0) === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4">
         <EmptyState
@@ -157,8 +160,8 @@ export default function Home() {
   if (allMovies.length === 0 && allShows.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4">
-        <EmptyState title="Noch nichts in der Bibliothek" hint="Starte einen Scan, um deine Ordner einzulesen." />
-        <Button onClick={() => navigate("/settings")}>Zu den Einstellungen</Button>
+        <EmptyState title={session?.profile?.is_child?"Keine passenden Inhalte":"Noch nichts in der Bibliothek"} hint={managesLibrary?"Starte einen Scan, um deine Ordner einzulesen.":session?.profile?.is_child?"Für dieses Kinderprofil sind noch keine Titel mit passender Altersfreigabe vorhanden.":"Der Serverbesitzer kann Filme und Serien hinzufügen."} />
+        {managesLibrary&&<Button onClick={() => navigate("/settings")}>Zu den Einstellungen</Button>}
       </div>
     );
   }

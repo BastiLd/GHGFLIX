@@ -1,14 +1,16 @@
-import { IS_WEB, webToken } from "./platform";
+import { IS_WEB, webToken, usesServer } from "./platform";
+import { accountRequest } from './accounts';
 import { getSetting,setSetting } from "./api";
 import { initSupabase,getSession,listProfiles,createProfile,updateProfile,ensureCloudProfile } from "./supabase";
 import { loadServerConfig,serverProfileRequest } from "./serverSync";
 import { useStore } from "./store";
-export interface Profile { id:string; name:string; avatar:string|null; cloud?:boolean }
+export interface Profile { id:string; name:string; avatar:string|null; cloud?:boolean;is_child?:number;max_age?:number;has_pin?:number }
 async function request(path:string,method="GET",body?:unknown){
   const r=await fetch(path,{method,headers:{"Content-Type":"application/json",Authorization:`Bearer ${webToken()}`},body:body?JSON.stringify(body):undefined});
   const data=await r.json();if(!r.ok)throw Error(data.error||"Profile konnten nicht geladen werden.");return data;
 }
 export async function availableProfiles():Promise<Profile[]>{
+  if(usesServer())return (await accountRequest<Profile[]>('/api/profiles')).map(p=>({...p,id:String(p.id)}));
   if(IS_WEB)return (await request('/api/profiles')).map((p:Profile)=>({...p,id:String(p.id),cloud:!!(p as unknown as {supabase_id:string}).supabase_id}));
   const cfg=await loadServerConfig();
   if(cfg.enabled){
@@ -24,8 +26,9 @@ export async function availableProfiles():Promise<Profile[]>{
   }
   return [{id:'local',name:(await getSetting('local_profile_name'))||state.profileName,avatar:(await getSetting('local_profile_avatar'))||null}];
 }
-export async function saveProfile(id:string|null,name:string,avatar:string|null):Promise<void>{
+export async function saveProfile(id:string|null,name:string,avatar:string|null,options:{password?:string;pin?:string;is_child?:boolean;max_age?:number}={}):Promise<void>{
   if(!name.trim()||name.trim().length>40)throw Error('Bitte einen Namen mit 1 bis 40 Zeichen eingeben.');
+  if(usesServer()){await accountRequest(id?'/api/profiles/'+id:'/api/profiles',{name,avatar,...options},id?'PATCH':'POST');return;}
   if(IS_WEB){await request(id?'/api/profiles/'+id:'/api/profiles',id?'PATCH':'POST',{name,avatar});return;}
   if((await loadServerConfig()).enabled){
     const ps=await serverProfileRequest<{id:number;name:string}[]>('/api/profiles');
@@ -42,6 +45,9 @@ export async function saveProfile(id:string|null,name:string,avatar:string|null)
     if(id!=='local')throw Error('Für weitere Profile bitte zuerst anmelden.');
     await setSetting('local_profile_name',name);await setSetting('local_profile_avatar',avatar||'');
   }
+}
+export async function deleteProfile(id:string,password:string){
+  await accountRequest('/api/profiles/'+id,{password},'DELETE');
 }
 export async function refreshActiveProfile(){
   const profiles=await availableProfiles();const state=useStore.getState();

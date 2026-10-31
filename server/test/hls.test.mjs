@@ -136,11 +136,16 @@ if (!bereit) {
 }
 
 // Token besorgen
-const token = (await (await hole("/api/login", {
+let token = (await (await hole("/api/login", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ password: PASSWORT }),
 })).json()).token;
+
+const {readFileSync}=await import('node:fs');
+const account=await (await hole('/api/accounts/setup',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({email:'hls@example.test',password:'hls-test-password',setupKey:readFileSync(join(DATEN,'account-setup-key'),'utf8')})})).json();
+token=account.token;
+await hole('/api/accounts/select-profile',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({id:1})});
 
 // Film direkt in die Datenbank legen — der Scanner ist hier nicht das Thema.
 let filmId = null;

@@ -1,3 +1,4 @@
+import {useAccount} from "../lib/accounts";
 import { getVersion, listen } from "../lib/backend";
 import clsx from "clsx";
 import { Film, Heart, House, RefreshCw, Rss, ScrollText, Search, Settings as SettingsIcon, Tv, User } from "lucide-react";
@@ -40,6 +41,7 @@ function formatEta(sec: number): string {
 
 export function Layout() {
   const navigate = useNavigate();
+  const account=useAccount(s=>s.session);
   const location = useLocation();
   const profileAvatar = useStore(s => s.profileAvatar);
   useEffect(() => {
@@ -67,6 +69,7 @@ export function Layout() {
     queryKey: ["feedUnread"],
     queryFn: () => feedUnread(),
     refetchInterval: 60_000,
+    enabled: !account?.profile?.is_child,
   });
   const [protokollOffen, setProtokollOffen] = useState(false);
   /* Nur FEHLER zeigen einen Zaehler — bei jedem Hinweis zu blinken waere Lärm. */
@@ -109,7 +112,7 @@ export function Layout() {
   const [, tick] = useState(0); // forces a re-render every second for a live ETA
 
   useEffect(() => {
-    if (!autoScanned) {
+    if (!autoScanned && (!account || account.account.isAdmin) && !account?.profile?.is_child) {
       autoScanned = true;
       // a one-time forced scan (set by the backend auto-repair) always runs,
       // even if the user turned auto-scan off — otherwise the freshly-wiped
@@ -210,7 +213,7 @@ export function Layout() {
         </div>
 
         <nav className={clsx("flex-1 space-y-1", compact ? "px-2" : "px-3")}>
-          {NAV.map((item) => (
+          {NAV.filter(item=>!account?.profile?.is_child || !["/kanaele","/settings"].includes(item.to)).map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -336,13 +339,13 @@ export function Layout() {
                 </div>
               );
             })()}
-            <button
+            {(!account || account.account.isAdmin) && !account?.profile?.is_child && <button
               onClick={rescan}
               className="p-2 rounded-lg bg-ghg-surface2 hover:bg-ghg-elevated text-ghg-text transition"
               title="Bibliothek scannen"
             >
               <RefreshCw className="w-4 h-4" />
-            </button>
+            </button>}
             {/* Meldungs-Protokoll: die kurzen Meldungen unten rechts sind weg,
                 bevor man sie lesen oder kopieren kann. Hier stehen sie alle. */}
             <button

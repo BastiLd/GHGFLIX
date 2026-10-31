@@ -23,7 +23,10 @@ export function installFixtures() {
     const p = url.pathname, body = opts.body ? JSON.parse(opts.body) : {};
     if (p === "/api/library" && new URLSearchParams(location.search).get("fault") === "library") return new Response(JSON.stringify({ error: "Vorschau: Server vorübergehend nicht erreichbar." }), { status: 503 });
     let data;
-    if (p === "/api/ping") data = { app: "ghgflix-server", version: "2.8.0", auth: false, server_id: "preview" };
+    if (p === "/api/ping") data = { app: "ghgflix-server", version: "2.8.0", auth: false, accounts:true, id:"preview", server_id: "preview" };
+    else if(p==='/api/accounts/me')data={account:{id:1,email:'preview@example.test',isAdmin:true},profile:{id:1,name:'Alex',avatar:null,is_child:0,max_age:12}};
+    else if(p==='/api/accounts/status')data={required:true,setupNeeded:false,registration:true};
+    else if(p==='/api/accounts/select-profile')data={id:body.id,name:body.id===1?'Alex':'Familie',avatar:null,is_child:0,max_age:12};
     else if (p === "/api/library") data = library;
     else if (p === "/api/profiles") data = [{ id: 1, name: "Alex", color: "#e50914" }, { id: 2, name: "Familie", color: "#477cc2" }];
     else if (p === "/api/continue" || p === "/api/history") data = library.movies.slice(0, 6).map((m) => ({ ...m, mediaType: "movie", refId: m.id, position: 12, duration: 90 }));

@@ -30,6 +30,6 @@ export default defineConfig({
   },
   define: { "process.env.EXPO_PUBLIC_APP_VARIANT": "globalThis.__GHG_DEVICE__" },
   optimizeDeps: { noDiscovery: true, include: ["react", "react/jsx-runtime", "react-dom/client", "react-native-web"], esbuildOptions: { loader: { ".js": "jsx" } } },
-  server: { fs: { allow: [path.resolve(root, ".." )] }, proxy: { "/api": { target: "http://127.0.0.1:8490", changeOrigin: true } } },
+  server: { fs: { allow: [path.resolve(root, ".." )] }, proxy: { "/api": { target: process.env.GHGFLIX_TEST_SERVER_URL || "http://127.0.0.1:8490", changeOrigin: true } } },
   build: { rollupOptions: { input: { app: path.join(root, "app.html") } } },
 });

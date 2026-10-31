@@ -54,10 +54,10 @@ export const NAV = [
  * Der Fokus-Bereich heißt weiterhin "nav", damit die Fernbedienung dieselbe
  * Logik benutzt — nur die Richtung dreht sich: hier zählt die SPALTE.
  */
-export function Unterleiste({ seite, aufSeite, zahlen, handy = false }) {
+export function Unterleiste({ seite, aufSeite, zahlen, handy = false, child = false }) {
   return (
     <View style={st.unten}>
-      {NAV.filter((n) => !handy || n.id !== "list").map((n, i) => {
+      {NAV.filter((n) => (!handy || n.id !== "list") && (!child || !["channels","settings"].includes(n.id))).map((n, i) => {
         const aktiv = seite === n.id;
         return (
           <FKnopf

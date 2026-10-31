@@ -1,3 +1,4 @@
+import { currentAccountId } from './account-context.js';
 import webpush from "web-push";
 import { openDb } from "./db.js";
 import { sendNativePosts } from "./native-push.js";
@@ -7,6 +8,7 @@ const configured = () => /^(mailto:[^\s@]+@[^\s@]+|https:\/\/[^\s]+)$/.test(cont
 function database() {
   const db = openDb();
   db.exec("CREATE TABLE IF NOT EXISTS push_keys (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS push_devices (endpoint TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  if(!db.prepare("PRAGMA table_info(push_devices)").all().some(c=>c.name==='account_id')) db.exec("ALTER TABLE push_devices ADD COLUMN account_id INTEGER NOT NULL DEFAULT 0");
   return db;
 }
 function keys() {
@@ -18,7 +20,7 @@ function keys() {
   return value;
 }
 export function pushStatus(endpoint = null) {
-  const registered = typeof endpoint === "string" && !!database().prepare("SELECT 1 FROM push_devices WHERE endpoint=?").get(endpoint);
+  const registered = typeof endpoint === "string" && !!database().prepare("SELECT 1 FROM push_devices WHERE endpoint=? AND account_id=?").get(endpoint,currentAccountId());
   return { configured: configured(), publicKey: configured() ? keys().publicKey : null, registered };
 }
 export function validateSubscription(subscription) {
@@ -35,11 +37,11 @@ export function subscribePush(subscription) {
   const clean = validateSubscription(subscription);
   const db = database();
   if (!db.prepare("SELECT 1 FROM push_devices WHERE endpoint=?").get(clean.endpoint) && db.prepare("SELECT COUNT(*) AS n FROM push_devices").get().n >= 100) throw new Error("Zu viele Push-Geräte");
-  db.prepare("INSERT OR REPLACE INTO push_devices VALUES (?, ?)").run(clean.endpoint, JSON.stringify(clean));
+  db.prepare("INSERT OR REPLACE INTO push_devices(endpoint,value,account_id) VALUES (?, ?, ?)").run(clean.endpoint, JSON.stringify(clean),currentAccountId());
   return true;
 }
 export function unsubscribePush(endpoint) {
-  database().prepare("DELETE FROM push_devices WHERE endpoint=?").run(String(endpoint));
+  database().prepare("DELETE FROM push_devices WHERE endpoint=? AND account_id=?").run(String(endpoint),currentAccountId());
   return true;
 }
 export async function sendNewPosts(posts, feeds, send = webpush.sendNotification.bind(webpush)) {
@@ -55,7 +57,7 @@ async function sendWebPosts(posts, feeds, send) {
   const db = database();
   const payload = JSON.stringify({ title: "GHGFlix", body: `${count} neue Beiträge in deinen Kanälen`, url: "/#/kanaele" });
   const vapidDetails = { subject: contact(), ...keys() };
-  for (const row of db.prepare("SELECT value FROM push_devices").all()) {
+  for (const row of db.prepare("SELECT value FROM push_devices WHERE account_id=?").all(currentAccountId())) {
     const subscription = JSON.parse(row.value);
     try { await send(subscription, payload, { vapidDetails, TTL: 3600, timeout: 10000 }); }
     catch (e) {

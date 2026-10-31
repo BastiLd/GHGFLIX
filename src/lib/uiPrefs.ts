@@ -159,18 +159,23 @@ function serialize(v: UiPrefs[keyof UiPrefs]): string {
 
 interface UiPrefsStore extends UiPrefs {
   loaded: boolean;
+  reset: () => void;
   load: () => Promise<void>;
   setPref: <K extends keyof UiPrefs>(k: K, v: UiPrefs[K]) => void;
 }
 
+let loadGeneration = 0;
 export const useUiPrefs = create<UiPrefsStore>((set, get) => ({
   ...DEFAULT_PREFS,
   loaded: false,
+  reset: () => { loadGeneration++; set({...DEFAULT_PREFS,loaded:false}); },
 
   load: async () => {
     if (get().loaded) return;
+    const generation=loadGeneration;
     const keys = Object.keys(DEFAULT_PREFS) as (keyof UiPrefs)[];
     const values = await Promise.all(keys.map((k) => getSetting(keyOf(k)).catch(() => null)));
+    if(generation!==loadGeneration)return;
     const patch: Partial<UiPrefs> = {};
     keys.forEach((k, i) => {
       (patch as Record<string, unknown>)[k] = parse(k, values[i]);

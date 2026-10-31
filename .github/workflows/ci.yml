@@ -22,6 +22,10 @@ jobs:
       - name: Player- und Kanalregressionen
         run: |
           npm test
+          node server/test/account-recovery.test.mjs
+          node server/test/account-isolation.test.mjs
+          node server/test/accounts.test.mjs
+          node server/test/google-auth.test.mjs
           npm run test:mobile:channels
           npm test --prefix mobile
           node server/test/feed-races.test.mjs

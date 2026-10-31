@@ -179,7 +179,7 @@ console.log("\n── Der komplette Ablauf, wie am Gerät ───────�
   const mitToken = await hole("/api/library", {
     headers: { Authorization: "Bearer " + fertig.token },
   });
-  pruefe("und mit diesem Token geht /api/library auf", mitToken.status === 200);
+  pruefe("Server-Kopplung ersetzt keine persönliche Anmeldung", mitToken.status === 401);
 }
 
 console.log("\n── Der APK-Block bleibt geschützt ──────────────────────────");

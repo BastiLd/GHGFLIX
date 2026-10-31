@@ -139,6 +139,7 @@ export function Modal({
           "bg-ghg-surface border border-ghg-line rounded-2xl shadow-2xl w-full max-h-[85vh] overflow-hidden flex flex-col pop-in",
           wide ? "max-w-3xl" : "max-w-lg",
         )}
+        role="dialog" aria-modal="true" aria-label={title}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-ghg-line shrink-0">

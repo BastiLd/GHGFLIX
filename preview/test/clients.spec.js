@@ -188,6 +188,7 @@ test("TV: Sprachmenü passt bei 960x540, kein Untertitel bleibt erklärt", async
   await expect(page.getByText("Weiterschauen", { exact: true })).toBeVisible();
   await key(page, "ArrowRight"); await key(page, "Enter");
   await page.getByRole("button", { name: "Sprache & Untertitel", exact: true }).click();
+  await expect(selected(page)).toHaveAccessibleName('Audio: Deutsch, ausgewählt');
   await key(page, "ArrowRight"); await visibleFocus(page);
   await expect(page.getByText("Für diesen Titel sind keine Untertitel vorhanden.")).toBeVisible();
   await key(page, "ArrowDown"); await expect(selected(page)).toContainText("Darstellung"); await visibleFocus(page);
