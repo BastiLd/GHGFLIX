@@ -5,19 +5,26 @@
 name: Publish server image
 
 on:
-  push:
-    branches: [main, feature/zimaos-docker-server]
-    paths: ["server/**", "src/**", "public/**", "index.html", "package.json", "vite.config.ts", ".github/workflows/docker.yml"]
-  workflow_dispatch:
+  workflow_run:
+    workflows: [Checks]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: ghgflix-server-image
+  cancel-in-progress: false
 
 jobs:
   docker:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       # Die Versionsnummer wird AUS server/package.json gelesen, nicht hier
       # eingetippt. Vorher stand hier fest "2.3.2", waehrend der Server im Code
@@ -55,7 +62,8 @@ jobs:
           push: true
           # amd64 for ZimaBoard/ZimaCube, arm64 for Pi & ARM-NAS
           platforms: linux/amd64,linux/arm64
+          build-args: GHGFLIX_BUILD_SHA=${{ github.event.workflow_run.head_sha }}
           tags: |
             ghcr.io/bastild/ghgflix-server:latest
             ghcr.io/bastild/ghgflix-server:${{ steps.version.outputs.v }}
-            ghcr.io/bastild/ghgflix-server:${{ github.sha }}
+            ghcr.io/bastild/ghgflix-server:${{ github.event.workflow_run.head_sha }}

@@ -36,7 +36,7 @@ const SERVER_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const WEBAPP_DIR = process.env.GHGFLIX_WEB_DIR ? resolve(process.env.GHGFLIX_WEB_DIR) : join(SERVER_ROOT, "webapp");
 const LEGACY_DIR = join(SERVER_ROOT, "web");
 const WEB_DIR = existsSync(join(WEBAPP_DIR, "index.html")) ? WEBAPP_DIR : LEGACY_DIR;
-const VERSION = "3.6.1";
+const VERSION = "3.6.2";
 
 const db = openDb();
 accounts.initializeAccounts();
@@ -348,7 +348,7 @@ function serveStatic(res, urlPath) {
   }
   res.writeHead(200, {
     "Content-Type": STATIC_MIME[extname(file)] || "application/octet-stream",
-    "Cache-Control": ["/index.html", "/sw.js", "/manifest.webmanifest"].includes(rel) ? "no-cache" : "public, max-age=3600",
+    "Cache-Control": ["/index.html", "/sw.js", "/manifest.webmanifest", "/build-info.json"].includes(rel) ? "no-cache" : "public, max-age=3600",
   });
   createReadStream(file).pipe(res);
 }
@@ -388,13 +388,13 @@ async function handle(req, res) {
   // ── App-Verteilung: Installationsseite + APK-Download ──────────────────────
   // Bewusst OHNE Anmeldung erreichbar: am Fernseher tippt man die Adresse in
   // die "Downloader"-App ein, die kein Login-Formular anzeigen kann.
-  if (p === "/app" || p === "/install") {
+  if (p === "/app" || p === "/install" || p === "/api/app") {
     const file = join(LEGACY_DIR, "install.html");
     if (!existsSync(file)) return res.writeHead(404).end();
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
     return createReadStream(file).pipe(res);
   }
-  if (p === "/apk" || p === "/GHGFlix.apk" || p === "/ghgflix.apk") {
+  if (p === "/apk" || p === "/GHGFlix.apk" || p === "/ghgflix.apk" || p === "/api/apk/download") {
     const file = apkPath();
     if (!file) {
       res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
@@ -420,7 +420,7 @@ async function handle(req, res) {
       bytes: st.size,
       sha256: apkHash(),
       modified: new Date(st.mtimeMs).toLocaleDateString("de-DE"),
-      url: "/apk",
+      url: "/api/apk/download",
       canUpload: !!password(),
     });
   }
@@ -450,7 +450,7 @@ async function handle(req, res) {
   }
 
   /* Die Seite, die das Handy nach dem Scannen oeffnet. */
-  if (p === "/koppeln") {
+  if (p === "/koppeln" || p === "/api/pair/page") {
     if (req.method === "POST") {
       const body = await readBody(req).catch(() => ({}));
       const code = String(body.code || "").toUpperCase().trim();

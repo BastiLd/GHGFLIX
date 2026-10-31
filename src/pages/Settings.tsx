@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getVersion, invoke, openDialog, openUrl, saveDialog, webDownload, webPickedFile } from "../lib/backend";
+import { invoke, openDialog, saveDialog, webDownload, webPickedFile } from "../lib/backend";
 import { IS_WEB, webToken } from "../lib/platform";
 import {
   BarChart3,
@@ -61,6 +61,8 @@ import { ThemeStore } from "../components/ThemeStore";
 import { FolderScanDialog, IgnoredFilesList } from "../components/FolderScanDialog";
 import ZuordnungDialog from "../components/ZuordnungDialog";
 import { useAccount } from "../lib/accounts";
+import { AppUpdates } from "../components/AppUpdates";
+import { appVersion as version } from "../lib/updates";
 
 type TabId =
   | "allgemein"
@@ -330,9 +332,7 @@ function PersonalSettings() {
       <PrefSelect k="audioLangPref" label="Bevorzugte Sprache" options={[["de-en","Deutsch, dann Englisch"],["en-de","Englisch, dann Deutsch"],["file","Vorgabe der Datei"]]}/>
     </div></Section>
     {!IS_WEB&&<ServerSyncSection/>}
-    <Section title="App aktualisieren" desc={IS_WEB?'Die Website wird zusammen mit deinem Server aktualisiert. Danach die Seite neu laden.':'Das neue Windows-Setup über die vorhandene Installation ausführen. Eine vorherige Deinstallation ist nicht nötig.'}>
-      <Button variant="ghost" onClick={()=>void openUrl('https://github.com/BastiLd/GHGFLIX/releases/latest').catch(()=>{})}>Aktuelle Downloads öffnen</Button>
-    </Section>
+    <Section title="App aktualisieren"><AppUpdates /></Section>
   </div>;
 }
 
@@ -380,49 +380,11 @@ function FullSettings() {
   const [smoothing, setSmoothing] = useState(false);
   const [mpvUserConfig, setMpvUserConfig] = useState(false);
   const [autoMatch, setAutoMatch] = useState(true);
-  const [version, setVersion] = useState("");
   const [tools, setTools] = useState<ToolsReport | null>(null);
   const [toolsBusy, setToolsBusy] = useState(false);
   const [cacheBytes, setCacheBytes] = useState<number | null>(null);
   const [accent, setAccent] = useState<string>(() => loadAccent() ?? "#e50914");
-  const [updateInfo, setUpdateInfo] = useState<string | null>(null);
-  const updateCheckPref = useUiPrefs((s) => s.updateCheck);
-
-  const checkUpdates = async (silent = false) => {
-    try {
-      const res = await fetch("https://api.github.com/repos/BastiLd/GHGFLIX/releases/latest", {
-        headers: { Accept: "application/vnd.github+json" },
-      });
-      if (!res.ok) throw new Error(`GitHub: ${res.status}`);
-      const data = (await res.json()) as { tag_name?: string; html_url?: string };
-      const latest = (data.tag_name || "").replace(/^v/i, "");
-      const cur = version || "0.0.0";
-      const newer = latest && latest.localeCompare(cur, undefined, { numeric: true }) > 0;
-      setUpdateInfo(
-        newer
-          ? `Update verfügbar: v${latest} (installiert: v${cur})`
-          : latest
-            ? `Du bist aktuell (v${cur}).`
-            : "Keine Releases gefunden.",
-      );
-      if (newer && !silent) toast(`Update v${latest} verfügbar – siehe GitHub-Releases`, "info");
-    } catch (e) {
-      if (!silent) toast(`Update-Prüfung fehlgeschlagen: ${e}`, "error");
-      setUpdateInfo(null);
-    }
-  };
-
   const [tab, setTab] = useState<TabId>("allgemein");
-
-  useEffect(() => {
-    getVersion().then(setVersion).catch(() => {});
-  }, []);
-
-  // silent update check when opening the settings (if enabled)
-  useEffect(() => {
-    if (version && updateCheckPref) void checkUpdates(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version]);
 
   useEffect(() => {
     (async () => {
@@ -913,23 +875,7 @@ function FullSettings() {
             </div>
           </Section>
 
-          <Section title="Über GHGFlix & Updates" desc="Version, Projektseite und Update-Prüfung gegen GitHub-Releases.">
-            <div className="flex items-center gap-3 flex-wrap mb-3">
-              <span className="text-sm">
-                Version: <span className="font-mono font-semibold">{version || "…"}</span>
-              </span>
-              <Button variant="ghost" onClick={() => void openUrl("https://github.com/BastiLd/GHGFLIX").catch(() => {})}>
-                GitHub öffnen
-              </Button>
-              <Button variant="ghost" onClick={() => void checkUpdates(false)}>
-                Auf Updates prüfen
-              </Button>
-            </div>
-            <Button variant="ghost" onClick={()=>void openUrl('https://github.com/BastiLd/GHGFLIX/releases/latest').catch(()=>{})}>Aktuelle Downloads öffnen</Button>
-            <p className="text-sm text-ghg-muted my-3">{IS_WEB?'Die Website wird mit dem GHGFlix-Server aktualisiert. Danach die Seite neu laden.':'Zum Aktualisieren das neue Windows-Setup über die vorhandene Installation ausführen. Eine vorherige Deinstallation ist nicht nötig. Der Server wird separat aktualisiert.'}</p>
-            {updateInfo && <p className="text-sm text-ghg-muted mb-3">{updateInfo}</p>}
-            <PrefToggle k="updateCheck" label="Beim Öffnen der Einstellungen automatisch auf Updates prüfen" />
-          </Section>
+          <Section title="Über GHGFlix & Updates"><AppUpdates /></Section>
         </>
       )}
 

@@ -19,6 +19,8 @@
     "core:window:allow-set-focus",
     "opener:default",
     "dialog:default",
+    "updater:default",
+    "process:allow-restart",
     "mpv:default"
   ]
 }

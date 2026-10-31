@@ -16,22 +16,36 @@ Einmalige Besitzer-Einrichtung und optionales Google: [Accounts](ACCOUNTS.md). D
 
 ## Die WebHafen-Felder aus dem Nutzerbericht
 
-GHGFlix liefert Website, Bilder und Video-Streams über seinen eigenen laufenden Server aus. WebHafen leitet den gesamten Website-Port an diesen Dienst weiter.
+Ab 3.6.2 kann WebHafen die **fertig gebaute Website automatisch aus GitHub** laden. Erfolgreiche Prüfungen des Quellbranches `main` veröffentlichen ausschließlich die öffentlichen Website-Dateien im Branch `web`, Ordner `site`. WebHafen liefert diese Dateien aus und leitet `/api/` an den bestehenden GHGFlix-Server weiter. Persönliche Daten, Passwörter, Bibliothek und Filme werden nicht auf GitHub kopiert.
 
 | Feld | Eintrag |
 | --- | --- |
 | Name | `GHGFLIX` |
-| Typ | **Weiterleitung — ganzer Port geht an eine andere Anwendung** |
+| Typ | **Statisch — HTML/CSS/JS** |
 | API-Ziel | `192.168.68.10:8484` |
 | Port | **Automatisch (nächster freier)**; bei vorhandener Website den zugeteilten freien Port beibehalten |
 | Website aktiv | Ein |
-| Zusätzlich unter `/s/ghgflix/` | Aus; dieser Alias ist nur für statische Websites |
+| Zusätzlich unter `/s/ghgflix/` | Aus; GHGFlix verwendet den eigenen Website-Port/die eigene Adresse mit `/api/` |
 | Eigene Adresse | Bestehende von WebHafen erzeugte Tailscale-Adresse beibehalten; sonst leer lassen oder über **Create Domain using Tailscale** erzeugen |
-| GitHub · Website-Updates | Nicht verknüpfen; Konto, Repository, Website-Ordner, Dateiauswahl und Token bleiben leer. Der Branch `main` allein bewirkt nichts. |
-| Automatisch nach Website-Updates suchen | Für diese Weiterleitung nicht benötigt; aus |
-| Neue Website-Versionen automatisch installieren | Aus |
+| GitHub-Konto / Organisation | `BastiLd` |
+| Repository | `GHGFLIX` |
+| Branch | `web` |
+| Website-Ordner im Repository | `site` |
+| Dateien / Unterordner innerhalb des Website-Ordners | Leer lassen = gesamter Ordner `site` |
+| GitHub-Token | Leer lassen; das Repository ist öffentlich |
+| Automatisch nach Website-Updates suchen | **Ein** |
+| Prüfintervall | **5 Minuten** (15 Minuten sind ebenfalls möglich) |
+| Neue Website-Versionen automatisch installieren | **Ein** |
 
-Bei einer schon angelegten statischen Website die **Grundeinstellungen** auf Weiterleitung und obiges API-Ziel ändern, dann **Einstellungen speichern**. Keine Website-Dateien hochladen und keinen Quellcode-Ordner als fertige Website auswählen. Die GitHub-Dateiübernahme baut keine GHGFlix-App und aktualisiert keinen laufenden Container.
+1. Den GHGFlix-Server einmalig mindestens auf **3.6.2** aktualisieren; Datenablage und Konfiguration erhalten. Das stellt auch die neuen Proxy-Wege für TV-Kopplung und APK-Downloads bereit.
+2. In WebHafen **Grundeinstellungen → Statisch**, API-Ziel wie oben, **Einstellungen speichern**.
+3. Obige GitHub-Felder eintragen, **Verbindung speichern & prüfen**, danach **Änderungen ansehen**.
+4. Das **erste Update einmal manuell übernehmen**; falls WebHafen nach dem Ersetzen seiner Platzhalter-Datei fragt, die angezeigte Vorschau prüfen und bestätigen. Erst nach dieser Erstübernahme installiert WebHafen weitere Versionen automatisch.
+5. Im Status muss eine installierte GitHub-Revision erscheinen. Website öffnen und `/api/ping` prüfen. Danach werden neue erfolgreiche Builds innerhalb des gewählten Intervalls übernommen. Bei lokalen Dateikonflikten hält WebHafen an und zeigt den Fehler; seine Rücksicherung bleibt nutzbar.
+
+`main` enthält Quellcode und wird nicht direkt als Website importiert. Der Branch `web` enthält die lauffähige Ausgabe einschließlich `index.html`, Assets und `build-info.json`. Ein geöffneter Browser zeigt bei einem neuen Build einen Updatehinweis; **Website neu laden** übernimmt ihn ohne Abmeldung. Laufende Wiedergabe wird nicht automatisch unterbrochen.
+
+**Server-Updates sind getrennt:** GitHub baut nach erfolgreichen Prüfungen zusätzlich `ghcr.io/bastild/ghgflix-server:latest`. WebHafens Datei-Updater startet keinen Docker-Container neu. Deshalb aktualisiert die Einstellung automatisch die Website, nicht den Serverdienst auf dem NAS. Falls eine zukünftige Website eine neuere API benötigt, wird das als notwendiges Serverupdate angezeigt.
 
 Der Server ist im LAN direkt unter `http://192.168.68.10:8484/` erreichbar. Read-only-Prüfung am 31.10.2026 vor diesem Patch: HTTP 200, `/api/ping` meldet **2.8.0**, Passwortschutz an und noch keine Account-Fähigkeit. Dieser Stand muss zuerst aktualisiert werden. Der WebHafen-Proxy wird durch bloßes Ändern des API-Ziels keinen alten Server aktualisieren.
 
@@ -42,15 +56,19 @@ Tailscale bleibt privat: Die erzeugte Adresse funktioniert für berechtigte Ger�
 ### Server / Website auf ZimaOS
 
 1. Bestehende GHGFlix-Datenablage sichern. Container-Konfiguration, Bibliotheks-/Daten-Volumes und vorhandene Passwörter/Schlüssel beibehalten; keinen leeren neuen Datenordner zuweisen.
-2. In den Einstellungen der vorhandenen GHGFlix-App das Image auf `ghcr.io/bastild/ghgflix-server:3.6.1` stellen und das neue Image laden/den Container damit neu erstellen lassen. Das genaue ZimaOS-Menü hängt von der installierten Version ab. Ein bloßer Neustart des alten Containers lädt kein neues Image.
-3. `http://192.168.68.10:8484/api/ping` aufrufen: Version **3.6.1** und `accounts: true` müssen sichtbar sein. Erst dann ist der Server tatsächlich aktualisiert.
+2. In den Einstellungen der vorhandenen GHGFlix-App das Image auf `ghcr.io/bastild/ghgflix-server:3.6.2` stellen und das neue Image laden/den Container damit neu erstellen lassen. Das genaue ZimaOS-Menü hängt von der installierten Version ab. Ein bloßer Neustart des alten Containers lädt kein neues Image.
+3. `http://192.168.68.10:8484/api/ping` aufrufen: Version **3.6.2** und `accounts: true` müssen sichtbar sein. Erst dann ist der Server tatsächlich aktualisiert.
 4. Website neu laden, Server-Passwort eingeben und den Besitzer-Account mit dem Einrichtungsschlüssel anlegen. Danach WebHafen-Weiterleitung testen.
 
 Die Veröffentlichung eines Images auf GitHub installiert es nicht automatisch auf dem NAS. In dieser Änderung wird der laufende Nutzer-Server nicht verändert.
 
 ### Windows
 
-Die neue `GHGFlix_3.6.1_x64-setup.exe` aus den Releases ausführen und über die vorhandene Installation installieren. Vorher GHGFlix schließen. Möglichst denselben Installationsweg wie bisher benutzen (EXE oder MSI). Nicht vorher deinstallieren oder die App-Daten löschen. Unter **Einstellungen → Allgemein → Über GHGFlix & Updates** findest du Update-Prüfung und **Aktuelle Downloads öffnen**. Ein vollautomatischer Windows-Updater ist derzeit nicht eingebaut.
+Die Version **3.6.2 mit Updater einmal über die vorhandene Installation installieren**. Vorher GHGFlix schließen; denselben Installationsweg wie bisher benutzen (EXE oder MSI), nicht vorher deinstallieren oder App-Daten löschen. Danach: **Einstellungen → Allgemein → Über GHGFlix & Updates → Auf Updates prüfen → Herunterladen & aktualisieren**. Auch persönliche Accounts haben diese Updatefunktionen in ihren Einstellungen.
+
+Bei aktivierter automatischer Prüfung wird nach dem Anmelden und während der Nutzung regelmäßig geprüft. Installation/Neustart erfolgen erst nach dem Klick; Player und Mini-Player müssen vorher geschlossen werden. Der Updater prüft signierte Pakete und verwendet für MSI-/EXE-Installationen den passenden Installer. Eine nicht erreichbare Updatequelle wird als Fehler angezeigt, nicht als „aktuell“.
+
+Die automatische Installation benötigt eine veröffentlichte GitHub-Version mit `latest.json` und passenden signierten Installern. Der Workflow **Build signed Windows update** erzeugt diese beim Veröffentlichen eines Releases; manuelles Starten erzeugt zunächst nur herunterladbare Workflow-Artefakte und keinen Release. Ein vorhandener alter Release ohne `latest.json` ist noch keine funktionierende Updatequelle. Details und Schlüsselverwaltung: [Updater](UPDATER.md).
 
 ### Android-Handy und Android TV
 
@@ -62,4 +80,4 @@ Grundlagen: [Android: Bedingungen für App-Updates](https://developer.android.co
 
 ### Browser / iPhone-Web-App
 
-Nach dem Serverupdate die Seite neu laden bzw. die Web-App schließen und öffnen. Keine APK und keine erneute Installation nötig. Diese Aussage betrifft die Web-App; ein nativer iOS-Build wurde hier nicht veröffentlicht.
+Nach dem automatischen WebHafen-Dateiupdate **Website neu laden** bzw. die Web-App schließen und öffnen. Keine APK und keine erneute Installation nötig. Bei direktem Zugriff auf den NAS-Port wird die im Serverimage enthaltene Website verwendet; dort erfolgt ihr Update weiterhin mit dem Container. Diese Aussage betrifft die Web-App; ein nativer iOS-Build wurde hier nicht veröffentlicht.

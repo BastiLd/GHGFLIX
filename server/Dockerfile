@@ -7,6 +7,8 @@
 
 # ── Stage 1: build the web app (desktop UI → browser bundle) ──
 FROM node:24-alpine AS webbuild
+ARG GHGFLIX_BUILD_SHA
+ENV GHGFLIX_BUILD_SHA=$GHGFLIX_BUILD_SHA
 WORKDIR /build
 COPY package.json package-lock.json ./
 # tauri-cli/sharp are desktop-only devDependencies — drop them so the image

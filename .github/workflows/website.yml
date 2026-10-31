@@ -1,0 +1,56 @@
+name: Publish website for WebHafen
+on:
+  workflow_run:
+    workflows: [Checks]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: webhafen-website
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build:web
+        env:
+          GHGFLIX_BUILD_SHA: ${{ github.event.workflow_run.head_sha }}
+      - name: Publish only built public files
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          CURRENT=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$CURRENT" != "$SOURCE_SHA" ]; then
+            echo 'A newer main revision exists; its successful checks will publish the website.'
+            exit 0
+          fi
+          EXPORT="$RUNNER_TEMP/ghgflix-web-export"
+          node scripts/export-website.mjs server/webapp "$EXPORT/site"
+          cd "$EXPORT"
+          git init
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # Reuse checkout credentials without writing the token into the remote URL.
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          AUTH=$(git -C "$GITHUB_WORKSPACE" config --get http.https://github.com/.extraheader)
+          git config http.https://github.com/.extraheader "$AUTH"
+          if git ls-remote --exit-code --heads origin web >/dev/null 2>&1; then
+            git fetch --depth=1 origin web
+            git reset --soft FETCH_HEAD
+          fi
+          git add --all
+          git commit -m "Website from $SOURCE_SHA"
+          git push origin HEAD:refs/heads/web

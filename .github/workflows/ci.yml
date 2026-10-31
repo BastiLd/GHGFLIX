@@ -33,10 +33,13 @@ jobs:
           node server/test/native-push.test.mjs
           python3 tests/integration/test_emulator_ui.py
           node --test tests/integration/emulator-proxy.test.mjs
+          node --test tests/integration/website-export.test.mjs tests/integration/windows-update-manifest.test.mjs
       - name: TypeScript (Frontend + Desktop-Shell)
         run: npx tsc --noEmit
       - name: Web-Build (identisch zum Docker-Build)
         run: npm run build:web
+      - name: WebHafen-Export prüfen
+        run: node scripts/export-website.mjs server/webapp tests/.generated/website
       - name: Server-Module Syntax
         run: |
           for f in server/src/*.js; do node --check "$f"; done

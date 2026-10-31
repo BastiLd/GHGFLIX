@@ -99,7 +99,7 @@ console.log("\n── Die Seite fürs Handy ────────────
   pruefe("es kommt eine HTML-Seite", seite.startsWith("<!doctype html>"));
   pruefe("der Code steht darin", seite.includes("K7M2QX"));
   pruefe("es gibt ein Passwortfeld", seite.includes('type="password"'));
-  pruefe("das Formular schickt an /koppeln", seite.includes('action="/koppeln"'));
+  pruefe("das Formular funktioniert hinter einem /api-Proxy", seite.includes('action="/api/pair/page"'));
   pruefe("der Code wird mitgeschickt", seite.includes('name="code"'));
   pruefe("sie funktioniert ohne JavaScript", !seite.includes("<script"));
   pruefe("mit Ansicht für Handys", seite.includes("viewport"));

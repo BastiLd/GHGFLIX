@@ -158,7 +158,7 @@ ${fertig ? `
      dann muss es am Fernseher niemand eintippen.</p>
   ${meldung ? `<div class="fehler">${sicher(meldung)}</div>` : ""}
   <div class="code">${sicher(code)}</div>
-  <form method="POST" action="/koppeln">
+  <form method="POST" action="/api/pair/page">
     ${code ? `<input type="hidden" name="code" value="${sicher(code)}">` : `<label for="code">Code vom Fernseher</label><input id="code" name="code" maxlength="6" required autocomplete="off" placeholder="ABCDEF">`}
     <label for="pw">Server-Passwort</label>
     <input id="pw" name="passwort" type="password" autocomplete="current-password"

@@ -3,6 +3,7 @@ import { getCurrentWindow, listen } from "./lib/backend";
 import { IS_WEB } from "./lib/platform";
 import { AccountGate } from "./components/AccountGate";
 import { ServerConnection } from "./components/ServerConnection";
+import { UpdateNotice } from "./components/AppUpdates";
 import { useEffect } from "react";
 
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
@@ -137,6 +138,7 @@ export default function App() {
   return (
     <AccountGate>
     <div className="h-screen" onContextMenu={defaultMenu} data-pagekey={pageKey}>
+      <UpdateNotice />
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Home />} />

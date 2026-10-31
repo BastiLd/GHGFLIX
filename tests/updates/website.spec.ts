@@ -1,0 +1,41 @@
+import { test, expect } from '@playwright/test';
+test('WebHafen static build signs in through API and offers a reload without losing the account', async ({ page, request }, info) => {
+  const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
+  const gateway = await (await request.post('/api/login', { data: { password: 'server-ui-password' } })).json();
+  const ping = await (await request.get('/api/ping')).json();
+  const account = await (await request.post('/api/accounts/register', { headers: { Authorization: 'Bearer ' + gateway.token }, data: { email: `updates-${info.project.name}@example.test`, password: 'first-account-password', serverPassword: 'server-ui-password' } })).json();
+  const profiles = await (await request.get('/api/profiles', { headers: { Authorization: 'Bearer ' + account.token } })).json();
+  await request.post('/api/accounts/select-profile', { headers: { Authorization: 'Bearer ' + account.token }, data: { id: profiles[0].id } });
+  await page.addInitScript(({ id, token, server }) => { localStorage.setItem('ghgflix.web.token', server); localStorage.setItem('ghgflix.account.' + id, token); }, { id: ping.id, token: account.token, server: gateway.token });
+  await page.goto('/#/settings');
+  await expect(page.getByRole('heading', { name: 'Einstellungen', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Auf Updates prüfen', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('bereitgestellte Website');
+  await expect(page.getByText('Website:', { exact: false }).first()).toContainText('3.6.2');
+  const manifest = await (await request.get('/build-info.json')).json();
+  await page.route('**/build-info.json', route => route.fulfill({ json: { ...manifest, buildId: 'another-deployed-revision' } }));
+  await page.getByRole('button', { name: 'Auf Updates prüfen', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Website neu laden', exact: true })).toBeVisible();
+  await page.screenshot({ path: `test-results/updater-${info.project.name}.png`, fullPage: true, animations: 'disabled' });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole('button', { name: 'Website neu laden', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Einstellungen', exact: true })).toBeVisible();
+  expect(await page.evaluate(id => localStorage.getItem('ghgflix.account.' + id), ping.id)).toBe(account.token);
+  await page.route('**/build-info.json', route => route.fulfill({ status: 503, body: 'unavailable' }));
+  await page.getByRole('button', { name: 'Auf Updates prüfen', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Update-Prüfung fehlgeschlagen');
+  expect(errors).toEqual([]);
+});
+
+test('the existing TV pairing URL crosses the static/API boundary', async ({ page, request }) => {
+  const started = await (await request.post('/api/pair/start', { data: { geraet: 'WebHafen-Test-TV' } })).json();
+  await page.goto('/koppeln?code=' + started.code);
+  await expect(page).toHaveURL(/\/api\/pair\/page\?code=/);
+  await expect(page.locator('input[name="code"]')).toHaveValue(started.code);
+  await page.locator('input[type="password"]').fill('server-ui-password');
+  await page.locator('button[type="submit"]').click();
+  await expect(page.getByRole('heading', { name: 'Verbunden', exact: true })).toBeVisible();
+  const result = await (await request.get(`/api/pair/check?code=${started.code}&abholToken=${started.abholToken}`)).json();
+  expect(result.status).toBe('fertig');
+  expect(result.token).toBeTruthy();
+});

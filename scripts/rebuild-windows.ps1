@@ -102,7 +102,12 @@ else {
 }
 
 Schritt "5/6  Bauen (dauert beim ersten Mal einige Minuten)"
-npm run tauri build
+if ($env:TAURI_SIGNING_PRIVATE_KEY) {
+  npm run tauri build
+} else {
+  Write-Host 'Lokaler Build ohne Update-Signatur. Offizielle Updates werden im signierten GitHub-Workflow gebaut.'
+  npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
+}
 if ($LASTEXITCODE -ne 0) { throw "Der Build ist fehlgeschlagen - siehe Meldungen oben." }
 
 Schritt "6/6  Fertig"
