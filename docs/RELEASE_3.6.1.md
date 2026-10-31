@@ -1,5 +1,9 @@
 # GHGFlix 3.6.1 — Serverzugang und Account-Bedienung
 
+**Veröffentlichungsstand:** Code auf `main`; die [GitHub-Prüfungen](https://github.com/BastiLd/GHGFLIX/actions/runs/41201592786) und die [Veröffentlichung des Server-Images](https://github.com/BastiLd/GHGFLIX/actions/runs/41201592841) sind erfolgreich. Die automatische Freigabeprüfung blockierte dagegen das Anlegen des GitHub-Releases mit „blocked by policy“, ohne nähere Begründung. Es wurde kein GitHub-Release/Tag 3.6.1 angelegt; die Installationsdateien werden lokal bereitgestellt. Die Grenzen der nativen Tests stehen unten.
+
+Server-Image `3.6.1`, `latest` und Commit-Tag `f164799b7d4a0408d34d4c35f646c2ea3a42a065` wurden mit demselben Digest verifiziert: `sha256:fec274acd035af6ee86210db13572b2ccb7e717d216e5e78b0cc8707c3e41438`. Enthalten sind `linux/amd64` und `linux/arm64`.
+
 ## Änderung
 
 Nach Eingabe einer Serveradresse führte ein alter Server direkt in den Fehlerbildschirm; dort fehlte die Passworteingabe. Der Nutzer musste die lokale Bibliothek öffnen und die Verbindung in den Einstellungen suchen. Der vorhandene LAN-Server meldete am 31.10.2026 bei read-only-Prüfung noch 2.8.0 ohne Account-Unterstützung.
@@ -30,7 +34,7 @@ Testkorrekturen: Die neuen Sichtbarkeitsschaltflächen erfordern exakte Passwort
 
 ## Grenzen und Pakete
 
-Die signierten Handy-/TV-APKs verwenden 3.6.1 / Versionscode 22 und dieselben Paketkennungen wie 3.6.0. Das Release enthält außerdem Windows-EXE/MSI, Prüfsummen und Bauinformationen. Die APK-Signaturprüfung und Bauinformationen werden im Release-Manifest festgehalten.
+Die signierten Handy-/TV-APKs verwenden 3.6.1 / Versionscode 22 und dieselben Paketkennungen wie 3.6.0. Die lokalen Pakete umfassen außerdem Windows-EXE/MSI, Prüfsummen und Bauinformationen. Die APK-Signaturprüfung und Bauinformationen werden im lokalen `build-manifest.json` festgehalten. Kein veröffentlichter GitHub-Download für 3.6.1 behauptet.
 
 Der geplante zusätzliche Start des eigenen fensterlosen Android-Emulators wurde von der automatischen Freigabeprüfung mit „blocked by policy“ abgelehnt. Er wurde nicht erneut über einen anderen Weg gestartet. Somit gibt es für diese APKs keine neue native Android-Ausführungs- oder Update-Abnahme. Die belegten nativen Tests von 3.6.0 ersetzen diese Prüfung nicht. Physisches Handy/TV, Windows-Installation und mpv bleiben Nutzerabnahme.
 
