@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { getCurrentWindow, listen } from "./lib/backend";
 import { IS_WEB } from "./lib/platform";
 import { AccountGate } from "./components/AccountGate";
+import { ServerConnection } from "./components/ServerConnection";
 import { useEffect } from "react";
 
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
@@ -156,6 +157,7 @@ export default function App() {
         <Route path="/play/:type/:id" element={<Player />} />
         <Route path="/login" element={<Login />} />
         <Route path="/profiles" element={<Profiles />} />
+        {!IS_WEB&&<Route path="/connect" element={<div className="h-dvh overflow-y-auto p-5"><div className="w-full max-w-lg mx-auto py-6 space-y-4"><button onClick={()=>navigate('/profiles')}>Zurück zu Account & Profile</button><ServerConnection/></div></div>}/>}
       </Routes>
       <MiniPlayer />
       <ContextMenu />

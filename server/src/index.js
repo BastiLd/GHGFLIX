@@ -36,7 +36,7 @@ const SERVER_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const WEBAPP_DIR = process.env.GHGFLIX_WEB_DIR ? resolve(process.env.GHGFLIX_WEB_DIR) : join(SERVER_ROOT, "webapp");
 const LEGACY_DIR = join(SERVER_ROOT, "web");
 const WEB_DIR = existsSync(join(WEBAPP_DIR, "index.html")) ? WEBAPP_DIR : LEGACY_DIR;
-const VERSION = "3.6.0";
+const VERSION = "3.6.1";
 
 const db = openDb();
 accounts.initializeAccounts();

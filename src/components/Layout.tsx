@@ -262,7 +262,8 @@ export function Layout() {
 
         <button
           onClick={() => navigate("/profiles")}
-          title="Profil wechseln"
+          title="Account & Profile"
+          aria-label="Account & Profile"
           className={clsx(
             "m-3 flex items-center gap-3 rounded-lg hover:bg-ghg-surface2 transition text-left",
             compact ? "justify-center px-0 py-2" : "px-3 py-2.5",
@@ -274,7 +275,7 @@ export function Layout() {
           {!compact && (
             <div className="min-w-0">
               <p className="text-sm font-semibold truncate">{profileName}</p>
-              <p className="text-xs text-ghg-muted">Profil wechseln</p>
+              <p className="text-xs text-ghg-muted">Account & Profile</p>
             </div>
           )}
         </button>

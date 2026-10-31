@@ -1,5 +1,7 @@
 # Accounts und Profile ab 3.6.0
 
+**Wo finde ich was?** Ab 3.6.1 öffnet das Profilbild **Account & Profile**. Dort stehen Profilbearbeitung (Bild, Kinderprofil, PIN), Account-Passwort und Abmeldung. Serveradresse und gemeinsames Passwort sind direkt im PC-Verbindungsformular erreichbar. [WebHafen-Felder und Updates ohne Deinstallation](WEBHAFEN_UND_UPDATES.md).
+
 Reihenfolge auf Web, verbundenem Desktop, Handy und TV: Serveradresse → gemeinsames Server-Passwort → eigener Account → Profil. E-Mail/Passwort funktioniert ohne externen Anbieter. Die E-Mail ist zunächst nur der Anmeldename; es gibt keine Bestätigungs- oder Rücksetz-E-Mail. Ein Account-Passwort hat 10–128 Zeichen.
 
 ## Einmalige Einrichtung des Besitzers

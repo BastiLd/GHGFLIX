@@ -12,7 +12,7 @@ export function HandyShell({ seite, aufSeite, zahlen, profilName, profilAvatar, 
         <Text style={{ color: C.red, fontWeight: "900", fontSize: 21, letterSpacing: -.8 }}>GHGFlix</Text>
         <View style={{ flexDirection: "row", gap: 10 }}>
           <FKnopf accessibilityLabel="Meine Liste" hitSlop={5} onPress={() => aufSeite("list")} style={{ width: 34, height: 34, borderRadius: 8, justifyContent: "center", alignItems: "center", backgroundColor: seite === "list" ? "#e5091428" : "transparent" }}><Icon name="heart" size={20} /></FKnopf>
-          <FKnopf accessibilityLabel="Profil wechseln" hitSlop={5} onPress={() => aufSeite("profiles")} style={{ width: 32, height: 32, borderRadius: 16, overflow: "hidden", backgroundColor: profilAvatar ? "transparent" : "#39445c", justifyContent: "center", alignItems: "center" }}>{profilAvatar?<Image source={{uri:profilAvatar}} style={{width:32,height:32,borderRadius:16}}/>:<Text style={{ color: C.text, fontSize: 13, fontWeight: "700" }}>{(profilName || "P")[0]}</Text>}</FKnopf>
+          <FKnopf accessibilityLabel="Account & Profile" hitSlop={5} onPress={() => aufSeite("profiles")} style={{ width: 32, height: 32, borderRadius: 16, overflow: "hidden", backgroundColor: profilAvatar ? "transparent" : "#39445c", justifyContent: "center", alignItems: "center" }}>{profilAvatar?<Image source={{uri:profilAvatar}} style={{width:32,height:32,borderRadius:16}}/>:<Text style={{ color: C.text, fontSize: 13, fontWeight: "700" }}>{(profilName || "P")[0]}</Text>}</FKnopf>
         </View>
       </View>
       <View style={{ flex: 1, minHeight: 0 }}>{children}</View>

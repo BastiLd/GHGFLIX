@@ -15,6 +15,7 @@ export interface ServerEndpoint {
 }
 
 export interface ServerConfig {
+  configured?: boolean;
   enabled: boolean;
   mode: "auto" | "manual";
   endpoints: ServerEndpoint[];
@@ -27,7 +28,7 @@ const DEFAULTS: ServerConfig = { enabled: false, mode: "auto", endpoints: [], ma
 export async function loadServerConfig(): Promise<ServerConfig> {
   try {
     const raw = await getSetting("ghg_server_config");
-    return raw ? { ...DEFAULTS, ...JSON.parse(raw) } : { ...DEFAULTS };
+    return raw ? { ...DEFAULTS, ...JSON.parse(raw), configured:true } : { ...DEFAULTS, configured:false };
   } catch {
     return { ...DEFAULTS };
   }

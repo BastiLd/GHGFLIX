@@ -17,13 +17,13 @@
  */
 import { folgenNach } from "./folgen.js";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FlatList, Image, ScrollView, Text, View } from "react-native";
+import { FlatList, Image, Linking, ScrollView, Text, View } from "react-native";
 import { FKnopf, FokusReihe, useDialog, useFokusSystem } from "./fokus.js";
 import {
   BackdropKopf, BreitReihe, Dialog, DialogListe, FFeld, Hero, Knopf, Laden,
   PosterReihe, Verlauf, fmtZeit, parseGenres, se,
 } from "./bausteine.js";
-import { C, M, gross, st } from "./stile.js";
+import { C, M, gross, istTV, st } from "./stile.js";
 import { FELDER, laden as ladeEinstellungen, sichern as sichereEinstellungen } from "./einstellungen.js";
 
 /* ══ Hilfen ══════════════════════════════════════════════════════════════ */
@@ -657,6 +657,11 @@ export function EinstellungenSeite({
           </View>
         )}
 
+        <View style={[st.karte, { marginBottom: 14 }]}>
+          <Text style={[st.h2, { marginBottom: 8 }]}>Account & Profile</Text>
+          <Text style={[st.gedaempft,{marginBottom:12}]}>Profilbilder, Kinderfreigaben, PIN, Account-Passwort und Abmeldung findest du direkt beim Profil.</Text>
+          <FokusReihe zeile={z++}><Knopf text="Account & Profile öffnen" symbol="👤" spalte={0} onPress={aufProfilWechseln}/></FokusReihe>
+        </View>
         {/* ── App-Aktualisierung ─────────────────────────────────────── */}
         {!!appAktuell && appAktuell.neuer && (
           <View style={[st.karte, { marginBottom: 14, borderColor: C.red }]}>
@@ -677,6 +682,11 @@ export function EinstellungenSeite({
           </View>
         )}
 
+        <View style={[st.karte,{marginBottom:14}]}>
+          <Text style={[st.h2,{marginBottom:8}]}>App aktualisieren</Text>
+          <Text style={[st.gedaempft,{marginBottom:12}]}>Neue {istTV?'TV-':'Handy-'}APK über die vorhandene App installieren, ohne sie vorher zu deinstallieren. Verbindung und Einstellungen bleiben bei einem passenden Update erhalten. Kompatible App-Korrekturen können auch beim Neustart automatisch geladen werden.</Text>
+          <FokusReihe zeile={z++}><Knopf text="Aktuelle Downloads öffnen" spalte={0} onPress={()=>Linking.openURL('https://github.com/BastiLd/GHGFLIX/releases/latest').catch(()=>zeigen('Downloads konnten nicht geöffnet werden.'))}/></FokusReihe>
+        </View>
         {/* ── Server ────────────────────────────────────────────────── */}
         <View style={[st.karte, { marginBottom: 14 }]}>
           <Text style={[st.h2, { marginBottom: 10 }]}>Server</Text>
@@ -691,20 +701,6 @@ export function EinstellungenSeite({
                 text="Bibliothek neu einlesen" symbol="⟳" spalte={1}
                 onPress={() => { aufNeuEinlesen(); zeigen("Suchlauf gestartet — das kann einige Minuten dauern."); }}
               />
-            </View>
-          </FokusReihe>
-        </View>
-
-        {/* ── Profil ────────────────────────────────────────────────── */}
-        <View style={[st.karte, { marginBottom: 14 }]}>
-          <Text style={[st.h2, { marginBottom: 10 }]}>Profil</Text>
-          <Zeile name="Aktuell" wert={profilName || `Profil ${conn?.profile}`} />
-          <Zeile name="Fortschritt" wert="wird mit allen Geräten abgeglichen" />
-          <View style={{ height: 14 }} />
-          <FokusReihe zeile={z++}>
-            <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
-              <Knopf text="Profil wechseln" symbol="👤" spalte={0} onPress={aufProfilWechseln} />
-              {!!aufAbmelden && <Knopf text="Abmelden" spalte={1} onPress={aufAbmelden} />}
             </View>
           </FokusReihe>
         </View>

@@ -57,7 +57,7 @@ test("Handy: Mediathek-Tabs, Suche, Detail, Liste und Profil mit Touch", async (
   await expect(page.getByText("In meiner Liste", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Meine Liste", exact: true }).click();
   await expect(page.getByText("Meine Liste", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Profil wechseln", exact: true }).click();
+  await page.getByRole("button", { name: "Account & Profile", exact: true }).click();
   await expect(page.getByText("Familie", { exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });
@@ -66,7 +66,7 @@ test("TV: 960×540 Layoutpunkte lassen alle Menüpunkte erreichbar", async ({ pa
   await page.setViewportSize({ width: 960, height: 540 });
   await ready(page, "tv");
   await key(page, "ArrowDown", 7);
-  await expect(selected(page)).toHaveAttribute("aria-label", "Profil wechseln");
+  await expect(selected(page)).toHaveAttribute("aria-label", "Account & Profile");
   await visibleFocus(page);
   await page.screenshot({ path: "evidence/tv-960.png" });
 });

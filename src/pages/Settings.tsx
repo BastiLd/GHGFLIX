@@ -55,7 +55,7 @@ import {
   getSession, reinitSupabase, signOut, startSupabaseSync, supabaseSyncHealth, syncNow, type SyncHealth,
 } from "../lib/supabase";
 import { setTvModePref, tvModePref } from "../lib/tvMode";
-import { loadServerConfig, loginServer, saveServerConfig, testServer, type ServerConfig } from "../lib/serverSync";
+import { ServerConnection } from "../components/ServerConnection";
 import { Button, InfoButton, Modal, Spinner, TextInput } from "../components/ui";
 import { ThemeStore } from "../components/ThemeStore";
 import { FolderScanDialog, IgnoredFilesList } from "../components/FolderScanDialog";
@@ -82,7 +82,7 @@ const TABS: { id: TabId; label: string; icon: ComponentType<{ className?: string
   { id: "erkennung", label: "Erkennung", icon: ScanSearch },
   { id: "tmdb", label: "TMDb", icon: Database },
   { id: "werkzeuge", label: "Werkzeuge", icon: Wrench },
-  { id: "konto", label: "Konto & Sync", icon: Cloud },
+  { id: "konto", label: "Server & Verbindung", icon: Cloud },
 ];
 
 function KeyCapture({ value, onChange }: { value: string; onChange: (v: string) => void }) {
@@ -330,6 +330,9 @@ function PersonalSettings() {
       <PrefSelect k="audioLangPref" label="Bevorzugte Sprache" options={[["de-en","Deutsch, dann Englisch"],["en-de","Englisch, dann Deutsch"],["file","Vorgabe der Datei"]]}/>
     </div></Section>
     {!IS_WEB&&<ServerSyncSection/>}
+    <Section title="App aktualisieren" desc={IS_WEB?'Die Website wird zusammen mit deinem Server aktualisiert. Danach die Seite neu laden.':'Das neue Windows-Setup über die vorhandene Installation ausführen. Eine vorherige Deinstallation ist nicht nötig.'}>
+      <Button variant="ghost" onClick={()=>void openUrl('https://github.com/BastiLd/GHGFLIX/releases/latest').catch(()=>{})}>Aktuelle Downloads öffnen</Button>
+    </Section>
   </div>;
 }
 
@@ -708,11 +711,17 @@ function FullSettings() {
 
   return (
     <div className="px-8 py-6 max-w-3xl">
-      <h1 className="text-3xl font-black mb-6">Einstellungen</h1>
+      <h1 className="text-3xl font-black mb-4">Einstellungen</h1>
+      <div className="flex flex-wrap items-center gap-3 mb-6 p-4 bg-ghg-surface border border-ghg-line rounded-xl">
+        <Button variant="ghost" onClick={()=>navigate('/profiles')}>Account & Profile</Button>
+        <p className="text-sm text-ghg-muted">Passwort, Profilbilder, Kinderprofile und PIN verwaltest du beim Profil.</p>
+      </div>
 
       {/* tab bar */}
       <div className="flex gap-1.5 flex-wrap mb-6 border-b border-ghg-line pb-3">
-        {TABS.map((t) => {
+        {([['App',['allgemein','wiedergabe','intro']],['Mediathek & Server',['bibliothek','erkennung','tmdb','konto']],['Erweitert',['leistung','werkzeuge']]] as const).map(([label,ids])=><div key={label} className="w-full">
+        <p className="text-xs text-ghg-muted mb-2 mt-2">{label}</p><div className="flex flex-wrap gap-1">
+        {TABS.filter(t=>(ids as readonly string[]).includes(t.id)).map((t) => {
           const active = tab === t.id;
           return (
             <button
@@ -729,7 +738,7 @@ function FullSettings() {
               {t.label}
             </button>
           );
-        })}
+        })}</div></div>)}
       </div>
 
       {tab === "allgemein" && (
@@ -916,6 +925,8 @@ function FullSettings() {
                 Auf Updates prüfen
               </Button>
             </div>
+            <Button variant="ghost" onClick={()=>void openUrl('https://github.com/BastiLd/GHGFLIX/releases/latest').catch(()=>{})}>Aktuelle Downloads öffnen</Button>
+            <p className="text-sm text-ghg-muted my-3">{IS_WEB?'Die Website wird mit dem GHGFlix-Server aktualisiert. Danach die Seite neu laden.':'Zum Aktualisieren das neue Windows-Setup über die vorhandene Installation ausführen. Eine vorherige Deinstallation ist nicht nötig. Der Server wird separat aktualisiert.'}</p>
             {updateInfo && <p className="text-sm text-ghg-muted mb-3">{updateInfo}</p>}
             <PrefToggle k="updateCheck" label="Beim Öffnen der Einstellungen automatisch auf Updates prüfen" />
           </Section>
@@ -1496,23 +1507,8 @@ function FullSettings() {
       {tab === "konto" && !IS_WEB && <ServerSyncSection />}
       {tab === "konto" && IS_WEB && (
         <Section title="GHGFlix-Server (ZimaOS)" desc="Du bist gerade MIT dem Server verbunden.">
-          <div className="text-sm text-ghg-muted flex items-start gap-1.5">
-            <WebInfo>
-              <p>
-                <b>Desktop-App:</b> hier wird der Sync PC ↔ Server eingerichtet (Adresse, Passwort, Intervall).
-              </p>
-              <p>
-                <b>Hier:</b> diese Web-App läuft direkt AUF deinem Server — alles, was du hier siehst (Fortschritt, Meine
-                Liste, Zuordnungen), IST bereits der Server-Stand. Jedes Gerät, das sich verbindet (PC-App, Handy, Browser),
-                sieht automatisch denselben Stand. Ein extra Sync ist nicht nötig; den Supabase-Cloud-Sync stellst du unten ein.
-              </p>
-            </WebInfo>
-            <span>
-              Diese Oberfläche läuft direkt auf deinem GHGFlix-Server — PC-App, Handy und Browser teilen sich automatisch
-              denselben Stand (Gesehen, Weiterschauen, Meine Liste). In der PC-App richtest du den Abgleich unter
-              „Einstellungen → GHGFlix-Server“ ein.
-            </span>
-          </div>
+          <p className="text-sm text-ghg-muted">Diese Web-App wird direkt vom Server bereitgestellt. Melde dich auf deinen Geräten mit demselben persönlichen Account an, um dessen Profile und Wiedergabestände zu verwenden.</p>
+          <p className="text-sm text-ghg-muted mt-3">Das gemeinsame Server-Passwort wird in ZimaOS in der Container-Einstellung <code>GHGFLIX_PASSWORD</code> gesetzt. Das persönliche Account-Passwort änderst du unter „Account & Profile“.</p>
           <div className="mt-4 flex items-center gap-3 flex-wrap">
             <Button
               variant="danger"
@@ -1536,7 +1532,7 @@ function FullSettings() {
         </Section>
       )}
 
-      {tab === "konto" && IS_WEB && <SupabaseServerSection />}
+      {tab === "konto" && IS_WEB && <details className="mt-6"><summary className="cursor-pointer text-sm text-ghg-muted mb-4">Erweiterter Cloud-Abgleich (optional)</summary><SupabaseServerSection /></details>}
 
       {tab === "konto" && !useAccount.getState().enabled && (
         <Section
@@ -1951,128 +1947,7 @@ function SupabaseServerSection() {
   );
 }
 
-/** Sync with a GHGFlix server (ZimaOS/Docker) — addresses for Lokal/Domain/
- *  Tailscale with automatic switching, optional password, manual sync. */
+/** The same connection form is available before login, at the profile and in settings. */
 function ServerSyncSection() {
-  const toast = useStore((s) => s.toast);
-  const [cfg, setCfg] = useState<ServerConfig | null>(null);
-  const [pw, setPw] = useState("");
-  const [busy] = useState(false);
-  const [status, setStatus] = useState<Record<number, "ok" | "fail" | "…">>({});
-
-  useEffect(() => {
-    void loadServerConfig().then(setCfg);
-  }, []);
-  if (!cfg) return null;
-
-  const update = (patch: Partial<ServerConfig>) => setCfg({ ...cfg, ...patch });
-  const updateEndpoint = (i: number, patch: Partial<{ name: string; url: string }>) => {
-    const endpoints = cfg.endpoints.map((e, j) => (j === i ? { ...e, ...patch } : e));
-    update({ endpoints });
-  };
-
-  const save = async () => {
-    const clean = { ...cfg, endpoints: cfg.endpoints.filter((e) => e.url.trim()) };
-    await saveServerConfig(clean);
-    setCfg(clean);
-    window.location.reload();
-  };
-
-  const test = async (i: number) => {
-    setStatus((s) => ({ ...s, [i]: "…" }));
-    const r = await testServer(cfg.endpoints[i].url);
-    setStatus((s) => ({ ...s, [i]: r.ok ? "ok" : "fail" }));
-    if (r.ok) toast(`Verbunden: ${r.name ?? "GHGFlix"}${r.auth ? " (Passwort nötig)" : ""}`, "success");
-    else toast("Nicht erreichbar", "error");
-  };
-
-  const login = async () => {
-    const base = cfg.mode === "manual" && cfg.manualUrl ? cfg.manualUrl : cfg.endpoints[0]?.url;
-    if (!base) return toast("Zuerst eine Adresse eintragen", "error");
-    const token = await loginServer(base, pw);
-    if (token) {
-      update({ token });
-      await saveServerConfig({ ...cfg, token });
-      toast("Angemeldet — Token gespeichert", "success");
-      setPw("");
-    } else toast("Anmeldung fehlgeschlagen", "error");
-  };
-
-  const syncNow = async () => { await save(); };
-
-
-  return (
-    <Section
-      title="GHGFlix-Server (ZimaOS)"
-      desc="Mit deinem GHGFlix-Server verbinden und nach dem Serverzugang persönlich anmelden. Profile, Bibliothek und Wiedergabestände werden dann direkt vom Server geladen. Die lokale Bibliothek bleibt auf diesem PC erhalten."
-    >
-      <label className="flex items-center gap-3 mb-3 cursor-pointer">
-        <input type="checkbox" checked={cfg.enabled} onChange={(e) => update({ enabled: e.target.checked })} className="w-4 h-4 accent-ghg-red" />
-        <span>GHGFlix-Server verwenden</span>
-      </label>
-
-      <label className="block mb-3 max-w-xs">
-        <span className="text-xs uppercase tracking-wide text-ghg-muted">Verbindungsmodus</span>
-        <select
-          value={cfg.mode}
-          onChange={(e) => update({ mode: e.target.value as "auto" | "manual" })}
-          className="w-full bg-ghg-bg2 border border-ghg-line rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-ghg-red"
-        >
-          <option value="auto">Automatisch (erste erreichbare Adresse)</option>
-          <option value="manual">Manuell (feste Adresse)</option>
-        </select>
-      </label>
-
-      {cfg.mode === "manual" ? (
-        <label className="block mb-3">
-          <span className="text-xs uppercase tracking-wide text-ghg-muted">Server-Adresse</span>
-          <TextInput value={cfg.manualUrl} onChange={(v) => update({ manualUrl: v })} placeholder="http://192.168.1.50:8484" />
-        </label>
-      ) : (
-        <div className="space-y-2 mb-3">
-          {cfg.endpoints.map((e, i) => (
-            <div key={i} className="flex gap-2 items-center">
-              <div className="w-36">
-                <TextInput value={e.name} onChange={(v) => updateEndpoint(i, { name: v })} placeholder="z.B. Zuhause" />
-              </div>
-              <div className="flex-1">
-                <TextInput value={e.url} onChange={(v) => updateEndpoint(i, { url: v })} placeholder="http://192.168.1.50:8484" />
-              </div>
-              <Button variant="ghost" onClick={() => void test(i)}>
-                {status[i] === "…" ? "…" : status[i] === "ok" ? "✓" : status[i] === "fail" ? "✗" : "Testen"}
-              </Button>
-              <Button variant="danger" onClick={() => update({ endpoints: cfg.endpoints.filter((_, j) => j !== i) })}>
-                ✕
-              </Button>
-            </div>
-          ))}
-          <Button variant="ghost" onClick={() => update({ endpoints: [...cfg.endpoints, { name: "", url: "" }] })}>
-            + Adresse (Lokal / Domain / Tailscale)
-          </Button>
-        </div>
-      )}
-
-      <div className="flex gap-2 items-end flex-wrap mb-4">
-        <label className="block">
-          <span className="text-xs uppercase tracking-wide text-ghg-muted">Server-Passwort (falls gesetzt)</span>
-          <TextInput value={pw} onChange={setPw} type="password" placeholder="••••••" />
-        </label>
-        <Button variant="ghost" onClick={() => void login()}>
-          Anmelden
-        </Button>
-        {cfg.token && <span className="text-xs text-ghg-muted pb-2">Token gespeichert ✓</span>}
-      </div>
-
-      <div className="flex gap-2 flex-wrap">
-        <Button onClick={() => void save()}>Speichern</Button>
-        <Button variant="ghost" onClick={() => void syncNow()} disabled={busy}>
-          {busy ? "Synchronisiert …" : "Jetzt synchronisieren"}
-        </Button>
-      </div>
-      <p className="text-xs text-ghg-muted mt-3">
-        Der Abgleich läuft alle 30 Sekunden im Hintergrund (über TMDb-Zuordnung, funktioniert also auch wenn die
-        Dateien auf PC und Server unterschiedlich heißen). Anleitung zum Server: server/README-ZimaOS.md im Repo.
-      </p>
-    </Section>
-  );
+  return <ServerConnection/>;
 }

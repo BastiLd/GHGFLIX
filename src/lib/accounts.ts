@@ -14,7 +14,10 @@ export async function connectAccounts() {
   let base='';
   if(!IS_WEB){
     const cfg=await loadServerConfig();
-    if(!cfg.enabled){configureAccountServer(null,'');useAccount.setState({enabled:false});return null;}
+    if(!cfg.enabled){
+      if(cfg.configured===false)throw Error('Verbinde dich mit deinem GHGFlix-Server oder öffne deine lokale Desktop-Bibliothek.');
+      configureAccountServer(null,'');useAccount.setState({enabled:false});return null;
+    }
     const found=await resolveServer(cfg);if(!found)throw Error('Medienserver nicht erreichbar. Bitte Verbindung prüfen.');
     base=found;setWebToken(cfg.token);
     stopServerSync();stopSupabaseSync();
@@ -22,7 +25,7 @@ export async function connectAccounts() {
   const r=await fetch(base+'/api/ping',{signal:AbortSignal.timeout(10000)});
   if(!r.ok)throw Error('Medienserver nicht erreichbar.');
   const ping=await r.json();
-  if(!ping.accounts)throw Error('Bitte den GHGFlix-Server aktualisieren. Diese App benötigt die neue Account-Anmeldung.');
+  if(!ping.accounts)throw Error(`Dein Server meldet Version ${ping.version||'unbekannt'}. Persönliche Accounts benötigen GHGFlix-Server 3.6.0 oder neuer. Bitte zuerst den Server aktualisieren; ein App-Update allein reicht nicht.`);
   configureAccountServer(base,String(ping.id));useAccount.setState({enabled:true});
   return ping;
 }

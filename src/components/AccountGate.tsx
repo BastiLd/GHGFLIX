@@ -4,12 +4,13 @@ import {useQueryClient} from '@tanstack/react-query';
 import {Wordmark} from './Brand';
 import {accountRequest,acceptSession,connectAccounts,gatewayLogin,useAccount} from '../lib/accounts';
 import {accountToken,setAccountToken,IS_WEB} from '../lib/platform';
-import {loadServerConfig,saveServerConfig} from '../lib/serverSync';
 import {usePlayback} from '../lib/playback';
 import {destroy} from '../lib/mpv';
 import {useUiPrefs} from '../lib/uiPrefs';
 import Profiles from '../pages/Profiles';
 import {GoogleLogin} from './GoogleLogin';
+import {ServerConnection} from './ServerConnection';
+import {PasswordInput} from './PasswordInput';
 
 export function AccountGate({children}:{children:React.ReactNode}) {
   const session=useAccount(s=>s.session),enabled=useAccount(s=>s.enabled),qc=useQueryClient(),navigate=useNavigate(),location=useLocation();
@@ -17,6 +18,7 @@ export function AccountGate({children}:{children:React.ReactNode}) {
   const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[repeat,setRepeat]=useState(''),[setupKey,setSetupKey]=useState('');
   const [error,setError]=useState(''),[busy,setBusy]=useState(false),[retry,setRetry]=useState(0);
   const [serverPassword,setServerPassword]=useState('');
+  const [changeServer,setChangeServer]=useState(false);
   useEffect(()=>{
     let active=true;
     const load=async()=>{
@@ -70,45 +72,31 @@ export function AccountGate({children}:{children:React.ReactNode}) {
   };
   if(stage==='ready' && (!enabled||session)) {
     if(enabled&&!session?.profile) return <Profiles/>;
-    if(session?.profile?.is_child && ['/kanaele','/settings','/stats','/login'].some(p=>location.pathname.startsWith(p)))
+    if(session?.profile?.is_child && ['/kanaele','/settings','/stats','/login','/connect'].some(p=>location.pathname.startsWith(p)))
       return <div className="min-h-dvh grid place-items-center p-6"><div><h1 className="text-xl mb-4">Im Kinderprofil ausgeblendet</h1><button onClick={()=>navigate('/')} className="mr-6">Zur Startseite</button><button onClick={()=>navigate('/profiles')}>Profil wechseln</button></div></div>;
     return <>{children}</>;
   }
+  if(!IS_WEB && (stage==='error'||changeServer))return <div className="h-dvh overflow-y-auto bg-ghg-bg p-5"><div className="w-full max-w-lg mx-auto py-6 space-y-5">
+    <Wordmark size="lg"/>{error&&<p role="alert" className="text-sm text-ghg-muted">{error}</p>}
+    <ServerConnection onConnected={()=>{setChangeServer(false);setRetry(n=>n+1);}}/>
+    {changeServer&&<button onClick={()=>setChangeServer(false)}>Zurück zur Anmeldung</button>}
+  </div></div>;
   const field='w-full bg-ghg-bg2 border border-ghg-line rounded-lg px-3 py-3 text-sm';
-  return <div className="min-h-dvh bg-ghg-bg flex items-center justify-center p-5"><div className="w-full max-w-md space-y-6">
+  return <div className="h-dvh overflow-y-auto bg-ghg-bg p-5"><div className="w-full max-w-md mx-auto py-6 space-y-6">
     <Wordmark size="lg"/>
-    {stage==='loading'?<p role="status">Mit GHGFlix verbinden …</p>:stage==='error'?<><p role="alert">{error}</p><button onClick={()=>setRetry(n=>n+1)}>Erneut verbinden</button>{!IS_WEB&&<ConnectionRecovery/>}</>:<form onSubmit={submit} className="bg-ghg-surface border border-ghg-line rounded-2xl p-6 space-y-4">
+    {stage==='loading'?<p role="status">Mit GHGFlix verbinden …</p>:stage==='error'?<><p role="alert">{error}</p><button onClick={()=>setRetry(n=>n+1)}>Erneut verbinden</button></>:<form onSubmit={submit} className="bg-ghg-surface border border-ghg-line rounded-2xl p-6 space-y-4">
       <h1 className="text-xl font-bold">{stage==='server'?'Server-Passwort':mode==='setup'?'Besitzer-Account einrichten':mode==='register'?'Account erstellen':'Dein Account'}</h1>
       <p className="text-sm text-ghg-muted">{stage==='server'?'Mit dem gemeinsamen Passwort öffnest du den Serverzugang.':'Deine Profile, Bilder, Merkliste und Wiedergabestände gehören zu deinem Account.'}</p>
       {stage!=='server'&&<label className="block text-sm">E-Mail<input className={field} aria-label="E-Mail" type="email" autoComplete="username" value={email} onChange={e=>setEmail(e.target.value)} required maxLength={254}/></label>}
-      <label className="block text-sm">{stage==='server'?'Server-Passwort':'Account-Passwort'}<input className={field} aria-label={stage==='server'?'Server-Passwort':'Account-Passwort'} type="password" autoComplete={mode==='login'?'current-password':'new-password'} value={password} onChange={e=>setPassword(e.target.value)} required minLength={stage==='server'||mode==='login'?1:10} maxLength={128}/></label>
-      {stage!=='server'&&mode!=='login'&&<><p className="text-xs text-ghg-muted">Mindestens 10 Zeichen. Die E-Mail dient als Anmeldename; es wird keine Bestätigungs-Mail verschickt.</p><label className="block text-sm">Passwort wiederholen<input className={field} aria-label="Passwort wiederholen" type="password" autoComplete="new-password" value={repeat} onChange={e=>setRepeat(e.target.value)} required/></label></>}
-      {stage!=='server'&&mode==='setup'&&<label className="block text-sm">Besitzer-Schlüssel<input className={field} aria-label="Besitzer-Schlüssel" type="password" autoComplete="off" value={setupKey} onChange={e=>setSetupKey(e.target.value)} required/><span className="block text-xs text-ghg-muted mt-2">Auf deinem Server in DATA_DIR/account-setup-key. Damit übernimmst du einmalig die bisherigen Profile.</span></label>}
-      {stage!=='server'&&mode==='register'&&<label className="block text-sm">Server-Passwort für neuen Account<input className={field} aria-label="Server-Passwort für neuen Account" type="password" autoComplete="off" value={serverPassword} onChange={e=>setServerPassword(e.target.value)} required/></label>}
+      <label className="block text-sm">{stage==='server'?'Server-Passwort':'Account-Passwort'}<PasswordInput className={field} aria-label={stage==='server'?'Server-Passwort':'Account-Passwort'}  autoComplete={mode==='login'?'current-password':'new-password'} value={password} onChange={e=>setPassword(e.target.value)} required minLength={stage==='server'||mode==='login'?1:10} maxLength={128}/></label>
+      {stage!=='server'&&mode!=='login'&&<><p className="text-xs text-ghg-muted">Mindestens 10 Zeichen. Die E-Mail dient als Anmeldename; es wird keine Bestätigungs-Mail verschickt.</p><label className="block text-sm">Passwort wiederholen<PasswordInput className={field} aria-label="Passwort wiederholen"  autoComplete="new-password" value={repeat} onChange={e=>setRepeat(e.target.value)} required/></label></>}
+      {stage!=='server'&&mode==='setup'&&<label className="block text-sm">Besitzer-Schlüssel<PasswordInput className={field} aria-label="Besitzer-Schlüssel"  autoComplete="off" value={setupKey} onChange={e=>setSetupKey(e.target.value)} required/><span className="block text-xs text-ghg-muted mt-2">Auf deinem Server in DATA_DIR/account-setup-key. Damit übernimmst du einmalig die bisherigen Profile.</span></label>}
+      {stage!=='server'&&mode==='register'&&<label className="block text-sm">Server-Passwort für neuen Account<PasswordInput className={field} aria-label="Server-Passwort für neuen Account"  autoComplete="off" value={serverPassword} onChange={e=>setServerPassword(e.target.value)} required/></label>}
       {error&&<p role="alert" className="text-ghg-red text-sm">{error}</p>}
       <button disabled={busy} className="w-full rounded-xl py-3 bg-ghg-red font-semibold disabled:opacity-50">{busy?'Bitte warten …':stage==='server'?'Server öffnen':mode==='login'?'Anmelden':mode==='setup'?'Besitzer-Account anlegen':'Account erstellen'}</button>
       {stage!=='server'&&<div className="flex flex-wrap gap-4 text-sm">{mode!=='login'&&<button type="button" onClick={()=>{setMode('login');setError('');}}>Zur Anmeldung</button>}{mode==='login'&&status.registration&&<button type="button" onClick={()=>{setMode('register');setError('');}}>Neuen Account erstellen</button>}{status.setupNeeded&&mode!=='setup'&&<button type="button" onClick={()=>{setMode('setup');setError('');}}>Ich bin der Serverbesitzer</button>}</div>}
       {stage!=='server'&&mode==='login'&&(status.google?<GoogleLogin onSession={data=>{acceptSession(data);qc.clear();usePlayback.getState().clearQueue();setPassword('');setRepeat('');setServerPassword('');setSetupKey('');setStage('ready');navigate('/profiles',{replace:true});void useUiPrefs.getState().load();}}/>:<p className="text-xs text-ghg-muted">Google-Anmeldung ist am Server noch nicht eingerichtet.</p>)}
     </form>}
+    {!IS_WEB&&stage!=='loading'&&<button className="text-sm text-ghg-muted" onClick={()=>{setChangeServer(true);setError('');}}>Serveradresse oder Server-Passwort ändern</button>}
   </div></div>;
-}
-
-function ConnectionRecovery() {
-  const [url,setUrl]=useState(''),[error,setError]=useState('');
-  useEffect(()=>{void loadServerConfig().then(c=>setUrl(c.manualUrl||c.endpoints[0]?.url||''));},[]);
-  const save=async(local=false)=>{
-    try {
-      const cfg=await loadServerConfig();
-      if(!local){const parsed=new URL(url.trim());if(!['http:','https:'].includes(parsed.protocol)||parsed.username||parsed.password||parsed.search||parsed.hash)throw Error('Bitte eine HTTP- oder HTTPS-Serveradresse ohne Zugangsdaten eingeben.');}
-      setAccountToken('');
-      await saveServerConfig({...cfg,enabled:!local,mode:'manual',manualUrl:url.trim().replace(/\/$/,''),token:''});
-      window.location.reload();
-    }catch(e){setError((e as Error).message);}
-  };
-  return <div className="space-y-3 border-t border-ghg-line pt-4">
-    <label className="block">Serveradresse<input value={url} onChange={e=>setUrl(e.target.value)} className="w-full bg-ghg-bg2 border border-ghg-line rounded-lg p-3" placeholder="http://server:8484"/></label>
-    {error&&<p role="alert">{error}</p>}
-    <button className="mr-4" onClick={()=>void save()}>Serveradresse speichern</button>
-    <button onClick={()=>void save(true)}>Lokale Desktop-Bibliothek öffnen</button>
-  </div>;
 }

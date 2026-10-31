@@ -26,10 +26,11 @@ export function TVShell({ seite, aufSeite, zahlen, profilName, profilAvatar, chi
           </FKnopf>
         ))}
         <View style={{ flex: 1 }} />
-        <FKnopf id="nav:profil" bereich="nav" zeile={NAV.length} spalte={0} accessibilityLabel="Profil wechseln"
+        <FKnopf id="nav:profil" bereich="nav" zeile={NAV.length} spalte={0} accessibilityLabel="Account & Profile"
           onPress={() => aufSeite("profiles")} style={{ borderWidth: 2, borderColor: "transparent", borderRadius: 12, padding: 10, alignItems: "center", gap: 5 }} fokusStil={{ borderColor: C.weiss }}>
           <View style={{ width: 30, height: 30, backgroundColor: profilAvatar ? "transparent" : "#3c465d", borderRadius: 15, overflow: "hidden", alignItems: "center", justifyContent: "center" }}>{profilAvatar?<Image source={{uri:profilAvatar}} style={{width:30,height:30,borderRadius:15}}/>:<Text style={{ color: "white", fontWeight: "800" }}>{(profilName || "P")[0]}</Text>}</View>
           <Text numberOfLines={1} style={{ color: C.muted, fontSize: 11 }}>{profilName || "Profil"}</Text>
+          <Text style={{ color: C.muted, fontSize: 10 }}>Account & Profile</Text>
         </FKnopf>
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>

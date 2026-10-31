@@ -6,7 +6,7 @@ import {C,M,istTV,st} from './stile.js';
 export function ProfilSeite({api,base='',account,activeProfile,aufWahl,aufZurueck,aufAbmelden,onSession,onRefresh}){
   const [liste,setListe]=useState(null),[edit,setEdit]=useState(null),[unlock,setUnlock]=useState(null),[name,setName]=useState(''),[avatar,setAvatar]=useState(null);
   const [child,setChild]=useState(false),[age,setAge]=useState(12),[pin,setPin]=useState(''),[pinChanged,setPinChanged]=useState(false),[password,setPassword]=useState('');
-  const [fehler,setFehler]=useState(''),[busy,setBusy]=useState(false),[deleting,setDeleting]=useState(false),[accountEdit,setAccountEdit]=useState(false),[newPassword,setNewPassword]=useState('');
+  const [fehler,setFehler]=useState(''),[busy,setBusy]=useState(false),[deleting,setDeleting]=useState(false),[accountEdit,setAccountEdit]=useState(false),[newPassword,setNewPassword]=useState(''),[repeatPassword,setRepeatPassword]=useState('');
   const [canClaim,setCanClaim]=useState(false),[claim,setClaim]=useState(false),[ownerKey,setOwnerKey]=useState('');
   useEffect(()=>{api('/api/accounts/status').then(s=>setCanClaim(s.setupNeeded)).catch(()=>{});},[api]);
   const load=()=>api('/api/profiles').then(p=>setListe(Array.isArray(p)?p:[])).catch(e=>setFehler(e.message));
@@ -30,7 +30,7 @@ export function ProfilSeite({api,base='',account,activeProfile,aufWahl,aufZuruec
   });
   if(!liste&&!fehler)return <Laden/>;
   return <ScrollView style={{flex:1,backgroundColor:C.bg}} contentContainerStyle={{padding:M.rand,paddingTop:28}} keyboardShouldPersistTaps="handled"><View style={{maxWidth:850,gap:14}}>
-    <Text style={st.h1}>{unlock?'Profil öffnen':accountEdit?claim?'Serverbesitzer werden':'Account-Passwort ändern':edit?edit.id?'Profil bearbeiten':'Neues Profil':'Wer schaut?'}</Text><Text style={st.gedaempft}>{account?.email||'Deine Profile, Bilder und Wiedergabestände'}</Text>
+    <Text style={st.h1}>{unlock?'Profil öffnen':accountEdit?claim?'Serverbesitzer werden':'Account-Passwort ändern':edit?edit.id?'Profil bearbeiten':'Neues Profil':activeProfile?'Account & Profile':'Wer schaut?'}</Text><Text style={st.gedaempft}>{account?.email||'Deine Profile, Bilder und Wiedergabestände'}</Text>
     {!!fehler&&<Text accessibilityRole="alert" style={{color:C.red}}>{fehler}</Text>}
     {unlock?<>
       <Text style={st.h2}>{unlock.name}</Text><FokusReihe zeile={0}><FFeld spalte={0} accessibilityLabel={unlock.has_pin?'Profil-PIN':'Account-Passwort'} wert={unlock.has_pin?pin:password} aufWert={unlock.has_pin?setPin:setPassword} platzhalter={unlock.has_pin?'Sechsstellige Profil-PIN':'Account-Passwort'} secureTextEntry keyboardType={unlock.has_pin?'number-pad':'default'} maxLength={unlock.has_pin?6:128}/></FokusReihe>
@@ -38,7 +38,8 @@ export function ProfilSeite({api,base='',account,activeProfile,aufWahl,aufZuruec
     </>:accountEdit?<>
       <FokusReihe zeile={0}><FFeld spalte={0} accessibilityLabel="Bisheriges Passwort" wert={password} aufWert={setPassword} platzhalter="Bisheriges Passwort" secureTextEntry maxLength={128}/></FokusReihe>
       <FokusReihe zeile={1}><FFeld spalte={0} accessibilityLabel={claim?"Besitzer-Schlüssel":"Neues Passwort"} wert={claim?ownerKey:newPassword} aufWert={claim?setOwnerKey:setNewPassword} platzhalter={claim?"Besitzer-Schlüssel aus DATA_DIR/account-setup-key":"Neues Passwort (mindestens 10 Zeichen)"} secureTextEntry maxLength={128}/></FokusReihe>
-      <Text style={st.gedaempft}>{claim?'Vorhandene Profile werden deinem Account zugeordnet. Neue Profile bleiben erhalten.':'Andere Geräte werden abgemeldet.'}</Text><FokusReihe zeile={2}><View style={{flexDirection:'row',gap:12}}><Knopf spalte={0} text={claim?"Profile übernehmen":"Passwort speichern"} haupt onPress={()=>run(async()=>{const r=await api(claim?'/api/accounts/claim-owner':'/api/accounts/password',{method:'POST',body:claim?{password,setupKey:ownerKey}:{currentPassword:password,newPassword}});setAccountEdit(false);await onSession(r);})}/><Knopf spalte={1} text="Zurück" onPress={()=>setAccountEdit(false)}/></View></FokusReihe>
+      {!claim&&<FokusReihe zeile={2}><FFeld spalte={0} accessibilityLabel="Neues Passwort wiederholen" wert={repeatPassword} aufWert={setRepeatPassword} platzhalter="Neues Passwort wiederholen" secureTextEntry maxLength={128}/></FokusReihe>}
+      <Text style={st.gedaempft}>{claim?'Vorhandene Profile werden deinem Account zugeordnet. Neue Profile bleiben erhalten.':'Andere Geräte werden abgemeldet.'}</Text><FokusReihe zeile={3}><View style={{flexDirection:'row',gap:12}}><Knopf spalte={0} text={claim?"Profile übernehmen":"Passwort speichern"} haupt onPress={()=>run(async()=>{if(!claim&&newPassword!==repeatPassword)throw Error('Die neuen Passwörter stimmen nicht überein.');const r=await api(claim?'/api/accounts/claim-owner':'/api/accounts/password',{method:'POST',body:claim?{password,setupKey:ownerKey}:{currentPassword:password,newPassword}});setAccountEdit(false);await onSession(r);})}/><Knopf spalte={1} text="Zurück" onPress={()=>setAccountEdit(false)}/></View></FokusReihe>
     </>:edit?<>
       {!!avatar&&<Image source={{uri:avatar}} style={{width:90,height:90,borderRadius:45}}/>}
       <FokusReihe zeile={0}><FFeld spalte={0} accessibilityLabel="Profilname" wert={name} aufWert={setName} platzhalter="Name" maxLength={40}/></FokusReihe>
@@ -51,11 +52,17 @@ export function ProfilSeite({api,base='',account,activeProfile,aufWahl,aufZuruec
       {deleting&&<><Text style={{color:C.red}}>Profil „{edit.name}“ mit Fortschritt und Merkliste dauerhaft löschen?</Text><FokusReihe zeile={7}><Knopf spalte={0} text="Endgültig löschen" onPress={()=>run(async()=>{await api('/api/profiles/'+edit.id,{method:'DELETE',body:{password}});await load();setEdit(null);})}/></FokusReihe></>}
       {istTV&&<View style={{gap:10,alignItems:'flex-start'}}><Text style={st.h2}>Profilbild am Handy ändern</Text><QrBild text={base.replace(/\/$/,'')+'/#/profiles?edit='+edit.id}/><Text style={st.gedaempft}>In der WebApp mit deinem Account anmelden und das Bild auswählen.</Text></View>}
     </>:<>
+      <Text style={st.h2}>Deine Profile</Text>
+      <Text style={st.gedaempft}>Bild wählen zum Wechseln. Unter „Bearbeiten“ findest du Profilbild, Name, Kinderfreigaben und sechsstellige PIN.</Text>
       <FokusReihe zeile={0}><View style={{flexDirection:'row',gap:20,flexWrap:'wrap'}}>{(liste||[]).map((p,i)=><FKnopf key={p.id} spalte={i} onPress={()=>choose(p)} style={{width:112,alignItems:'center',borderWidth:2,borderColor:'transparent',padding:6,borderRadius:12}} fokusStil={st.kachelFokus}><View style={{width:80,height:80,borderRadius:40,overflow:'hidden',backgroundColor:p.avatar?'transparent':C.red,alignItems:'center',justifyContent:'center'}}>{p.avatar?<Image source={{uri:p.avatar}} style={{width:80,height:80}}/>:<Text style={{fontSize:32,color:C.weiss}}>{p.name?.[0]}</Text>}</View><Text style={st.kachelTitel}>{p.name}</Text><Text style={st.gedaempft}>{p.is_child?`Bis ${p.max_age} Jahre`:''}{p.has_pin?' · PIN':''}</Text></FKnopf>)}</View></FokusReihe>
       <FokusReihe zeile={1}><View style={{flexDirection:'row',gap:12,flexWrap:'wrap'}}>{(liste||[]).map((p,i)=><Knopf key={p.id} text={p.name+' bearbeiten'} spalte={i} onPress={()=>open(p)}/>)}</View></FokusReihe>
-      <FokusReihe zeile={2}><View style={{flexDirection:'row',gap:12,flexWrap:'wrap'}}><Knopf spalte={0} text="Profil hinzufügen" onPress={()=>open({id:0,name:'',avatar:null})}/><Knopf spalte={1} text="Account-Passwort ändern" onPress={()=>{setClaim(false);setAccountEdit(true);setPassword('');setNewPassword('');setFehler('');}}/>{!!aufAbmelden&&<Knopf spalte={2} text="Account abmelden" onPress={aufAbmelden}/>}</View></FokusReihe>
-      {canClaim&&<FokusReihe zeile={3}><Knopf spalte={0} text="Vorhandene Profile übernehmen" onPress={()=>{setClaim(true);setAccountEdit(true);setPassword('');setOwnerKey('');setFehler('');}}/></FokusReihe>}
-      {!!aufZurueck&&<FokusReihe zeile={4}><Knopf text="Zurück" spalte={0} onPress={aufZurueck}/></FokusReihe>}
+      <FokusReihe zeile={2}><View style={{flexDirection:'row',gap:12,flexWrap:'wrap'}}><Knopf spalte={0} text="Profil hinzufügen" onPress={()=>open({id:0,name:'',avatar:null})}/></View></FokusReihe>
+      <Text style={[st.h2,{marginTop:16}]}>Dein Account</Text>
+      <Text style={st.gedaempft}>{account?.email} · {account?.isAdmin?'Serverbesitzer':'angemeldet'}</Text>
+      <FokusReihe zeile={3}><View style={{flexDirection:'row',gap:12,flexWrap:'wrap'}}><Knopf spalte={0} text="Account-Passwort ändern" onPress={()=>{setClaim(false);setAccountEdit(true);setPassword('');setNewPassword('');setRepeatPassword('');setFehler('');}}/>{!!aufAbmelden&&<Knopf spalte={1} text="Account abmelden" onPress={aufAbmelden}/>}</View></FokusReihe>
+      <Text style={st.gedaempft}>Nach dem Abmelden kannst du einen anderen Account anmelden oder erstellen. Gespeicherte Passwörter und PINs sind nicht auslesbar.</Text>
+      {canClaim&&<FokusReihe zeile={4}><Knopf spalte={0} text="Vorhandene Profile übernehmen" onPress={()=>{setClaim(true);setAccountEdit(true);setPassword('');setOwnerKey('');setFehler('');}}/></FokusReihe>}
+      {!!aufZurueck&&<FokusReihe zeile={5}><Knopf text="Zurück" spalte={0} onPress={aufZurueck}/></FokusReihe>}
     </>}
   </View></ScrollView>;
 }

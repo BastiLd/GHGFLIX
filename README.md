@@ -23,6 +23,8 @@ alles butterweich über den eingebauten mpv-Player ab.
 
 ## Accounts ab 3.6.0
 
+**Bedienung ab 3.6.1:** Profilbild → **Account & Profile** für Passwort, Abmeldung, Profilbilder, Kinderfreigaben und PIN. [Konkrete WebHafen-Einstellungen und Update-Anleitung](docs/WEBHAFEN_UND_UPDATES.md).
+
 Im Serverbetrieb folgt auf das gemeinsame Server-Passwort die persönliche Anmeldung per E-Mail/Passwort oder optional Google. Jeder Account hat eigene Profile, Fortschritte, Merklisten und Kanäle. Profile unterstützen eigene Bilder, sechsstellige PINs und serverseitig gefilterte Kinderfreigaben.
 
 **Server und Clients zusammen aktualisieren.** Den bisherigen Datenordner behalten und vorher sichern. Der Besitzer übernimmt die vorhandenen Profile einmalig mit dem Schlüssel aus `DATA_DIR/account-setup-key`; gewöhnliche neue Accounts erhalten diese Daten nicht. [Einrichtung, Google, Datenübernahme und Passwort-Wiederherstellung](docs/ACCOUNTS.md).
