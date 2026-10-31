@@ -23,6 +23,7 @@ try {
   assert.equal(db.prepare('SELECT avatar FROM profiles WHERE id=1').get().avatar,'legacy-avatar');
   assert.equal(db.prepare('SELECT supabase_id FROM profiles WHERE id=1').get().supabase_id,'legacy-cloud-id');
   setSetting('feeds',JSON.stringify([{id:'legacy',name:'Owner channel'}]));
+  setSetting('pref_cardSize','sm');
   a.initializeAccounts();
   const friend=await a.registerAccount({email:'friend@example.test',password:'friend-password-123',serverPassword:'gateway-secret'},'gateway');
   const candidate=await a.registerAccount({email:'owner@example.test',password:'owner-password-123',serverPassword:'gateway-secret'},'gateway');
@@ -36,6 +37,8 @@ try {
     assert.equal(a.accountProfiles(a.sessionFor(owner.token))[0].name,'Standard (bisher 1)');
     assert.equal(db.prepare('SELECT position FROM progress WHERE profile_id=1').get().position,24);
     assert.deepEqual(JSON.parse(getSetting('feeds')).map(f=>f.id),['legacy','new']);
+    assert.equal(getSetting('pref_cardSize'),'sm');
+    assert.equal(accountContext.run({accountId:friend.account.id},()=>getSetting('pref_cardSize')),null);
     assert.equal(a.accountProfiles(a.sessionFor(friend.token)).length,1);
     const cli=spawnSync(process.execPath,[fileURLToPath(new URL('../src/account-admin.js',import.meta.url)),'reset-password','owner@example.test'],{env:process.env,input:'recovered-password-123\n',encoding:'utf8',windowsHide:true});
     assert.equal(cli.status,0,cli.stderr);assert(!cli.stdout.includes('recovered-password'));

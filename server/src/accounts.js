@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { openDb, DATA_DIR, getSetting, setSetting,settingOr } from './db.js';
 import { profileValues } from './profile.js';
+import { personalSetting } from './account-context.js';
 
 const scrypt = promisify(scryptCallback);
 const TTL = 30 * 24 * 60 * 60 * 1000;
@@ -100,7 +101,7 @@ export async function registerAccount(body, serverTokenHash, setup = false) {
       db.prepare('UPDATE profiles SET account_id=? WHERE account_id IS NULL').run(id);
       setSetting('legacy_owner_account', String(id));
       // Existing channel subscriptions belong to the owner, never to a guest.
-      for (const row of db.prepare("SELECT key,value FROM settings WHERE key='feeds' OR key LIKE 'feed_%'").all())
+      for (const row of db.prepare('SELECT key,value FROM settings').all().filter(r=>personalSetting(r.key)))
         db.prepare('INSERT OR IGNORE INTO settings VALUES(?,?)').run(`account:${id}:${row.key}`,row.value);
       for (const table of ['push_devices','native_push_devices']) if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)) {
         const cols = db.prepare(`PRAGMA table_info(${table})`).all();
@@ -135,7 +136,7 @@ export async function claimOwner(session,body) {
       db.prepare('UPDATE profiles SET account_id=?,name=? WHERE id=?').run(session.account_id,name,p.id);
     }
     setSetting('legacy_owner_account',String(session.account_id));
-    for(const r of db.prepare("SELECT key,value FROM settings WHERE key='feeds' OR key LIKE 'feed_%'").all()) {
+    for(const r of db.prepare('SELECT key,value FROM settings').all().filter(r=>personalSetting(r.key))) {
       const target=`account:${session.account_id}:${r.key}`;
       const previous=db.prepare('SELECT value FROM settings WHERE key=?').get(target)?.value;
       let value=r.value;
