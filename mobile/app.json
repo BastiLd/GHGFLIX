@@ -8,7 +8,7 @@
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0b0b0f",
     "newArchEnabled": false,
-    "runtimeVersion": "3",
+    "runtimeVersion": "4",
     "splash": {
       "backgroundColor": "#0b0b0f"
     },
@@ -37,7 +37,7 @@
     "ios": {
       "bundleIdentifier": "com.bastild.ghgflix",
       "supportsTablet": true,
-      "buildNumber": "22",
+      "buildNumber": "23",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
@@ -46,7 +46,7 @@
     },
     "android": {
       "package": "com.bastild.ghgflix",
-      "versionCode": 22
+      "versionCode": 23
     },
     "extra": {
       "eas": {

@@ -14,6 +14,7 @@
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { istTVProdukt } from "./produkt.js";
+import { legacySubtitle, normalizeGestures, normalizeSubtitle } from "../../shared/player-settings.js";
 
 const SCHLUESSEL = "ghgflix.einstellungen";
 
@@ -129,11 +130,15 @@ export async function laden() {
   } catch {
     zwischenspeicher = { ...STANDARD };
   }
+  zwischenspeicher.subtitleStyle = legacySubtitle(zwischenspeicher);
+  zwischenspeicher.gestures = normalizeGestures(zwischenspeicher.gestures);
   return zwischenspeicher;
 }
 
 export async function sichern(neu) {
   zwischenspeicher = { ...STANDARD, ...neu };
+  zwischenspeicher.subtitleStyle = normalizeSubtitle(neu.subtitleStyle || legacySubtitle(neu));
+  zwischenspeicher.gestures = normalizeGestures(neu.gestures);
   try {
     await AsyncStorage.setItem(SCHLUESSEL, JSON.stringify(zwischenspeicher));
   } catch { /* voller Speicher — dann gilt es wenigstens für diese Sitzung */ }

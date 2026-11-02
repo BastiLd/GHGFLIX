@@ -3,7 +3,7 @@ import Module from "node:module";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { FokusProvider } from "../src/fokus.js";
-import { folgenNach } from "../src/folgen.js";
+import { folgenNach, folgenVor } from "../src/folgen.js";
 
 const originalLoad = Module._load;
 let players = [], api, PlayerScreen;
@@ -115,6 +115,39 @@ it("preserves all subsequent episodes across seasons and handles the end/unknown
   expect(chain.id).toBe(2); expect(chain.next.id).toBe(3);
   expect(chain.next.se).toBe("S02E01"); expect(chain.next.next).toBeNull();
   expect(folgenNach(episodes, 3)).toBeNull(); expect(folgenNach(episodes, -1)).toBeNull();
+  expect(folgenVor(episodes,3)).toMatchObject({id:2,prev:{id:1}});
+  expect(folgenVor(episodes,1)).toBeNull(); expect(folgenVor(episodes,-1)).toBeNull();
+});
+
+it("previous episode preserves current progress and carries a return route across seasons",async()=>{
+  const push=vi.fn();
+  await flush(()=>render(draw({id:3,subtitle:"S02E01 · Beginn",prevEp:{id:2,se:"S01E10",title:"Finale",prev:{id:1}},nextEp:null,push})));
+  const p=players[0]; act(()=>{p.ready();p.time(12);});
+  await flush(()=>fireEvent.click(screen.getByRole("button",{name:"Vorherige Folge"})));
+  expect(push).toHaveBeenCalledWith(expect.objectContaining({id:2,prevEp:{id:1},nextEp:expect.objectContaining({id:3,subtitle:"S02E01 · Beginn"})}));
+  expect(api.mock.calls.filter(([,opt])=>opt?.method==="POST").every(([,opt])=>opt.body.refId===3&&!opt.body.watched)).toBe(true);
+});
+
+it("seeking after natural end explicitly keeps native playWhenReady paused",async()=>{
+  await flush(()=>render(draw()));const p=players[0];act(()=>p.ready());
+  act(()=>{p.playing=false;p.emit("playToEnd",{});});
+  const position=Object.getOwnPropertyDescriptor(p,"currentTime");
+  Object.defineProperty(p,"currentTime",{...position,set(t){position.set.call(p,t);p.playing=true;}});
+  fireEvent.click(screen.getByRole("button",{name:"Zurückspulen"}));
+  expect(p.playing).toBe(false);
+  expect(screen.getByRole("button",{name:"Abspielen"})).toBeTruthy();
+});
+
+it("accepts native readiness observed after out-of-order source/status events",async()=>{
+  await flush(()=>render(draw()));const p=players[0];
+  act(()=>{
+    p.loaded=true;p.status="loading";
+    p.emit("statusChange",{status:"readyToPlay"});
+    p.emit("sourceLoad",{videoSource:p.source,duration:90});
+    p.status="readyToPlay";p.time(1);
+  });
+  await flush(()=>vi.advanceTimersByTime(45001));
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 
 it("serializes async source replacement, skips superseded seeks, and preserves pause during loading", async () => {

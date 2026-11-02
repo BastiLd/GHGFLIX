@@ -174,8 +174,9 @@ test("Handy: Sprachmenü, Untertitel, Darstellung, Standard und Schließen", asy
   await expect(page.getByText("Für weitere Titel auf diesem Gerät gespeichert.")).toBeVisible();
   await page.screenshot({ path: "evidence/mobile-language.png" });
   await page.getByText("Darstellung", { exact: true }).click();
-  await page.getByText("Schriftgröße · 100 %", { exact: true }).click();
-  await expect(page.getByText("Schriftgröße · 125 %", { exact: true })).toBeVisible();
+  const size=page.getByRole("textbox",{name:"Schriftgröße (%)",exact:true});
+  await size.fill("137"); await size.press("Tab");
+  await expect(size).toHaveValue("137");
   await page.getByRole("button", { name: "Menü schließen" }).click();
   await page.getByRole("button", { name: "Fertig", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sprache & Untertitel", exact: true })).toBeVisible();
@@ -208,8 +209,8 @@ test("Handy quer: Sprachmenü und Darstellung bleiben im sichtbaren Bereich", as
   await page.getByText("Darstellung", { exact: true }).click();
   const close = await page.getByRole("button", { name: "Menü schließen" }).boundingBox();
   expect(close.y).toBeGreaterThanOrEqual(0);
-  await page.getByText("Zeitversatz · 0 s", { exact: true }).scrollIntoViewIfNeeded();
-  const shift = await page.getByText("Zeitversatz · 0 s", { exact: true }).boundingBox();
+  await page.getByRole("textbox", { name: "Zeitversatz (Sekunden)", exact: true }).scrollIntoViewIfNeeded();
+  const shift = await page.getByRole("textbox", { name: "Zeitversatz (Sekunden)", exact: true }).boundingBox();
   expect(shift.y + shift.height).toBeLessThanOrEqual(390);
   await page.screenshot({ path: "evidence/mobile-subtitle-style-landscape.png" });
 });

@@ -14,6 +14,7 @@ export function useVideoPlayer(_source, setup) {
       get currentTime() { return el.currentTime; }, set currentTime(v) { el.currentTime = v; },
       get duration() { return Number.isFinite(el.duration) ? el.duration : 0; },
       get playbackRate() { return el.playbackRate; }, set playbackRate(v) { el.playbackRate = v; },
+      get volume() { return el.volume; }, set volume(v) { el.volume = v; },
       addListener(name, fn) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(fn); return { remove: () => listeners.get(name)?.delete(fn) }; },
     };
     el.addEventListener("loadedmetadata", () => { p.status = "readyToPlay"; emit("sourceLoad", { videoSource: { uri: p.source }, duration: el.duration }); });

@@ -15,6 +15,32 @@
 import * as native from "tauri-plugin-mpv-api";
 import { invoke } from "./backend";
 import { IS_TAURI, withToken, usesServer } from "./platform";
+import { normalizeSubtitle, rgba, type SubtitleStyle } from "../../shared/player-settings.js";
+
+let subtitleAppearance = normalizeSubtitle({});
+/** Apply the same validated style to mpv and the browser's VTT renderer. */
+export async function applySubtitleStyle(value: SubtitleStyle): Promise<void> {
+  const s = normalizeSubtitle(value); subtitleAppearance = s;
+  if (IS_TAURI) {
+    const color = (hex: string, opacity: number) => `${hex}${Math.round(opacity / 100 * 255).toString(16).padStart(2,"0")}`;
+    const props: Record<string, unknown> = {
+      "sub-scale": s.sizePercent / 100, "sub-font": { sans: "sans-serif", serif: "serif", mono: "monospace" }[s.fontFamily],
+      "sub-bold": s.bold, "sub-color": color(s.textColor,s.textOpacity), "sub-back-color": color(s.backgroundColor,s.backgroundOpacity),
+      "sub-border-color": s.edgeColor, "sub-border-size": s.edgeStyle === "outline" ? s.edgeWidth : 0,
+      "sub-shadow-color": s.edgeColor, "sub-shadow-offset": s.edgeStyle === "shadow" ? s.edgeWidth : 0,
+      "sub-border-style": s.backgroundOpacity ? "background-box" : "outline-and-shadow",
+      "sub-pos": 100-s.bottomPercent, "sub-delay": s.delaySeconds, "sub-ass-override": "force",
+    };
+    await Promise.all(Object.entries(props).map(([name,v]) => native.setProperty(name as never,v as never)));
+    return;
+  }
+  let style = document.getElementById("ghg-subtitle-style");
+  if (!style) { style = document.createElement("style"); style.id = "ghg-subtitle-style"; document.head.appendChild(style); }
+  const shadow = s.edgeStyle === "none" ? "none" : s.edgeStyle === "shadow" ? `0 ${s.edgeWidth}px ${s.edgeWidth*2}px ${s.edgeColor}` : [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]].map(([x,y])=>`${x*s.edgeWidth}px ${y*s.edgeWidth}px 0 ${s.edgeColor}`).join(",");
+  style.textContent = `#ghgflix-video::cue { font-size:${s.sizePercent}%; font-family:${{sans:"sans-serif",serif:"serif",mono:"monospace"}[s.fontFamily]}; font-weight:${s.bold ? 700 : 400}; color:${rgba(s.textColor,s.textOpacity)}; background-color:${rgba(s.backgroundColor,s.backgroundOpacity)}; text-shadow:${shadow}; }`;
+  S.subDelay = s.delaySeconds;
+  if (S.subEl) alignCues(S.subEl);
+}
 
 type PropCb = (e: { name: string; data: unknown }) => void;
 
@@ -319,6 +345,7 @@ function alignCues(track: HTMLTrackElement) {
     if (end + delta <= 0) continue;
     cue.startTime = Math.max(0, start + delta);
     cue.endTime = Math.max(cue.startTime + .001, end + delta);
+    cue.snapToLines = false; cue.line = 100-subtitleAppearance.bottomPercent; cue.lineAlign = "end";
     track.track.addCue(cue);
   }
 }
@@ -573,9 +600,7 @@ export async function setProperty(name: string, value: unknown): Promise<void> {
       if (S.subEl) alignCues(S.subEl);
       break;
     case "sub-scale": {
-      let style = document.getElementById("ghg-subtitle-style");
-      if (!style) { style = document.createElement("style"); style.id = "ghg-subtitle-style"; document.head.appendChild(style); }
-      style.textContent = `#ghgflix-video::cue { font-size: ${Math.round(100 * Math.min(2, Math.max(.5, Number(value) || 1)))}%; background: rgba(0,0,0,.7); color: white; }`;
+      await applySubtitleStyle({ ...subtitleAppearance, sizePercent: Number(value)*100 });
       break;
     }
     default:

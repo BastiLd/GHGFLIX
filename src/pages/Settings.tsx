@@ -58,6 +58,7 @@ import { setTvModePref, tvModePref } from "../lib/tvMode";
 import { ServerConnection } from "../components/ServerConnection";
 import { Button, InfoButton, Modal, Spinner, TextInput } from "../components/ui";
 import { ThemeStore } from "../components/ThemeStore";
+import { PlayerSettingsEditor } from "../components/PlayerSettingsEditor";
 import { FolderScanDialog, IgnoredFilesList } from "../components/FolderScanDialog";
 import ZuordnungDialog from "../components/ZuordnungDialog";
 import { useAccount } from "../lib/accounts";
@@ -912,7 +913,7 @@ function FullSettings() {
             </div>
             <div className="flex gap-4 flex-wrap mb-4">
               <PrefSelect k="audioLangPref" label="Audio-Sprache bevorzugen" options={[["en-de", "Englisch, dann Deutsch"], ["de-en", "Deutsch, dann Englisch"], ["file", "Datei-Standard"]]} />
-              <PrefNumber k="subScale" label="Untertitel-Größe (×)" min={0.5} max={2} step={0.1} />
+              <PlayerSettingsEditor />
               <span className="inline-flex items-end gap-1">
                 <PrefSelect k="pipSize" label="Bild-im-Bild-Größe" options={[["sm", "Klein"], ["md", "Mittel"], ["lg", "Groß"]]} />
                 <WebInfo>

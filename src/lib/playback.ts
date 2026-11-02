@@ -40,6 +40,8 @@ interface PlaybackStore {
   mini: MiniInfo | null;
   expandTo: { mediaType: "movie" | "episode"; mediaId: number; path?: string; title?: string; subtitle?: string | null; backTarget?: string } | null;
   queue: QueueItem[];
+  history: { profileId: string; items: { mediaType: "movie" | "episode"; id: number }[]; cursor: number };
+  rememberPlayed: (profileId: string, mediaType: "movie" | "episode", id: number) => void;
 
   setInited: (v: boolean) => void;
   setHandoff: (v: boolean) => void;
@@ -84,6 +86,16 @@ export const usePlayback = create<PlaybackStore>((set, get) => ({
   mini: null,
   expandTo: null,
   queue: loadQueue(),
+  history: { profileId: "", items: [], cursor: -1 },
+  rememberPlayed: (profileId, mediaType, id) => {
+    const old = get().history;
+    const h = old.profileId === profileId ? old : { profileId, items: [], cursor: -1 };
+    const matches = (i: number) => h.items[i]?.mediaType === mediaType && h.items[i]?.id === id;
+    if(matches(h.cursor))return;
+    if(matches(h.cursor-1))set({history:{...h,cursor:h.cursor-1}});
+    else if(matches(h.cursor+1))set({history:{...h,cursor:h.cursor+1}});
+    else { const items=[...h.items.slice(0,h.cursor+1),{mediaType,id}].slice(-100);set({history:{profileId,items,cursor:items.length-1}}); }
+  },
 
   setInited: (v) => set({ mpvInited: v }),
   setHandoff: (v) => set({ handoff: v }),

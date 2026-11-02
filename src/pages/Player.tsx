@@ -1,6 +1,6 @@
 import { createFullscreenController } from "../lib/fullscreen";
 import { getCurrentWindow, join, LogicalSize, openDialog, pictureDir, webPickedFile } from "../lib/backend";
-import { IS_WEB } from "../lib/platform";
+import { IS_WEB, serverBase } from "../lib/platform";
 import {
   ArrowLeft,
   AudioLines,
@@ -17,13 +17,14 @@ import {
   Play,
   SkipBack,
   SkipForward,
+  Settings2,
   Volume2,
   VolumeX,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { cancelPendingLoad, command, destroy, getProperty, init, observeProperties, setProperty, srtToVtt, webTogglePip, webStreamQuality } from "../lib/mpv";
+import { applySubtitleStyle, cancelPendingLoad, command, destroy, getProperty, init, observeProperties, setProperty, srtToVtt, webTogglePip, webStreamQuality } from "../lib/mpv";
 import { episodeVersions, getEpisode, getMovie, getProgress, getSetting, listShowEpisodes, mediaThumbnail, movieVersions, revealInExplorer, setEpisodeIntro, setMediaDims, setProgress, trickplayInfo, type TrickplayInfo } from "../lib/api";
 import { openCtx } from "../lib/contextmenu";
 import { formatTime, quality as computeQuality, seasonEpisodeLabel } from "../lib/format";
@@ -31,12 +32,16 @@ import { comboFromEvent } from "../lib/keys";
 import { ENGLISH, GERMAN, langName } from "../lib/lang";
 import { useStore } from "../lib/store";
 import { applyMiniMargins, playback, usePlayback } from "../lib/playback";
-import { uiPrefs, useUiPrefs } from "../lib/uiPrefs";
+import { uiPrefs } from "../lib/uiPrefs";
 import type { Episode, MediaVersion } from "../lib/types";
 import { Wordmark } from "../components/Brand";
 import { stillUrl } from "../lib/img";
 import { Scrubber } from "../components/Scrubber";
-import { Spinner } from "../components/ui";
+import { Modal, Spinner } from "../components/ui";
+import { PlayerSettingsEditor } from "../components/PlayerSettingsEditor";
+import { setSubtitleStyle, usePlayerPreferences } from "../lib/playerPreferences";
+import { usePlayerTouch } from "../lib/usePlayerTouch";
+import { useDialogFocus } from "../lib/useDialogFocus";
 
 import { useMobileLayout } from "../lib/useMobileLayout";
 import { MobilePlayerControls } from "../components/MobilePlayerControls";
@@ -134,9 +139,12 @@ let sharedFullscreen: ReturnType<typeof createFullscreenController> | undefined;
 export default function Player() {
   const touchLayout = useMobileLayout();
   const mobileDialogRef = useRef(false);
-  const subScale = useUiPrefs(s => s.subScale);
+  const [mobileDialogOpen, setMobileDialogOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const scrubActive = useRef(false);
+  const playerPreferences = usePlayerPreferences();
+  useDialogFocus(settingsOpen, "Untertitel & Touch-Gesten");
   const [streamQuality, setStreamQuality] = useState(webStreamQuality);
-  useEffect(() => { void setProperty("sub-scale", subScale); }, [subScale]);
   const { type, id } = useParams();
   const mediaType = (type === "episode" ? "episode" : "movie") as "movie" | "episode";
   const mediaId = Number(id);
@@ -147,6 +155,7 @@ export default function Player() {
   const navigate = useNavigate();
   const location = useLocation();
   const profileId = useStore((s) => s.profileId);
+  const playbackScope = `${serverBase() || (IS_WEB ? window.location.origin : "desktop-local")}:${profileId}`;
   const toast = useStore((s) => s.toast);
 
   const [ready, setReady] = useState(false);
@@ -599,7 +608,7 @@ export default function Player() {
   };
   // audio/subtitle sync offsets (±0.1s steps)
   const [audioDelay, setAudioDelay] = useState(0);
-  const [subDelay, setSubDelay] = useState(0);
+  const [subDelay, setSubDelay] = useState(playerPreferences.subtitle.delaySeconds);
   const nudgeDelay = (kind: "audio" | "sub", d: number) => {
     if (kind === "audio") {
       setAudioDelay((cur) => {
@@ -608,13 +617,17 @@ export default function Player() {
         return v;
       });
     } else {
-      setSubDelay((cur) => {
-        const v = Math.round((cur + d) * 10) / 10;
-        setProperty("sub-delay", v).catch(() => {});
-        return v;
-      });
+      const v = Math.max(-30,Math.min(30,Math.round((subDelay+d)*10)/10));
+      setSubDelay(v); setSubtitleStyle({ delaySeconds: v });
+      setProperty("sub-delay",v).catch(() => {});
     }
   };
+
+  useEffect(() => {
+    if (!ready) return;
+    void applySubtitleStyle(playerPreferences.subtitle).catch(() => toast("Untertitelstil konnte nicht vollständig angewendet werden", "info"));
+    setSubDelay(playerPreferences.subtitle.delaySeconds);
+  }, [ready, playerPreferences.subtitle, mediaId, mediaType]);
 
   // mpv init + observers (once)
   useEffect(() => {
@@ -842,6 +855,7 @@ export default function Player() {
         if (fromMini) {
           itemRef.current = { type: mediaType, id: mediaId };
           loadingItemRef.current = false;
+          playback().rememberPlayed(playbackScope, mediaType, mediaId);
           playback().setExpandTo(null);
           if (expand.path) {
             path = expand.path;
@@ -867,6 +881,7 @@ export default function Player() {
           await command("loadfile", [path]);
           if (cancelled) return;
           loadingItemRef.current = false;
+          playback().rememberPlayed(playbackScope, mediaType, mediaId);
           const key = location.state?.queueKey;
           const queued = playback().queue.find((q) => q.key === key);
           if (queued?.mediaType === mediaType && queued.ids[0] === mediaId) playback().takeQueued(key);
@@ -885,8 +900,9 @@ export default function Player() {
   const wake = useCallback(() => {
     setShowUi(true);
     if (hideTimer.current) window.clearTimeout(hideTimer.current);
+    if (prefsRef.current.uiTimeoutSec === 0) return;
     hideTimer.current = window.setTimeout(() => {
-      if (mobileDialogRef.current || pausedRef.current) return;
+      if (mobileDialogRef.current || pausedRef.current || scrubActive.current) return;
       setShowUi(false);
       setTrackMenu(null);
     }, Math.max(1, prefsRef.current.uiTimeoutSec || 3) * 1000);
@@ -901,6 +917,8 @@ export default function Player() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (e.defaultPrevented || mobileDialogRef.current || target?.closest?.("input, textarea, select, [contenteditable=true], [role=dialog]")) return;
       const combo = comboFromEvent(e);
       if (markerKeyRef.current && combo === markerKeyRef.current) {
         e.preventDefault();
@@ -1175,12 +1193,33 @@ export default function Player() {
     openCtx(e, items);
   };
 
+  const touch = usePlayerTouch({
+    settings: playerPreferences.gestures, identity: `${mediaType}:${mediaId}`, touchLayout,
+    enabled: !pip && !mobileDialogOpen && !settingsOpen, playing: !paused && !buffering,
+    speed, volume,
+    onTap: () => { if (showUi) { if(hideTimer.current)clearTimeout(hideTimer.current); setShowUi(false); } else wake(); },
+    onSeek: seconds => seekTo(Math.max(0,Math.min(duration,posRef.current+seconds))),
+    onRate: rate => { void setProperty("speed",rate); }, onVolume: changeVolume,
+  });
+  useEffect(() => { mobileDialogRef.current = mobileDialogOpen || settingsOpen; }, [mobileDialogOpen, settingsOpen]);
+  const onScrubInteraction = useCallback((active: boolean) => { scrubActive.current = active; if(active)wake(); },[wake]);
+  const history = usePlayback(s => s.history);
+  const previousPlayed = history.profileId === playbackScope ? history.items[history.cursor-1] : undefined;
+  const nextPlayed = history.profileId === playbackScope ? history.items[history.cursor+1] : undefined;
+  const previousTarget = prevEp ? {mediaType:"episode",id:prevEp.id} : previousPlayed;
+  const queuedNext = playback().peekNext();
+  const previousLabel = previousTarget?.mediaType === "episode" ? "Vorherige Folge" : "Vorheriges Video";
+  const playPrevious = previousTarget ? () => { saveProgress(); navigate(`/play/${previousTarget.mediaType}/${previousTarget.id}`); } : undefined;
+  const playNext = nextPlayed ? () => { saveProgress(); navigate(`/play/${nextPlayed.mediaType}/${nextPlayed.id}`); }
+    : queuedNext ? () => { saveProgress(); navigate(`/play/${queuedNext.mediaType}/${queuedNext.ids[0]}`,{state:{queueKey:queuedNext.key}}); }
+    : nextEp ? () => { saveProgress(); navigate(`/play/episode/${nextEp.id}`); } : undefined;
+
   return (
     <div
       className={`fixed inset-0 bg-transparent text-white select-none ${showUi ? "" : "cursor-none"}`}
-      onMouseMove={wake}
+      onMouseMove={() => { if (!touch.ignoreMouse()) wake(); }}
       onMouseLeave={() => {
-        if (touchLayout || mobileDialogRef.current) return;
+        if (touchLayout || mobileDialogRef.current || touch.ignoreMouse()) return;
         setShowUi(false);
         setTrackMenu(null);
       }}
@@ -1189,15 +1228,19 @@ export default function Player() {
         nudgeVolume(e.deltaY < 0 ? 5 : -5);
         wake();
       }}
-      onContextMenu={openPlayerMenu}
+      onContextMenu={e => { if (touch.ignoreMouse()) { e.preventDefault(); return; } openPlayerMenu(e); }}
       onClick={() => trackMenu && setTrackMenu(null)}
     >
+      {touch.dim < 1 && <div className="absolute inset-0 pointer-events-none" style={{ background: "black", opacity: 1-touch.dim }}/ >}
       <div
         className="absolute inset-0"
+        data-testid="player-gesture-surface"
+        style={{ touchAction: "none" }}
+        {...touch.bind}
         onMouseDown={onBackgroundMouseDown}
-        onClick={() => { if (touchLayout) { wake(); return; } if (!pip) togglePause(); }}
+        onClick={() => { if (touchLayout || touch.ignoreMouse()) return; if (!pip) togglePause(); }}
         onDoubleClick={(e) => {
-          if (pip) return;
+          if (pip || touchLayout || touch.ignoreMouse()) return;
           // double-click on the left/right third seeks (configurable), middle = fullscreen
           // (the two single clicks before a dblclick toggle pause twice = no-op,
           // so no compensation is needed here)
@@ -1215,6 +1258,8 @@ export default function Player() {
           toggleFullscreen();
         }}
       />
+      {touch.hud && <div role="status" className="absolute top-1/4 left-1/2 -translate-x-1/2 bg-black/75 rounded-xl px-4 py-3 pointer-events-none">{touch.hud}</div>}
+      <Modal open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Untertitel & Touch-Gesten"><PlayerSettingsEditor /></Modal>
 
       {error && (
         <div className="absolute inset-0 flex items-center justify-center bg-ghg-bg/95 p-8">
@@ -1447,6 +1492,7 @@ export default function Player() {
               sprite={prefsRef.current.thumbEnabled ? sprite : null}
               markers={prefsRef.current.chapterMarkers ? chapters.map((c) => c.time) : undefined}
               intro={prefsRef.current.introMarker ? resolveIntroWindow() : null}
+              onInteraction={onScrubInteraction}
             />
           )}
           <button
@@ -1462,23 +1508,23 @@ export default function Player() {
           paused={paused} onPause={togglePause} onSeek={s => seekTo(Math.max(0, Math.min(duration, position + s)))}
           fullscreen={fullscreen} onFullscreen={toggleFullscreen} onPip={togglePip}
             onQueue={mediaType === "episode" || queueItems.length ? () => setEpPanel(o => !o) : undefined}
-            onNext={nextEp ? () => navigate(`/play/episode/${nextEp.id}`) : undefined} onAspect={cycleAspect}
+            onNext={playNext} onAspect={cycleAspect} nextLabel={queuedNext?.mediaType === "movie" || nextPlayed?.mediaType === "movie" ? "Nächstes Video" : "Nächste Folge"}
+            onPrevious={playPrevious} previousLabel={previousLabel}
           audio={audioTracks.map(t => ({ id: t.id, label: trackLabel(t) }))} subtitles={subTracks.map(t => ({ id: t.id, label: trackLabel(t) }))}
           aid={aid} sid={sid} onAudio={selectAudio} onSubtitle={selectSub} speed={speed} onSpeed={changeSpeed}
           quality={streamQuality} onQuality={v => { setStreamQuality(v); void setProperty("ghg-quality", v); }}
-          scale={subScale} onScale={v => useUiPrefs.getState().setPref("subScale", v)} delay={subDelay} onDelay={v => nudgeDelay("sub", v - subDelay)}
-          onDialog={open => { mobileDialogRef.current = open; if (open) setShowUi(true); }}
+          onDialog={open => { mobileDialogRef.current = open; setMobileDialogOpen(open); if (open) setShowUi(true); }}
         /> : <div className="player-toolbar flex flex-wrap items-center gap-2">
           <button aria-label={paused ? "Abspielen" : "Pause"} onClick={togglePause} className="p-2.5 rounded-full bg-ghg-red hover:bg-ghg-red-bright transition">
             {paused ? <Play className="w-5 h-5 fill-white" /> : <Pause className="w-5 h-5 fill-white" />}
           </button>
 
-          {mediaType === "episode" && (
+          {(mediaType === "episode" || playPrevious || playNext) && (
             <>
-              <button onClick={() => prevEp && navigate(`/play/episode/${prevEp.id}`)} disabled={!prevEp} className="p-2 rounded-lg hover:bg-white/10 disabled:opacity-30 transition" title="Vorherige Folge">
+              <button onClick={playPrevious} disabled={!playPrevious} className="p-2 rounded-lg hover:bg-white/10 disabled:opacity-30 transition" title={previousLabel}>
                 <SkipBack className="w-5 h-5" />
               </button>
-              <button onClick={() => nextEp && navigate(`/play/episode/${nextEp.id}`)} disabled={!nextEp} className="p-2 rounded-lg hover:bg-white/10 disabled:opacity-30 transition" title="Nächste Folge">
+              <button onClick={playNext} disabled={!playNext} className="p-2 rounded-lg hover:bg-white/10 disabled:opacity-30 transition" title={queuedNext?.mediaType === "movie" || nextPlayed?.mediaType === "movie" ? "Nächstes Video" : "Nächste Folge"}>
                 <SkipForward className="w-5 h-5" />
               </button>
             </>
@@ -1502,6 +1548,8 @@ export default function Player() {
           </div>
 
           <div className="flex-1" />
+
+          <button aria-label="Untertitel & Touch-Gesten" title="Untertitel & Touch-Gesten" onClick={() => { mobileDialogRef.current = true; setSettingsOpen(true); }} className="p-2 rounded-lg hover:bg-white/10"><Settings2 className="w-5 h-5"/></button>
 
           {/* quality / version switch (only when the same movie exists in several qualities) */}
           {versions.length > 1 && (

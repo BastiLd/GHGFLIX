@@ -6,7 +6,7 @@ const alias = { "▶": "play", "⏸": "pause", "⏪": "rewind", "⏩": "forward"
 
 /** PNG-Maske mit einheitlicher Strichstärke, unabhängig von Androids Emoji-Schrift. */
 export function Icon({ name, size = 24, color = "#fff", style }) {
-  const uri = daten[alias[name] || name];
+  const uri = daten[name === "previous" ? "next" : alias[name] || name];
   if (!uri) return null;
-  return <Image accessible={false} importantForAccessibility="no" source={{ uri }} resizeMode="contain" style={[{ width: size, height: size, tintColor: color }, style]} />;
+  return <Image accessible={false} importantForAccessibility="no" source={{ uri }} resizeMode="contain" style={[{ width: size, height: size, tintColor: color }, name === "previous" && { transform: [{ rotate: "180deg" }] }, style]} />;
 }

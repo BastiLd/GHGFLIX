@@ -353,7 +353,7 @@ function AppInner() {
       <PlayerScreen
         api={api} pop={pop} push={push} base={basis} conn={conn}
         type={oben.type} id={oben.id} title={oben.title}
-        subtitle={oben.subtitle} nextEp={oben.nextEp} showId={oben.showId}
+        subtitle={oben.subtitle} nextEp={oben.nextEp} prevEp={oben.prevEp} showId={oben.showId}
       />
     );
   }

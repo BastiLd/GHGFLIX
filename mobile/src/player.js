@@ -42,9 +42,9 @@
  * NUR aus diesen gespeichert; jeder direkte Zugriff läuft über safe().
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Dimensions, BackHandler, useWindowDimensions, Platform, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, AppState, Dimensions, BackHandler, ScrollView, useWindowDimensions, Platform, Pressable, Text, View } from "react-native";
 import { FKnopf, FokusReihe, useDialog, useFernbedienung, useFernbedienungVorher, useFokusSystem, useFokusElement } from "./fokus.js";
-import { folgenNach } from "./folgen.js";
+import { folgenNach, folgenVor } from "./folgen.js";
 import { C, M, gross, st } from "./stile.js";
 import { Dialog, DialogListe, fmtZeit } from "./bausteine.js";
 import { untertitelHolen } from "./untertitel.js";
@@ -52,6 +52,12 @@ import { erzeugeFortschrittsSicherung } from "./fortschritt-sicherung.js";
 import { jetzt as einstellungenJetzt, sichern as einstellungenSichern, waehleTon, waehleUntertitel } from "./einstellungen.js";
 import { Icon } from "./Icons.js";
 import { SpurenDialog } from "./SpurenDialog.js";
+import { istTVProdukt } from "./produkt.js";
+import { legacySubtitle, normalizeSubtitle, normalizeGestures } from "../../shared/player-settings.js";
+import { NativeSubtitleEditor, NativePreferenceFields, SubtitleText, GESTURE_FIELDS } from "./PlayerSettingsEditor.js";
+import { PlayerGestureSurface } from "./PlayerGestureSurface.js";
+import { PlayerScrubber } from "./PlayerScrubber.js";
+import { playerDevice } from "./player-device.js";
 
 /* ── expo-video vorsichtig laden ──────────────────────────────────────────
    Fehlt das Modul, soll die App eine verständliche Meldung zeigen statt
@@ -78,18 +84,21 @@ export function PlayerScreen(props) {
   return <PlayerSession key={identity} {...props} retry={() => setAttempt((n) => n + 1)} />;
 }
 
-function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, showId, nextEp: initialNextEp, retry }) {
+function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, showId, nextEp: initialNextEp, prevEp: initialPrevEp, retry }) {
   useKeepAwake();
   const { width, height } = useWindowDimensions();
   const kompakt = gross || width > height;
   const fokusSystem = useFokusSystem();
   const [E, setE] = useState(einstellungenJetzt);
+  const subtitleStyle = legacySubtitle(E);
+  const gestureSettings = normalizeGestures(E.gestures);
   const anpassen = (patch) => { const neu = { ...einstellungenJetzt(), ...patch }; setE(neu); einstellungenSichern(neu); };
 
   const [info, setInfo] = useState(null);
   const [resume, setResume] = useState(0);
   const [fehler, setFehler] = useState(null);
   const [nextEp, setNextEp] = useState(initialNextEp);
+  const [prevEp, setPrevEp] = useState(initialPrevEp);
   const [folgenFehler, setFolgenFehler] = useState(false);
   const [folgenVersuch, setFolgenVersuch] = useState(0);
   const [leisteAn, setLeisteAn] = useState(true);
@@ -97,11 +106,20 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
   const [puffert, setPuffert] = useState(true);
   const [pos, setPos] = useState(0);
   const [dauer, setDauer] = useState(0);
-  const [balkenBreite, setBalkenBreite] = useState(0);
+  const [scrubbing, setScrubbing] = useState(false);
+  const scrubbingRef = useRef(false);
+  const [preview, setPreview] = useState(null);
+  const [hud, setHud] = useState(null);
+  const hudTimer = useRef(null);
+  const [brightness, setBrightness] = useState(1);
+  const brightnessRef = useRef(1), originalBrightness = useRef(null), brightnessQueue = useRef(Promise.resolve());
+  const brightnessDirty = useRef(false);
+  const playerVolume = useRef(Number.isFinite(E.playerVolume) ? Math.max(0,Math.min(1,E.playerVolume)) : 1), systemVolume = useRef(1);
   const [dialog, setDialog] = useState(null);   // null | "ton" | "ut" | "tempo" | "bild" | "info"
   const [tempo, setTempo] = useState(E.tempo);
+  const [holding, setHolding] = useState(false);
   const tempoRef = useRef(tempo);
-  tempoRef.current = tempo;
+  tempoRef.current = holding ? gestureSettings.holdRate : tempo;
   const [bildmodus, setBildmodus] = useState(E.bildmodus);
 
   // Spuren
@@ -137,6 +155,7 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
     return () => {
       lebtRef.current = false;
       if (versteckRef.current) clearTimeout(versteckRef.current);
+      if (hudTimer.current) clearTimeout(hudTimer.current);
     };
   }, []);
 
@@ -177,6 +196,7 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
       setDauer(durRef.current);
       setPos(bei);
       setInfo(i);
+      setPreview(i.trickplay && i.trickplayUrl ? { ...i.trickplay, url: i.trickplayUrl } : null);
     })().catch((e) => {
       if (!cancelled && lebtRef.current) { setFehler(e.message || "Medien konnten nicht geladen werden."); setPuffert(false); }
     });
@@ -186,14 +206,18 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
 
   // Continue/history entries carry the show ID, but no prebuilt episode queue.
   useEffect(() => {
-    if (type !== "episode" || !showId || initialNextEp !== undefined) return;
+    if (type !== "episode" || !showId || (initialNextEp !== undefined && initialPrevEp !== undefined)) return;
     let cancelled = false;
     setFolgenFehler(false);
     api(`/api/shows/${showId}`).then((data) => {
-      if (!cancelled && lebtRef.current) setNextEp(folgenNach(data.seasons.flatMap((s) => s.episodes), +id));
+      if (!cancelled && lebtRef.current) {
+        const episodes = data.seasons.flatMap(s => s.episodes);
+        if (initialNextEp === undefined) setNextEp(folgenNach(episodes, +id));
+        if (initialPrevEp === undefined) setPrevEp(folgenVor(episodes, +id));
+      }
     }).catch(() => { if (!cancelled && lebtRef.current) setFolgenFehler(true); });
     return () => { cancelled = true; };
-  }, [api, type, id, showId, initialNextEp, folgenVersuch]);
+  }, [api, type, id, showId, initialNextEp, initialPrevEp, folgenVersuch]);
 
   const quelleFuer = useCallback(
     (i, t) => {
@@ -221,6 +245,53 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
   const player = useVideoPlayer(null, (p) => {
     if (p) p.timeUpdateEventInterval = 0.25;   // flüssige Untertitel
   });
+
+  useEffect(() => {
+    safe(() => { player.volume = gestureSettings.volumeTarget === "system" && playerDevice.systemVolumeAvailable ? 1 : playerVolume.current; });
+  }, [player, safe, gestureSettings.volumeTarget]);
+
+  useEffect(() => {
+    if (istTVProdukt) return;
+    let active = true;
+    const capture = () => brightnessQueue.current.then(() => playerDevice.getBrightness()).then(v => {
+      if (active && Number.isFinite(v)) { originalBrightness.current = v; brightnessRef.current = v; setBrightness(v); }
+    }).catch(() => {});
+    capture();
+    playerDevice.getVolume().then(v => { if (active && Number.isFinite(v)) systemVolume.current = v; }).catch(() => {});
+    const volumeSub = playerDevice.observeVolume(v => { if(active && Number.isFinite(v))systemVolume.current=v; });
+    const restore = () => {
+      if (!brightnessDirty.current) return;
+      brightnessDirty.current = false;
+      const original = originalBrightness.current;
+      brightnessQueue.current = brightnessQueue.current.then(() => playerDevice.restoreBrightness(original)).catch(() => {});
+    };
+    const sub = AppState.addEventListener("change", state => {
+      if (state !== "active") { active = false; restore(); }
+      else { active = true; capture(); }
+    });
+    return () => { active = false; sub.remove(); volumeSub.remove(); restore(); einstellungenSichern({ ...einstellungenJetzt(), playerVolume: playerVolume.current }); };
+  }, []);
+
+  const showHud = useCallback(text => {
+    setHud(text);
+    if (hudTimer.current) clearTimeout(hudTimer.current);
+    hudTimer.current = setTimeout(() => { if (lebtRef.current) setHud(null); }, 900);
+  }, []);
+
+  // Retry preview metadata only on demand; it must never reload playback.
+  const previewBusy = useRef(false);
+  const refreshPreview = useCallback(() => {
+    if (preview || previewBusy.current) return;
+    previewBusy.current = true;
+    api(`/api/play/${type}/${id}`).then(i => {
+      if (lebtRef.current && i?.trickplay && i.trickplayUrl) setPreview({ ...i.trickplay, url: i.trickplayUrl });
+    }).catch(() => {}).finally(() => { previewBusy.current = false; });
+  }, [api, type, id, preview]);
+  useEffect(() => {
+    if (!scrubbing || preview) return;
+    const timer = setInterval(refreshPreview,2000);
+    return () => clearInterval(timer);
+  }, [scrubbing, preview, refreshPreview]);
 
   // A replacement has its own identity. No old stream may update the new
   // offset, and iOS asset loading must not block the UI thread.
@@ -316,6 +387,10 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
           source.seek = null;
         }
         const p = source.offset + nativeTime;
+        // Native status/source notifications can arrive in either order. Read
+        // readiness again from the current engine so a playing stream cannot
+        // remain on the 45-second loading watchdog after its ready event.
+        if (safe(() => player.status) === "readyToPlay" || Math.abs(p-posRef.current) > .05) setPuffert(false);
         posRef.current = durRef.current ? Math.min(p, durRef.current) : p;
         setPos(posRef.current);
         if (durRef.current > 0) fortschrittRef.current = { position: posRef.current, duration: durRef.current };
@@ -329,6 +404,9 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
       abos.push(player.addListener("playToEnd", () => {
         if (!lebtRef.current || !quelleRef.current || quelleRef.current.pending) return;
         laufWunsch.current = false; setLaeuft(false);
+        // ExoPlayer can be ended with playWhenReady still true. A later seek
+        // would otherwise restart silently while the UI continues to say Play.
+        safe(() => player.pause());
       }));
       abos.push(player.addListener("statusChange", (e) => {
         if (!lebtRef.current || !quelleRef.current) return;
@@ -376,9 +454,9 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
   /* ── Untertiteltext zur aktuellen Stelle bestimmen ─────────────────── */
   useEffect(() => {
     if (!utSucher) { setUtText(null); return; }
-    const neu = utSucher.beiZeit(pos, E.utVersatz || 0);
+    const neu = utSucher.beiZeit(pos, subtitleStyle.delaySeconds);
     setUtText((alt) => (alt === neu ? alt : neu));
-  }, [pos, utSucher, E.utVersatz]);
+  }, [pos, utSucher, subtitleStyle.delaySeconds]);
 
   /* ── Fortschritt sichern ───────────────────────────────────────────── */
   const fortschrittSchreiben = useMemo(() => erzeugeFortschrittsSicherung((body) =>
@@ -402,8 +480,8 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
     setLeisteAn(true);
     if (versteckRef.current) clearTimeout(versteckRef.current);
     const nach = (E.leisteAus ?? 5) * 1000;
-    if (nach > 0 && laeuft && !puffert && !dialog) versteckRef.current = setTimeout(() => setLeisteAn(false), nach);
-  }, [E.leisteAus, laeuft, puffert, dialog]);
+    if (nach > 0 && laeuft && !puffert && !dialog && !scrubbingRef.current) versteckRef.current = setTimeout(() => { if (!scrubbingRef.current) setLeisteAn(false); }, nach);
+  }, [E.leisteAus, laeuft, puffert, dialog, scrubbing]);
   useEffect(() => { wecken(); }, [wecken]);
 
 
@@ -415,7 +493,7 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
     setPos(ziel);
     if (modeRef.current === "direct") {
       if (quelleRef.current) quelleRef.current.seek = ziel;
-      if (!quelleRef.current?.pending) safe(() => { player.currentTime = ziel; });
+      if (!quelleRef.current?.pending) safe(() => { player.currentTime = ziel; if (!laufWunsch.current) player.pause(); });
     } else {
       ladeQuelle(info, ziel);
     }
@@ -444,10 +522,51 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
     lebtRef.current = false;
     push({
       name: "play", replace: true, type: "episode", id: nextEp.id, title, showId,
-      subtitle: (nextEp.se || "") + (nextEp.title ? " · " + nextEp.title : ""),
+      subtitle: nextEp.subtitle ?? ((nextEp.se || "") + (nextEp.title ? " · " + nextEp.title : "")),
       nextEp: nextEp.next ?? null,
+      prevEp: { id: +id, subtitle, prev: prevEp ?? null },
     });
-  }, [nextEp, sichern, pop, push, title, showId]);
+  }, [nextEp, prevEp, sichern, push, title, subtitle, id, showId]);
+
+  const vorherigeFolge = useCallback(() => {
+    if (!prevEp || !lebtRef.current) return;
+    sichern(); lebtRef.current = false;
+    push({ name: "play", replace: true, type: "episode", id: prevEp.id, title, showId,
+      subtitle: prevEp.subtitle ?? ((prevEp.se || "") + (prevEp.title ? " · " + prevEp.title : "")),
+      prevEp: prevEp.prev ?? null, nextEp: { id: +id, subtitle, next: nextEp ?? null },
+    });
+  }, [prevEp, nextEp, sichern, push, id, title, subtitle, showId]);
+
+  const tapControls = () => {
+    if (dialog) return;
+    if (versteckRef.current) clearTimeout(versteckRef.current);
+    if (leisteAn) setLeisteAn(false); else wecken();
+  };
+  const gestures = {
+    settings: () => gestureSettings, canHold: () => laeuft && !puffert && !dialog,
+    onTap: tapControls,
+    onSeek: seconds => { springeUm(seconds); showHud(`${seconds > 0 ? "+" : "−"}${Math.abs(seconds)} Sek`); },
+    onHold: active => {
+      tempoRef.current = active ? gestureSettings.holdRate : tempo;
+      setHolding(active); safe(() => { player.playbackRate = tempoRef.current; });
+    },
+    onSwipe: (kind, delta) => {
+      if (kind === "brightness") {
+        const native = playerDevice.brightnessAvailable && originalBrightness.current != null;
+        const level = Math.max(native ? .05 : .1, Math.min(1, brightnessRef.current + delta));
+        brightnessRef.current = level; setBrightness(level);
+        if (native) { brightnessDirty.current = true; brightnessQueue.current = brightnessQueue.current.then(() => lebtRef.current ? playerDevice.setBrightness(brightnessRef.current) : undefined).catch(() => showHud("Helligkeit konnte nicht geändert werden")); }
+        showHud(`${native ? "Helligkeit" : "Bildhelligkeit"} ${Math.round(level*100)} %`);
+      } else {
+        const system = gestureSettings.volumeTarget === "system" && playerDevice.systemVolumeAvailable;
+        const ref = system ? systemVolume : playerVolume;
+        ref.current = Math.max(0, Math.min(1, ref.current + delta));
+        if (system) playerDevice.setVolume(ref.current).catch(() => showHud("Systemlautstärke nicht verfügbar"));
+        else safe(() => { player.volume = ref.current; });
+        showHud(`${system ? "Systemlautstärke" : "GHGFlix"} ${Math.round(ref.current*100)} %`);
+      }
+    },
+  };
 
   /* Nächste Folge von selbst starten, wenn eingestellt. */
   const autoRef = useRef(false);
@@ -495,7 +614,7 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
     setDialog(null);
   }, [player, safe]);
 
-  const dialogZurueck = () => setDialog((d) => d === "utstil" ? "spuren" : ["tempo", "bild", "info"].includes(d) ? "optionen" : null);
+  const dialogZurueck = () => setDialog((d) => d === "utstil" ? "spuren" : ["tempo", "bild", "info", "gesten"].includes(d) ? "optionen" : null);
 
   useFernbedienungVorher((taste) => {
     if (dialog) return false;
@@ -514,7 +633,7 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
       case "fastForward": springeUm(E.sprungVor || 30); break;
       case "rewind": springeUm(-(E.sprungZurueck || 10)); break;
       case "next": naechsteFolge(); break;
-      case "previous": springeAuf(0); break;
+      case "previous": if (prevEp) vorherigeFolge(); else springeAuf(0); break;
       case "stop": verlassen(); break;
       case "info": setDialog((d) => (d === "info" ? null : "info")); break;
       default: wecken();
@@ -554,7 +673,6 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
   }, [leisteAn, fehler, fokusSystem]);
 
   /* ── Anzeige ───────────────────────────────────────────────────────── */
-  const anteil = dauer > 0 ? Math.min(1, Math.max(0, pos / dauer)) : 0;
   const tonListe = info?.spuren?.audio || [];
 
   if (fehler) return <View style={[st.center, { padding: 30 }]}>
@@ -584,7 +702,7 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
   }
 
   return (
-    <View style={st.playerWurzel} onTouchStart={wecken}>
+    <View style={st.playerWurzel}>
       <VideoView
         style={{ flex: 1 }}
         player={player}
@@ -594,8 +712,9 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
         pointerEvents="none"
       />
 
-      <Pressable testID="player-wecken" accessible={!leisteAn} accessibilityRole="button" accessibilityLabel="Bedienelemente anzeigen" focusable={false}
-        onPress={wecken} style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }} />
+      {!playerDevice.brightnessAvailable && brightness < 1 && <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, backgroundColor: "#000", opacity: 1-brightness }}/>}
+      {istTVProdukt ? <Pressable testID="player-wecken" accessible={!leisteAn} accessibilityRole="button" accessibilityLabel="Bedienelemente anzeigen" focusable={false} onPress={wecken} style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}/> : <PlayerGestureSurface callbacks={gestures} visible={leisteAn} width={width} height={height} enabled={!dialog}/>}
+      {(holding || hud) && <View pointerEvents="none" style={{ position: "absolute", top: "22%", alignSelf: "center", padding: 12, borderRadius: 10, backgroundColor: "#000b" }}><Text style={{ color: "white", fontSize: 18 }}>{holding ? `${gestureSettings.holdRate}× · zum Beenden loslassen` : hud}</Text></View>}
 
       {puffert && (
         <View pointerEvents="none" style={[st.center, { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, backgroundColor: "transparent" }]}>
@@ -610,29 +729,11 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
           style={{
             position: "absolute", left: "6%", right: "6%",
             // Die neue zweizeilige Bedienung darf den Untertitel nicht überdecken.
-            bottom: leisteAn ? (kompakt ? 140 : 180) : `${Math.round((E.utPosition ?? 0.08) * 100)}%`,
+            bottom: leisteAn ? (kompakt ? 140 : 180) : `${subtitleStyle.bottomPercent}%`,
             alignItems: "center",
           }}
         >
-          <Text
-            style={{
-              color: E.utFarbe || "#ffffff",
-              fontSize: (gross ? 30 : 17) * (E.utGroesse ?? 1),
-              lineHeight: (gross ? 40 : 23) * (E.utGroesse ?? 1),
-              fontWeight: "600",
-              textAlign: "center",
-              backgroundColor: `rgba(0,0,0,${E.utHintergrund ?? 0.55})`,
-              paddingHorizontal: 14,
-              paddingVertical: 4,
-              borderRadius: 6,
-              overflow: "hidden",
-              ...(E.utRand !== false
-                ? { textShadowColor: "#000", textShadowRadius: 5, textShadowOffset: { width: 0, height: 1 } }
-                : {}),
-            }}
-          >
-            {utText}
-          </Text>
+          <SubtitleText value={subtitleStyle} baseSize={gross ? 30 : 18} text={utText}/>
         </View>
       )}
 
@@ -663,15 +764,10 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
           {folgenFehler && <View><Text style={st.gedaempft}>Folgenliste konnte nicht geladen werden.</Text><FKnopf accessibilityLabel="Folgenliste erneut laden" onPress={() => setFolgenVersuch(n => n + 1)} style={st.knopf} fokusStil={st.fokus}><Text style={st.knopfText}>Folgenliste erneut laden</Text></FKnopf></View>}
           <View style={[st.balkenRahmen, balkenAn && st.fokus]}>
             <Text style={st.playerZeit}>{fmtZeit(pos)}</Text>
-            <Pressable focusable={false} accessibilityLabel="Wiedergabeposition" hitSlop={18}
-              onPress={(e) => { if (balkenBreite > 0) springeAuf(e.nativeEvent.locationX / balkenBreite * dauer); }}
-              style={st.balkenSpur} onLayout={(e) => setBalkenBreite(e.nativeEvent.layout.width)}>
-              <View style={[st.balkenVoll, { width: balkenBreite * anteil }]} />
-              <View style={[st.balkenGriff, {
-                left: balkenBreite * anteil,
-                transform: [{ scale: balkenAn ? 1.35 : 1 }],
-              }]} />
-            </Pressable>
+            <PlayerScrubber position={pos} duration={dauer} onSeek={springeAuf} focused={balkenAn}
+              onDragging={value => { scrubbingRef.current = value; setScrubbing(value); if (value && versteckRef.current) clearTimeout(versteckRef.current); }}
+              onPreview={refreshPreview} sprite={preview}
+              spriteUrl={preview ? `${base}${preview.url}${preview.url.includes("?") ? "&" : "?"}profile=${encodeURIComponent(conn?.profile ?? 1)}` : null}/>
             <Text style={[st.playerZeit, { textAlign: "right" }]}>−{fmtZeit(Math.max(0, dauer - pos))}</Text>
           </View>
 
@@ -687,16 +783,17 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
               <PKnopf spalte={0} text={`${E.sprungZurueck || 10} s`} label="Zurückspulen" symbol="rewind" onPress={() => springeUm(-(E.sprungZurueck || 10))} />
               <PKnopf id="player:pause" spalte={1} symbol={laeuft ? "pause" : "play"} label={laeuft ? "Pausieren" : "Abspielen"} haupt grossKnopf onPress={anHalten} aufRichtung={(r) => { if (r !== "down") return false; fokusSystem?.kern.setzen("player:spuren"); return true; }} />
               <PKnopf spalte={2} text={`${E.sprungVor || 30} s`} label="Vorspulen" symbol="forward" onPress={() => springeUm(E.sprungVor || 30)} />
-              {!!nextEp && <PKnopf spalte={3} label="Nächste Folge" symbol="next" onPress={naechsteFolge} />}
+              {!!prevEp && <PKnopf spalte={3} label="Vorherige Folge" symbol="previous" onPress={vorherigeFolge} />}
+              {!!nextEp && <PKnopf spalte={4} label="Nächste Folge" symbol="next" onPress={naechsteFolge} />}
             </View>
           </FokusReihe>
           <FokusReihe zeile={kompakt ? 1 : 2}>
             <View style={{ flexDirection: "row", gap: 6, justifyContent: "center" }}>
-              <FKnopf id="player:spuren" accessibilityLabel="Sprache & Untertitel" hitSlop={gross ? 0 : 3} spalte={kompakt ? 4 : 1} aufRichtung={(r) => { if (r !== "up") return false; fokusSystem?.kern.setzen("player:pause"); return true; }} onPress={() => { fokusSystem?.kern.setzen("player:spuren"); setDialog("spuren"); }} style={[st.rundKnopf, { flex: kompakt ? undefined : 1, paddingHorizontal: 10, gap: 7 }]} fokusStil={st.fokus}>
+              <FKnopf id="player:spuren" accessibilityLabel="Sprache & Untertitel" hitSlop={gross ? 0 : 3} spalte={kompakt ? 5 : 1} aufRichtung={(r) => { if (r !== "up") return false; fokusSystem?.kern.setzen("player:pause"); return true; }} onPress={() => { fokusSystem?.kern.setzen("player:spuren"); setDialog("spuren"); }} style={[st.rundKnopf, { flex: kompakt ? undefined : 1, paddingHorizontal: 10, gap: 7 }]} fokusStil={st.fokus}>
                 <Icon name="subtitles" size={20} />
                 <Text style={{ color: "white", fontSize: 12, fontWeight: "600" }}>Sprache & Untertitel</Text>
               </FKnopf>
-              <PKnopf id="player:optionen" spalte={kompakt ? 5 : 2} symbol="settings" label="Optionen" onPress={() => setDialog("optionen")} />
+              <PKnopf id="player:optionen" spalte={kompakt ? 6 : 2} symbol="settings" label="Optionen" onPress={() => setDialog("optionen")} />
             </View>
           </FokusReihe>
           </View>
@@ -716,22 +813,14 @@ function PlayerSession({ api, pop, push, base, conn, type, id, title, subtitle, 
           { wert: "tempo", text: `Geschwindigkeit · ${tempo}×` },
           { wert: "bild", text: `Bild · ${bildmodus === "contain" ? "Einpassen" : bildmodus === "cover" ? "Füllen" : "Strecken"}` },
           { wert: "utstil", text: "Untertitel-Darstellung" },
+          ...(!istTVProdukt ? [{ wert: "gesten", text: "Touch-Gesten" }] : []),
           { wert: "info", text: "Wiedergabeinformationen" },
         ]} />
       </Dialog>}
       {dialog === "utstil" && <Dialog titel="Untertitel-Darstellung" aufSchliessen={() => setDialog("spuren")}>
-        <View style={{ alignItems: "center", backgroundColor: "#303b4a", borderRadius: 12, padding: 18, marginBottom: 14 }}><Text style={{ color: E.utFarbe, fontSize: (gross ? 24 : 18) * E.utGroesse, backgroundColor: `rgba(0,0,0,${E.utHintergrund})`, padding: 6, textAlign: "center" }}>So sehen deine Untertitel aus.</Text></View>
-        <DialogListe aufWahl={(key) => {
-          const werte = { utGroesse: [.8, 1, 1.25, 1.5], utHintergrund: [0, .55, .85], utFarbe: ["#ffffff", "#ffdf70"], utVersatz: [-2, -1, -.5, 0, .5, 1, 2] };
-          const optionen = werte[key]; anpassen({ [key]: optionen[(optionen.indexOf(E[key]) + 1) % optionen.length] });
-        }} eintraege={[
-          { wert: "utGroesse", text: `Schriftgröße · ${Math.round(E.utGroesse * 100)} %` },
-          { wert: "utFarbe", text: `Farbe · ${E.utFarbe === "#ffffff" ? "Weiß" : "Gelb"}` },
-          { wert: "utHintergrund", text: `Hintergrund · ${Math.round(E.utHintergrund * 100)} %` },
-          { wert: "utVersatz", text: `Zeitversatz · ${E.utVersatz > 0 ? "+" : ""}${E.utVersatz} s` },
-        ]} />
-        <Text style={{ color: "#aeb7c9", fontSize: M.klein, marginTop: 12 }}>Antippen / OK: nächster Wert. Positiver Zeitversatz zeigt den Text später.</Text>
+        <ScrollView style={{ flexShrink: 1 }} keyboardShouldPersistTaps="handled"><NativeSubtitleEditor value={subtitleStyle} onChange={patch => anpassen({ subtitleStyle: normalizeSubtitle({ ...subtitleStyle, ...patch }) })}/></ScrollView>
       </Dialog>}
+      {dialog === "gesten" && <Dialog titel="Touch-Gesten" aufSchliessen={dialogZurueck}><ScrollView style={{ flexShrink: 1 }} keyboardShouldPersistTaps="handled"><NativePreferenceFields fields={GESTURE_FIELDS} values={gestureSettings} systemVolume={playerDevice.systemVolumeAvailable} onChange={patch => anpassen({ gestures: normalizeGestures({ ...gestureSettings, ...patch }) })}/><Text style={st.gedaempft}>Tippen: Bedienung ein/aus. Links/rechts doppeltippen: zurück/vor. Halten: vorübergehend schneller. Links wischen: Helligkeit; rechts: Lautstärke. Die Handy-Helligkeit wird beim Verlassen wiederhergestellt.</Text></ScrollView></Dialog>}
 
       {dialog === "tempo" && (
         <Dialog titel="Geschwindigkeit" aufSchliessen={dialogZurueck}>

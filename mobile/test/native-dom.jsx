@@ -18,7 +18,7 @@ export const Platform = { OS: "android", isTV: true };
 export const Dimensions = { get: () => ({ width: 1920, height: 1080 }) };
 export const StyleSheet = { create: (s) => s, absoluteFill: {} };
 export const Linking = { openURL: vi.fn().mockResolvedValue(undefined) };
-export const View = ({ children }) => <div>{children}</div>;
+export const View = React.forwardRef(({ children, testID, onAccessibilityTap, accessibilityRole, accessibilityLabel }, ref) => <div ref={ref} data-testid={testID} role={accessibilityRole} aria-label={accessibilityLabel} onClick={onAccessibilityTap}>{children}</div>);
 export const ScrollView = React.forwardRef(({ children }, ref) => <div ref={ref}>{children}</div>);
 export const Text = ({ children, accessibilityRole }) => <span role={accessibilityRole}>{children}</span>;
 export const Image = ({ source }) => <img src={source?.uri} alt="" />;

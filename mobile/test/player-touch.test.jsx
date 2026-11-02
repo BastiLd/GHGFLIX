@@ -7,9 +7,29 @@ import { PlayerKnopfleiste } from "../src/playerleiste.js";
 import { remoteKey } from "./native-dom.jsx";
 
 let kern;
+let currentVideo;
 const originalLoad = Module._load;
 function Capture() { kern = useFokusSystem().kern; return null; }
 afterEach(() => { cleanup(); vi.useRealTimers(); Module._load = originalLoad; });
+
+it("a second tap hides visible controls without pausing or reloading", async () => {
+  vi.useFakeTimers();
+  const video = { playing: true, status: "readyToPlay", replace: vi.fn(), play: vi.fn(), pause: vi.fn(), addListener: () => ({ remove() {} }) };
+  currentVideo = video;
+  Module._load = function(name, ...args) {
+    if (name === "expo-video") return { VideoView: () => <div>Video</div>, useVideoPlayer: () => currentVideo };
+    if (name === "expo-keep-awake") return { useKeepAwake() {} };
+    return originalLoad.call(this, name, ...args);
+  };
+  const { PlayerScreen } = await import("../src/player.js");
+  const api = vi.fn(async url => url === "/api/progress" ? [] : { duration: 90, direct: true, directUrl: "/video.mp4", transcodeUrl: "/transcode", spuren: {} });
+  await act(async () => render(<FokusProvider><PlayerScreen api={api} base="http://fixture" type="movie" id={1} title="Testfilm" pop={vi.fn()} push={vi.fn()} /></FokusProvider>));
+  const loads = video.replace.mock.calls.length, pauses = video.pause.mock.calls.length;
+  fireEvent.click(screen.getByTestId("player-wecken"));
+  act(() => vi.advanceTimersByTime(300));
+  expect(screen.queryByRole("button", { name: "Pausieren" })).toBeNull();
+  expect(video.pause).toHaveBeenCalledTimes(pauses); expect(video.replace).toHaveBeenCalledTimes(loads);
+});
 
 it("maps narrow toolbar rows to remote coordinates and updates after resizing", () => {
   const actions = Array.from({ length: 9 }, (_, i) => ({ id: String(i), label: `Action ${i}`, text: `${i}`, onPress: vi.fn() }));
@@ -31,8 +51,9 @@ it("touch restores auto-hidden controls without pausing or reloading the player"
   vi.useFakeTimers();
   const listeners = new Map();
   const video = { playing: true, status: "readyToPlay", replace: vi.fn(), play: vi.fn(), pause: vi.fn(), addListener: (name, fn) => { const callbacks = listeners.get(name) || []; callbacks.push(fn); listeners.set(name, callbacks); return { remove() {} }; } };
+  currentVideo = video;
   Module._load = function (name, ...args) {
-    if (name === "expo-video") return { VideoView: () => <div>Video</div>, useVideoPlayer: () => video };
+    if (name === "expo-video") return { VideoView: () => <div>Video</div>, useVideoPlayer: () => currentVideo };
     if (name === "expo-keep-awake") return { useKeepAwake() {} };
     return originalLoad.call(this, name, ...args);
   };

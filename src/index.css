@@ -291,6 +291,16 @@ body.tv-mode ::-webkit-scrollbar {
 }
 
 .mini-player:focus-within .mini-player-controls { opacity: 1; pointer-events: auto; }
+.player-settings-editor { display: flex; flex-direction: column; gap: 14px; min-width: 0; color: white; }
+.player-settings-editor input, .player-settings-editor select { background: #202029; color: white; border: 1px solid #5a5a68; border-radius: 8px; padding: 8px; min-height: 44px; max-width: 100%; }
+.player-settings-editor input:focus-visible, .player-settings-editor select:focus-visible, .player-settings-editor button:focus-visible { outline: 2px solid #ff6871; outline-offset: 3px; }
+.player-value-field > label, .player-choice-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.player-value-inputs { display: flex; align-items: center; gap: 8px; }
+.player-value-inputs input[type=text] { width: 112px; }
+.player-value-inputs input[type=color] { width: 48px; padding: 4px; }
+.player-value-field > input[type=range] { width: 100%; accent-color: #e50914; padding: 0; }
+.player-subtitle-preview { background: #303b4a; padding: 24px 12px; border-radius: 12px; text-align: center; overflow-wrap: anywhere; }
+.player-subtitle-preview > span { padding: 4px 8px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 @media (hover: none) {
   .mini-player-controls { opacity: 1; pointer-events: auto; }
 }

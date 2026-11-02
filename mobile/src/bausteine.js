@@ -97,7 +97,7 @@ export function Knopf({ text, symbol, haupt, zeile, spalte, onPress, bereich, st
  * Ohne diesen Zwischenschritt würde der Fokus-Anker (siehe fokus.js) sofort
  * zurückspringen und Tippen wäre unmöglich.
  */
-export function FFeld({ zeile, spalte, bereich, wert, aufWert, platzhalter, style, ...rest }) {
+export function FFeld({ zeile, spalte, bereich, wert, aufWert, platzhalter, style, onBlur, onSubmitEditing, ...rest }) {
   const ref = useRef(null);
   const sys = useFokusSystem();
   const an = useFokusElement({
@@ -111,8 +111,8 @@ export function FFeld({ zeile, spalte, bereich, wert, aufWert, platzhalter, styl
       onChangeText={aufWert}
       placeholder={platzhalter}
       placeholderTextColor={C.muted}
-      onSubmitEditing={() => { ref.current?.blur(); sys?.ankerHolen(); }}
-      onBlur={() => sys?.ankerHolen()}
+      onSubmitEditing={e => { onSubmitEditing?.(e); ref.current?.blur(); sys?.ankerHolen(); }}
+      onBlur={e => { onBlur?.(e); sys?.ankerHolen(); }}
       style={[st.feld, an && st.feldFokus, style]}
       {...rest}
     />

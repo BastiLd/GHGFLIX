@@ -25,6 +25,9 @@ import {
 } from "./bausteine.js";
 import { C, M, gross, istTV, st } from "./stile.js";
 import { FELDER, laden as ladeEinstellungen, sichern as sichereEinstellungen } from "./einstellungen.js";
+import { NativeSubtitleEditor, NativePreferenceFields, GESTURE_FIELDS } from "./PlayerSettingsEditor.js";
+import { legacySubtitle, normalizeSubtitle, normalizeGestures } from "../../shared/player-settings.js";
+import { playerDevice } from "./player-device.js";
 
 /* ══ Hilfen ══════════════════════════════════════════════════════════════ */
 
@@ -709,7 +712,7 @@ export function EinstellungenSeite({
         {FELDER.map((gruppe) => (
           <View key={gruppe.gruppe} style={[st.karte, { marginBottom: 14 }]}>
             <Text style={[st.h2, { marginBottom: 12 }]}>{gruppe.gruppe}</Text>
-            {gruppe.eintraege.map((f) => {
+            {gruppe.eintraege.filter(f => gruppe.gruppe !== "Untertitel" || ["utAn", "utSprache"].includes(f.name)).map((f) => {
               const zeile = z++;
               const zeige = f.anzeige || ((v) => String(v) + (f.einheit ? " " + f.einheit : ""));
               return (
@@ -738,6 +741,18 @@ export function EinstellungenSeite({
                 </FokusReihe>
               );
             })}
+            {gruppe.gruppe === "Untertitel" && (() => {
+              const row = z; z += 14;
+              return <NativeSubtitleEditor area="inhalt" startRow={row} value={legacySubtitle(werte)} onChange={patch => {
+                const neu = { ...werte, subtitleStyle: normalizeSubtitle({ ...legacySubtitle(werte), ...patch }) }; setWerte(neu); sichereEinstellungen(neu);
+              }}/>;
+            })()}
+            {gruppe.gruppe === "Bedienung" && !istTV && (() => {
+              const row = z; z += 8;
+              return <NativePreferenceFields area="inhalt" startRow={row} fields={GESTURE_FIELDS} values={normalizeGestures(werte.gestures)} systemVolume={playerDevice.systemVolumeAvailable} onChange={patch => {
+                const neu = { ...werte, gestures: normalizeGestures({ ...normalizeGestures(werte.gestures), ...patch }) }; setWerte(neu); sichereEinstellungen(neu);
+              }}/>;
+            })()}
           </View>
         ))}
 

@@ -33,6 +33,7 @@ export function Scrubber({
   sprite = null,
   markers,
   intro,
+  onInteraction,
 }: {
   position: number;
   duration: number;
@@ -49,6 +50,7 @@ export function Scrubber({
   markers?: number[];
   /** Intro-Bereich als hervorgehobener Abschnitt */
   intro?: { start: number; end: number } | null;
+  onInteraction?: (active: boolean) => void;
 }) {
   const BUCKET = Math.max(1, interval);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -113,6 +115,7 @@ export function Scrubber({
       const el = trackRef.current;
       if (!el || duration <= 0) return { x: 0, t: 0 };
       const r = el.getBoundingClientRect();
+      if (r.width <= 0) return { x: 0, t: 0 };
       const x = Math.min(Math.max(clientX - r.left, 0), r.width);
       const t = (x / r.width) * duration;
       return { x, t };
@@ -143,15 +146,22 @@ export function Scrubber({
       setDragging(false);
     };
     window.addEventListener("pointermove", mv);
-    const cancel = () => setDragging(false);
+    const cancel = () => { setDragging(false); setHover(null); };
+    const escape = (e: KeyboardEvent) => { if(e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); cancel(); } };
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("blur", cancel);
     window.addEventListener("pointercancel", cancel);
     window.addEventListener("pointerup", up);
     return () => {
       window.removeEventListener("pointermove", mv);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("blur", cancel);
     };
   }, [dragging, onMove, onSeek, timeFromEvent]);
+
+  useEffect(() => { onInteraction?.(dragging); return () => onInteraction?.(false); }, [dragging, onInteraction]);
 
   useEffect(
     () => {
@@ -242,9 +252,10 @@ export function Scrubber({
         onPointerDown={(e) => {
           if (duration <= 0 || e.button !== 0) return;
           e.preventDefault();
-          (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+          e.currentTarget.setPointerCapture?.(e.pointerId);
           const { t } = timeFromEvent(e.clientX);
           setDragT(t);
+          onMove(e.clientX);
           setDragging(true);
         }}
       >
@@ -283,7 +294,7 @@ export function Scrubber({
               ))}
           {/* knob */}
           <div
-            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-ghg-red shadow ring-2 ring-white/70 opacity-0 group-hover:opacity-100 transition"
+            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-ghg-red shadow ring-2 ring-white/70 opacity-100 transition"
             style={{ left: `${pct}%` }}
           />
         </div>
