@@ -18,6 +18,7 @@ RUN npm pkg delete "devDependencies.@tauri-apps/cli" "devDependencies.sharp" \
 COPY index.html tsconfig.json tsconfig.node.json vite.config.ts ./
 COPY public ./public
 COPY src ./src
+COPY shared ./shared
 RUN npx vite build --base ./ --outDir /out/webapp --emptyOutDir
 
 # ── Stage 2: the server (Web Push delivery dependency) ──
