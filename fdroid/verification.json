@@ -10,10 +10,11 @@
       24
     ]
   },
+  "v2IndexTimestamp": 1793820209000,
   "v1SignatureVerified": true,
   "v2EntrySignatureAndIndexHashVerified": true,
   "wrongFingerprintRejected": true,
   "tamperedIndexRejected": true,
-  "sourceCommit": "c4789d3a06695d77badf9908cb78bfdaa37f20fe",
+  "sourceCommit": "ee5f42514715f7a9ccec384248b27f008541a329",
   "url": "https://bastild.github.io/GHGFLIX/fdroid/repo"
 }
