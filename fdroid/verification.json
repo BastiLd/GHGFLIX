@@ -1,0 +1,19 @@
+{
+  "fingerprint": "EE36538C170E4D826AF962FE1211F86731370D62B85387E128FAFAA14B92B5C3",
+  "versions": {
+    "com.bastild.ghgflix": [
+      21,
+      24
+    ],
+    "com.bastild.ghgflix.tv": [
+      21,
+      24
+    ]
+  },
+  "v1SignatureVerified": true,
+  "v2EntrySignatureAndIndexHashVerified": true,
+  "wrongFingerprintRejected": true,
+  "tamperedIndexRejected": true,
+  "sourceCommit": "1a73d60e19939d9d87acf0db679528678c015b87",
+  "url": "https://bastild.github.io/GHGFLIX/fdroid/repo"
+}
