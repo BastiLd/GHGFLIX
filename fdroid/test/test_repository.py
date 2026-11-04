@@ -164,6 +164,23 @@ class RepositorySecurity(unittest.TestCase):
         self.assertIn('environment: fdroid-signing', workflow)
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
 
+    def remote_snapshot(self, timestamp=1234):
+        return {'repo': {'timestamp': timestamp}, 'packages': {package: {'versions': {'hash': {'manifest': {'versionCode': 24}}}} for package in self.config['apps']}}
+
+    def test_a_valid_but_stale_publication_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'different signed snapshot'):
+            repo.validate_remote_snapshot(self.remote_snapshot(), self.config, '1235')
+
+    def test_the_exact_expected_publication_is_accepted(self):
+        versions = repo.validate_remote_snapshot(self.remote_snapshot(), self.config, '1234')
+        self.assertEqual(versions, {package: [24] for package in self.config['apps']})
+
+    def test_remote_extra_app_is_rejected(self):
+        data = self.remote_snapshot()
+        data['packages']['unknown.app'] = {'versions': {}}
+        with self.assertRaisesRegex(ValueError, 'unexpected applications'):
+            repo.validate_remote_snapshot(data, self.config, '1234')
+
 
 if __name__ == '__main__':
     unittest.main()

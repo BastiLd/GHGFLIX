@@ -216,7 +216,7 @@ def verify_indexes(repo, config):
             if apk.parent != repo or apk.is_symlink() or hashlib.file_digest(apk.open('rb'), 'sha256').hexdigest() != version['hash']:
                 raise ValueError('Indexed APK bytes do not match')
         summary[package] = sorted(v['versionCode'] for v in versions)
-    return {'fingerprint': actual, 'versions': summary, 'v1SignatureVerified': True, 'v2EntrySignatureAndIndexHashVerified': True, 'wrongFingerprintRejected': True, 'tamperedIndexRejected': True}
+    return {'fingerprint': actual, 'versions': summary, 'v2IndexTimestamp': json.loads(raw)['repo']['timestamp'], 'v1SignatureVerified': True, 'v2EntrySignatureAndIndexHashVerified': True, 'wrongFingerprintRejected': True, 'tamperedIndexRejected': True}
 
 
 def validate_public_tree(site):
@@ -294,7 +294,18 @@ def sign(work, site):
     page = '<!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>GHGFlix F-Droid</title><style>body{font:18px system-ui;max-width:800px;margin:4rem auto;padding:1rem;background:#101016;color:#f5f5fa}a{color:#ff707a}code{overflow-wrap:anywhere}p{line-height:1.6}</style><h1>GHGFlix für F-Droid</h1><p>In F-Droid unter Einstellungen → Paketquellen diese URL hinzufügen:</p><p><code>' + html.escape(url) + '</code></p><p>SHA-256-Fingerabdruck des Repository-Zertifikats:</p><p><code>' + config['fingerprint'] + '</code></p><p>Enthält getrennte Handy- und TV-Apps. Die bestehenden APK-Signaturen bleiben erhalten. Ein Update benötigt eine höhere Android-versionCode und denselben App-Signierer.</p><p><a href="https://github.com/BastiLd/GHGFLIX/releases">Release-Downloads</a> · <a href="https://github.com/BastiLd/GHGFLIX/blob/main/docs/FDROID.md">Einrichtung und Schlüssel-Backup</a></p></html>'
     (site / 'index.html').write_text(page, encoding='utf-8')
     validate_public_tree(site)
+    if os.environ.get('GITHUB_OUTPUT'):
+        with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+            output.write('index-timestamp=' + str(verified['v2IndexTimestamp']) + '\n')
     print(json.dumps(verified, indent=2))
+
+
+def validate_remote_snapshot(data, config, expected_timestamp):
+    if set(data['packages']) != set(config['apps']):
+        raise ValueError('Published repository has unexpected applications')
+    if expected_timestamp is not None and data['repo']['timestamp'] != int(expected_timestamp):
+        raise ValueError('Pages still serves a different signed snapshot; waiting for this publication')
+    return {package: sorted(v['manifest']['versionCode'] for v in row['versions'].values()) for package, row in data['packages'].items()}
 
 
 def verify_remote():
@@ -303,10 +314,8 @@ def verify_remote():
     common.config = {}
     common.fill_config_defaults(common.config)
     data, _ = index.download_repo_index_v2(config['url'] + '?fingerprint=' + config['fingerprint'], timeout=60)
-    if set(data['packages']) != set(config['apps']):
-        raise ValueError('Published repository has unexpected applications')
-    versions = {package: sorted(v['manifest']['versionCode'] for v in row['versions'].values()) for package, row in data['packages'].items()}
-    print(json.dumps({'url': config['url'], 'fingerprintVerified': True, 'publishedVersions': versions}, indent=2))
+    versions = validate_remote_snapshot(data, config, os.environ.get('FDROID_EXPECTED_INDEX_TIMESTAMP'))
+    print(json.dumps({'url': config['url'], 'fingerprintVerified': True, 'publishedVersions': versions, 'indexTimestamp': data['repo']['timestamp']}, indent=2))
 
 
 if __name__ == '__main__':

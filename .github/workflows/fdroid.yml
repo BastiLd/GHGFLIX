@@ -45,6 +45,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: fdroid-signing
+    outputs:
+      index-timestamp: ${{ steps.sign.outputs.index-timestamp }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -65,6 +67,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python fdroid/tools/repository.py prepare --work-dir "$RUNNER_TEMP/fdroid-work"
       - name: Sign the index and verify it with the official tools
+        id: sign
         env:
           FDROID_KEYSTORE_BASE64: ${{ secrets.FDROID_KEYSTORE_BASE64 }}
           FDROID_KEYSTORE_PASSWORD: ${{ secrets.FDROID_KEYSTORE_PASSWORD }}
@@ -99,7 +102,7 @@ jobs:
         run: python3 fdroid/tools/deploy.py "$RUNNER_TEMP/fdroid-public"
 
   verify-public:
-    needs: deploy
+    needs: [build, deploy]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -114,8 +117,11 @@ jobs:
           distribution: temurin
           java-version: '17'
       - run: bash fdroid/tools/install.sh
-      - name: Verify the live F-Droid v2 index and pinned certificate
+      - name: Verify the live F-Droid v2 index, pinned certificate and exact publication
+        env:
+          FDROID_EXPECTED_INDEX_TIMESTAMP: ${{ needs.build.outputs.index-timestamp }}
         run: |
+          test -n "$FDROID_EXPECTED_INDEX_TIMESTAMP"
           for attempt in $(seq 1 30); do
             if python fdroid/tools/repository.py verify-remote; then exit 0; fi
             sleep 10
