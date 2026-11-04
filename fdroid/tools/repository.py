@@ -161,7 +161,9 @@ def prepare(work):
         metadata_path = work / 'metadata' / (package + '.yml')
         metadata = yaml.load(metadata_path)
         current = max((r for r in selected if r['package'] == package), key=lambda x: x['versionCode'])
-        metadata.update(CurrentVersion=current['versionName'], CurrentVersionCode=current['versionCode'], AllowedAPKSigningKeys=[info['certificate_sha256']])
+        metadata['CurrentVersion'] = current['versionName']
+        metadata['CurrentVersionCode'] = current['versionCode']
+        metadata['AllowedAPKSigningKeys'] = [info['certificate_sha256']]
         with metadata_path.open('w', encoding='utf-8') as output:
             yaml.dump(metadata, output)
     (work / 'repo/icons').mkdir()
