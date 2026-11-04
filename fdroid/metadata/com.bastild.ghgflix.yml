@@ -1,0 +1,13 @@
+Categories:
+  - Multimedia
+License: MIT
+Name: GHGFlix Mobile
+Summary: Eigene Mediathek auf dem Handy ansehen
+Description: |-
+  GHGFlix verbindet sich mit deinem eigenen GHGFlix-Server.
+  Mit Profilen, Wiedergabefortschritt, Touch-Gesten und eigenen Untertitelwerten.
+WebSite: https://github.com/BastiLd/GHGFLIX
+SourceCode: https://github.com/BastiLd/GHGFLIX
+IssueTracker: https://github.com/BastiLd/GHGFLIX/issues
+AutoUpdateMode: None
+UpdateCheckMode: None

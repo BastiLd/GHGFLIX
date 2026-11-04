@@ -1,0 +1,4 @@
+# Build the official hash-pinned fdroidserver sdist without downloading build-time dependencies.
+setuptools==84.2.1
+wheel==0.48.0
+Babel==2.18.0

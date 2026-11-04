@@ -1,0 +1,2 @@
+# Official F-Droid server tools; regenerate the Linux/Python 3.12 hash lock explicitly.
+fdroidserver==2.4.5

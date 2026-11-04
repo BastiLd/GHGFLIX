@@ -1,0 +1,21 @@
+{
+  "name": "GHGFlix Apps",
+  "description": "Signierte Handy- und TV-Apps von GHGFlix.",
+  "url": "https://bastild.github.io/GHGFLIX/fdroid/repo",
+  "github_repository": "BastiLd/GHGFLIX",
+  "key_alias": "ghgflix-fdroid-repo",
+  "fingerprint": "EE36538C170E4D826AF962FE1211F86731370D62B85387E128FAFAA14B92B5C3",
+  "versions_per_app": 2,
+  "apps": {
+    "com.bastild.ghgflix": {
+      "name": "GHGFlix Mobile",
+      "asset_pattern": "GHGFlix-Mobile-[0-9]+\\.[0-9]+\\.[0-9]+\\.apk",
+      "certificate_sha256": "5d3818e7bfbe440b7edba2ead3aa953f1355e8451328bff5b7a5ef38e72a155b"
+    },
+    "com.bastild.ghgflix.tv": {
+      "name": "GHGFlix TV",
+      "asset_pattern": "GHGFlix-TV-[0-9]+\\.[0-9]+\\.[0-9]+\\.apk",
+      "certificate_sha256": "ba54d1830e9c7b8e299421b81c3aae912fd5fde01860f8ba332836aef832c729"
+    }
+  }
+}

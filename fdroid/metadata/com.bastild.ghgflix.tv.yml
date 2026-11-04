@@ -1,0 +1,13 @@
+Categories:
+  - Multimedia
+License: MIT
+Name: GHGFlix TV
+Summary: Eigene Mediathek mit der TV-Fernbedienung ansehen
+Description: |-
+  Die getrennte GHGFlix-App für Android TV und Google TV.
+  Verbindet sich mit deinem eigenen Server und bietet Profile und Untertitel.
+WebSite: https://github.com/BastiLd/GHGFLIX
+SourceCode: https://github.com/BastiLd/GHGFLIX
+IssueTracker: https://github.com/BastiLd/GHGFLIX/issues
+AutoUpdateMode: None
+UpdateCheckMode: None
