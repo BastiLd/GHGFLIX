@@ -6,8 +6,26 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from repository import settings, validate_public_tree
+
+
+def ensure_pages_build(api, revision):
+    # Some Pages configurations already queue a branch build on push. A second
+    # request for that same revision can cancel the first deployment. Give that
+    # automatic trigger time to appear before using the API fallback.
+    for attempt in range(10):
+        latest = api('pages/builds/latest')
+        if latest.get('commit') == revision:
+            if latest.get('status') in {'queued', 'building', 'built'}:
+                print('Pages already has a build for this gh-pages revision')
+                return
+            break
+        if attempt < 9:
+            time.sleep(2)
+    api('pages/builds', '--method', 'POST')
+    print('Requested the GitHub Pages build')
 
 
 def deploy(site):
@@ -62,12 +80,12 @@ def deploy(site):
             git('push', 'origin', 'HEAD:refs/heads/gh-pages')
         else:
             print('The validated public snapshot is already on gh-pages')
+        revision = git('rev-parse', 'HEAD').strip()
     pages = api('pages')
     if pages.get('source') != {'branch': 'gh-pages', 'path': '/'} or pages.get('build_type') != 'legacy':
         raise ValueError('Configure Pages: Deploy from a branch, gh-pages, / (root), then rerun this deployment')
-    # GITHUB_TOKEN pushes do not trigger Pages by themselves; request the build explicitly.
-    api('pages/builds', '--method', 'POST')
-    print('Published gh-pages snapshot and requested the GitHub Pages build')
+    ensure_pages_build(api, revision)
+    print('Published the validated gh-pages snapshot')
 
 
 if __name__ == '__main__':

@@ -3,15 +3,20 @@ import importlib.util
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 FILE = Path(__file__).resolve().parents[1] / 'tools/repository.py'
 SPEC = importlib.util.spec_from_file_location('ghgflix_fdroid', FILE)
 repo = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(repo)
+DEPLOY_SPEC = importlib.util.spec_from_file_location('ghgflix_fdroid_deploy', FILE.with_name('deploy.py'))
+deploy = importlib.util.module_from_spec(DEPLOY_SPEC)
+with patch.dict(sys.modules, {'repository': repo}):
+    DEPLOY_SPEC.loader.exec_module(deploy)
 
 
 class RepositorySecurity(unittest.TestCase):
@@ -180,6 +185,29 @@ class RepositorySecurity(unittest.TestCase):
         data['packages']['unknown.app'] = {'versions': {}}
         with self.assertRaisesRegex(ValueError, 'unexpected applications'):
             repo.validate_remote_snapshot(data, self.config, '1234')
+
+    def test_an_automatically_queued_pages_build_is_not_requested_twice(self):
+        api = Mock(side_effect=[{'commit': 'old', 'status': 'built'}, {'commit': 'new', 'status': 'building'}])
+        with patch('builtins.print'), patch.object(deploy.time, 'sleep') as pause:
+            deploy.ensure_pages_build(api, 'new')
+        self.assertEqual(api.call_args_list, [call('pages/builds/latest'), call('pages/builds/latest')])
+        pause.assert_called_once_with(2)
+
+    def test_missing_automatic_pages_trigger_uses_one_explicit_request(self):
+        api = Mock(return_value={'commit': 'old', 'status': 'built'})
+        with patch('builtins.print'), patch.object(deploy.time, 'sleep') as pause:
+            deploy.ensure_pages_build(api, 'new')
+        self.assertEqual(api.call_count, 11)
+        self.assertEqual(api.call_args, call('pages/builds', '--method', 'POST'))
+        self.assertEqual(pause.call_count, 9)
+
+    def test_an_already_built_pages_revision_is_idempotent(self):
+        api = Mock(return_value={'commit': 'new', 'status': 'built'})
+        with patch('builtins.print'), patch.object(deploy.time, 'sleep') as pause:
+            deploy.ensure_pages_build(api, 'new')
+        api.assert_called_once_with('pages/builds/latest')
+        pause.assert_not_called()
+
 
 
 if __name__ == '__main__':
