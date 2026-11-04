@@ -167,7 +167,7 @@ def prepare(work):
         with metadata_path.open('w', encoding='utf-8') as output:
             yaml.dump(metadata, output)
     (work / 'repo/icons').mkdir()
-    shutil.copyfile(ROOT / 'mobile/assets/app-icon.png', work / 'repo/icons/icon.png')
+    shutil.copyfile(ROOT / 'mobile/assets/app-icon.png', work / 'icon.png')
     cfg = {'repo_url': config['url'], 'repo_name': config['name'], 'repo_description': config['description'], 'repo_icon': 'icon.png', 'repo_maxage': 1209600, 'archive_older': 0, 'make_current_version_link': False, 'repo_keyalias': config['key_alias'], 'keystore': {'env': 'FDROID_KEYSTORE_PATH'}, 'keystorepass': {'env': 'FDROID_KEYSTORE_PASSWORD'}, 'keypass': {'env': 'FDROID_KEYSTORE_PASSWORD'}, 'build_tools': '36.0.0'}
     with (work / 'config.yml').open('w', encoding='utf-8') as output:
         yaml.dump(cfg, output)
@@ -221,7 +221,7 @@ def verify_indexes(repo, config):
 
 def validate_public_tree(site):
     forbidden = {'.jks', '.p12', '.pfx', '.keystore', '.py', '.yml', '.yaml'}
-    allowed = {'.apk', '.jar', '.json', '.xml', '.png', '.jpg', '.jpeg', '.webp', '.svg', '.txt', '.html'}
+    allowed = {'.apk', '.jar', '.json', '.xml', '.png', '.jpg', '.jpeg', '.webp', '.svg', '.txt', '.html', '.css'}
     for item in site.rglob('*'):
         if item.is_symlink():
             raise ValueError('Symlink in publication output')
