@@ -56,9 +56,12 @@ def deploy(site):
         git('config', 'user.name', 'github-actions[bot]')
         git('config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com')
         git('add', '--all')
-        git('commit', '-m', 'F-Droid repository from ' + source)
-        # No force push, no write to main/web or any other branch.
-        git('push', 'origin', 'HEAD:refs/heads/gh-pages')
+        if git('diff', '--cached', '--name-only').strip():
+            git('commit', '-m', 'F-Droid repository from ' + source)
+            # No force push, no write to main/web or any other branch.
+            git('push', 'origin', 'HEAD:refs/heads/gh-pages')
+        else:
+            print('The validated public snapshot is already on gh-pages')
     pages = api('pages')
     if pages.get('source') != {'branch': 'gh-pages', 'path': '/'} or pages.get('build_type') != 'legacy':
         raise ValueError('Configure Pages: Deploy from a branch, gh-pages, / (root), then rerun this deployment')
